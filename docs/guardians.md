@@ -1,7 +1,7 @@
 # Guardians of a hive project
 
 A project that the hive runs unattended (docs/protocol.md) may name guardians of its own in its file
-(`hive/projects/<project>.json`, `guardians`), by GitHub account number: those decide alone and at once, on one
+(`hive/project.json` in its own repository, `guardians`), by GitHub account number: those decide alone and at once, on one
 thing only, which is to admit a commit the hive's judge refused for a figure the project's file lets them waive.
 The commit is then judged again in full, and every such decision is a public line of the project's ledger, with
 the guardian's account on it (docs/protocol.md, "Guardians"). Such a project may also say how many active members

@@ -1,12 +1,13 @@
 # The hive protocol, version 1
 
 *How work reaches the hive. Implemented by `tools/hive/hive.py`, tested by `tools/hive/test_hive.py` and
-`tools/hive/test_schedule.py`. In this text, « the registry » is the repository a run reads the hive's code, a
-project's file and its tasks from, at the commit the project's workflow names: for the two test projects,
-`Bee-ruche/registre`.*
+`tools/hive/test_schedule.py`. A project holds its own settings, its tasks and its state, in its own repository, and
+calls the hive's run from there ([hosting.md](hosting.md)); in this text, « the protocol » is this repository,
+`Bee-ruche/hive`, at the commit the project's run names: the hive's code and its judges.*
 
 > **Status: in service by invitation for two test projects** (miniz since 16 November 2026, cjson since
-> 17 November, with one worker, the founder's own: [hive-workflow.md](hive-workflow.md)). **Nobody else is invited
+> 17 November, with one worker, the founder's own, from `Bee-ruche/registre`; their runs move to the projects' own
+> repositories as [hosting.md](hosting.md) says). **Nobody else is invited
 > before a whole round of review by another model, on the code as it stands, finds nothing high or critical**
 > ([plan.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/plan.md), 7.2). In an
 > earlier draft, members competed for tasks and the hive decided who came first; review after review, by a model
@@ -60,9 +61,9 @@ Hive-Model: claude-fable-5-2
 - `Hive-Tier` (optional, 1 to 3, 3 by default): the hardest tier of task this worker takes. A task's tier is
   the project's own.
 - `Hive-Prefer` (optional, on an ask): the part of the project the member prefers: one of the files the project's
-  tasks name, exactly as the registry writes it (a folder with its final `/`). `hive.py ready --prefer <file>`
+  tasks name, exactly as the project's tasks write it (a folder with its final `/`). `hive.py ready --prefer <file>`
   writes it, from the volunteer's prompt and from nowhere else, and refuses any other value before it makes
-  anything. The hive compares what the line says with the registry's own strings and takes nothing else from it: a
+  anything. The hive compares what the line says with the project's own strings and takes nothing else from it: a
   value that is none of them is no preference, the ask is still an ask, and nothing of the value is kept anywhere.
   On a candidate the line means nothing. See "How tasks are dealt".
 - `Hive-Task` and `Hive-Deal`: the task, and the instant of the deal the candidate answers, as the feed gives
@@ -79,7 +80,7 @@ the task started only once it has shown that the work tree holds that commit's f
 them from the commit's folders, read as bytes it hashes itself, and reads each entry of the work tree as a plain
 file. The commands push to one address,
 `https://github.com/<login>/<the project's repository name>`, worked out from the member's login (every command is
-given it, `hive.py setup` included) and the registry;
+given it, `hive.py setup` included) and the project's repository (the user's prompt names it);
 the address the clone gives its origin is only compared with it. `submit` commits the work (the task's files, and
 nothing else of the work tree) and its marker, two commits made on the project's commit that the clone rests on:
 whatever else the clone's branch held stays behind. Before it pushes, it asks the project's own repository for its
@@ -265,10 +266,10 @@ the hive runs those git commands with an empty attribute source.
 
 | Job | Holds | Runs contributors' code | Talks to forks | What it does |
 | --- | --- | --- | --- | --- |
-| `plan` | nothing | no | **yes, once** | reads the forks; decides the deals whose time is up, the candidates and the new deals; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
-| `record` | the right to write the hive's state | no | no | checks that the plan is the one `plan` published; writes the plan's deals and the feed, **within minutes of the run's start** |
-| `judge` | nothing | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer** |
-| `apply` | the right to write the project and the state | no | no | checks the plan; derives every commit by itself; looks each one up in the judge's table; pushes; records |
+| `plan` | the project's token, to read | no | **yes, once** | reads the project's settings at its published branch's tip, and names that commit; reads the forks; decides the deals whose time is up, the candidates and the new deals; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
+| `record` | the project's token, to write its branch `hive-state` | no | no | checks that the plan is the one `plan` published, and that the published branch is still at the plan's commit; writes the plan's deals and the feed, **within minutes of the run's start** |
+| `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer** |
+| `apply` | the project's token, to write its branch for the hive and `hive-state` | no | no | checks the plan, and that the published branch is still at the plan's commit; derives every commit by itself; looks each one up in the judge's table; pushes; records |
 
 - **The forks are read once.** What the plan read is what the run is about: a branch taken away or pushed after
   that changes nothing in this run, for anybody.
@@ -281,9 +282,13 @@ the hive runs those git commands with an empty attribute source.
   it cannot name a candidate, a member, a task or a path, decide who is dealt what, credit an account for work
   that is not in its fork, change history, or write anything but the project's listed figures, as numbers, into
   the ledger. The judge's container is what stands between a contribution and that job.
-- The judging and the write job go through the same candidates, with the same ledger, tasks and instant (the
-  plan's): they derive the same commits. A plan from the future, or more than a day old, is not applied; nor is
-  anything if the project's tip moved since the plan.
+- **The settings are read at one commit for the whole run.** The plan names the commit of the project's published
+  branch it read the settings and the tasks at; the judging job reads them there, and the jobs that write read them
+  there too, once they have asked the project's repository themselves and found the published branch still at that
+  commit: otherwise they write nothing, and the next run plans on the settings as they are then. A plan that names
+  any other commit is not the hive's. The judging and the write job go through the same candidates, with the same
+  ledger, settings, tasks and instant (the plan's): they derive the same commits. A plan from the future, or more
+  than a day old, is not applied; nor is anything if the project's tip moved since the plan.
 - **Of a guardian's ruling, the jobs that write take from the plan what the plan job read in the guardian's fork**
   (that the fork holds the ruling at its task's branch and what the ruling says, the guardian's login, that the
   ruling carries its commit) **and hold everything else again by themselves**, against the project's file and the
@@ -300,20 +305,20 @@ the hive runs those git commands with an empty attribute source.
   written as they are.
 - **A project names its judge's kind** (`judge.kind` in its file). What a verdict is, where judged code runs and
   what may accept a candidate are the hive's, the same for every project; how a candidate is found right or wrong
-  is a kind of judge's; what is asked of the judge's figures is the project's. A kind is code of the registry: a
+  is a kind of judge's; what is asked of the judge's figures is the project's. A kind is code of the protocol's: a
   project's file can name one and never bring one, and a file that names a kind the tool does not hold is refused
   when it is loaded, at every step. Two kinds exist. `common`, which a project that names none has, is the
-  registry's common judge (docs/common-judge.md): the candidate gives the same outputs as the project's tip, and
+  protocol's common judge (docs/common-judge.md): the candidate gives the same outputs as the project's tip, and
   is measured against it. `reference` (docs/reference-judge.md) is for a port or a rewrite: the unit a candidate
   writes answers exactly as the project's reference does, on cases drawn when it is judged. In both, candidate
   code builds and runs only in a container without network, and the verdict is derived on the host. Whatever the
   kind, code 0 is correct, 1 a refusal, 2 a failure to judge, and the project's tip judged against itself is
   answered 0.
-- **A project's file is its own, and bears its name.** `hive/projects/<project>.json` names that project and no
-  other: a file whose `project` is not its own name is refused, so two files never write one project's state. A
-  step of the hive reads the file of the project it runs for and no other. A worker's command checks in full the
-  project it is given; of every other project it reads the name and the repository, which it compares with the
-  fork's, and nothing else: what one project's file asks of the tool does not stop another project's workers.
+- **A project's settings are its own, and name it.** `hive/project.json`, in the project's repository, names that
+  repository (`repo`) and its default branch (`published`), where it is read: a file that names another repository or
+  another branch is refused, so one project's settings never run another's state or forks. A step of the hive reads
+  the settings of the repository it runs for and no other; a worker's command checks in full the settings of the
+  project it is told about (its repository, as the user's prompt names it) and reads nothing of any other.
 - **A failure to judge is the candidate's doing only if the machine works.** When the judge fails on a candidate,
   the hive asks it about the project's own tip against itself. If that fails too, the machine is down: the run
   stops judging and no candidate pays for the breakdown. If it passes, the failure is counted against the deal,
@@ -326,7 +331,7 @@ the hive runs those git commands with an empty attribute source.
   goal on a figure of the judge's report (for instance a minimum gain), and a project may require a figure of every
   contribution. A goal names figures the project lists, and it always holds one of the proofs the project takes
   (`judge.confirm`), with a minimum of 1: a task whose goal could never be met, or would rest on a measure alone,
-  is refused when the project is loaded, at every step of the hive. The registry's judge gives a `sure_` figure for
+  is refused when the project is loaded, at every step of the hive. The common judge gives a `sure_` figure for
   each measure of its report's « metrics »; a count made by a tool that runs the program inside itself is not one
   of them, and has no `sure_` figure under any name. Among those figures a project takes as proofs the ones the
   judged program cannot bear upon (the processor time the kernel reads, what the judge itself reads of the
@@ -338,7 +343,7 @@ the hive runs those git commands with an empty attribute source.
   with no other: a measure without one is a row of its table. Told which proofs the project takes (its file, given
   to the page tool), the page leads with one of those measures only: a flag the project keeps and does not take as
   a proof leads nothing.
-- **A refusal on the suspects says which of the judge's checks it was.** The registry's judge counts what its
+- **A refusal on the suspects says which of the judge's checks it was.** The common judge counts what its
   reading of the compiled code and of the source flags in a candidate and not in the base (`suspects`), and a
   project may bound that count for every contribution. Beside the count the hive takes from the judge's report one
   figure for each kind the judge counted at least one of, `suspects_<kind>`, under the judge's own word for the kind (`bytes`: bytes that spell an instruction a computing
@@ -374,7 +379,7 @@ below is absent from its runs.
 
 A guardian has one power: **to admit one commit that the hive refused for a figure alone that the project lets a
 guardian waive.** What a project requires of every contribution (`judge.require`) can only refuse, and one such
-bar may be a count of what the registry's judge flags in a candidate (`suspects`): a flagged construct is not a
+bar may be a count of what the common judge flags in a candidate (`suspects`): a flagged construct is not a
 fault in itself, it is what a guardian reviews (docs/common-judge.md). A ruling is the outcome of that review. It
 relaxes nothing that is asked of members: the commit is judged again, in full, and the ruling changes one thing in
 that judgement.
@@ -452,14 +457,14 @@ read it, before they write or push anything: the account is one the file names; 
 that member's login and fork, the deal and the model are the ledger's own for that refusal, field for field; the
 refusal is one a guardian may lift; the member is one the project takes; what is waived lies within the file's
 bounds and covers what the commit failed; the task was free, and no other candidate or deal of the plan takes it or
-a task that shares a file with it; a void line names a task of the registry or none, for the reason those same
+a task that shares a file with it; a void line names a task of the project's or none, for the reason those same
 readings give; `duplicate` is said only in a plan that admits the same commit under another ruling; and no ruling
-is named twice in a plan. A plan that says otherwise is not applied at all. One case is the registry's doing and
-stops nothing: a task the registry has closed, or lists no more, when the write job reads it. Whatever the plan
+is named twice in a plan. A plan that says otherwise is not applied at all. One case is the project's doing and
+stops nothing: a task the project's tasks close, or list no more, when the write job reads it. Whatever the plan
 said of a ruling for that task (admitted, void for another reason, `duplicate`), the write job answers it void
 itself, `task_closed` (`malformed` stays, where the plan read that the ruling does not carry its commit), with the
-task as the registry names it now or none, as it refuses a member's candidate whose task was closed meanwhile; a
-task's name the registry does not list reaches no line; and the rest of the plan is applied.
+task as the project's tasks name it now or none, as it refuses a member's candidate whose task was closed meanwhile; a
+task's name they do not list reaches no line; and the rest of the plan is applied.
 
 **A ruling that stands is served when its task is free**, and every open task that shares a file with it: until
 then it stays where it is, in the guardian's fork, and the hive keeps nothing of it. Then the commit joins the
@@ -482,7 +487,7 @@ nothing.**
   followed), of one whose last deal was accepted, until its next deal ends; and the deal the line names leaves the
   day's count. It is the most recent thing the hive said of that member's work, and it counts as that.
 - *Anything else*: a line of type `ruling`, which is no verdict: the ruling's commit id, the guardian's number and
-  login, the task (as the registry names it, or none), the commit, a `result` and a `reason`. It names no member
+  login, the task (as the project's tasks name it, or none), the commit, a `result` and a `reason`. It names no member
   and counts in nobody's deals, waits, refusals or statistics.
 
 | `result` | `reason` | The ruling |
@@ -571,8 +576,8 @@ with it the tasks that share a file with that one.
   maintainer's act. The judge's scan of a candidate's source is a filter, not a review of what a change does.
   What a maintainer commits on the published branch (a fix, a revert) the maintainer also brings to the hive's
   branch: the hive works on its own branch's tip and takes nothing from the other by itself. The file's two names
-  are the registry's word: the host's own rule, which keeps the hive's key off the published branch, is what holds
-  if that word is wrong (docs/hive-workflow.md, setting 4).
+  are the project's settings' word: the host's own rule, which keeps the run's token off the published branch, is what holds
+  if that word is wrong (docs/hosting.md, "The repository's settings": its rulesets).
 - **It promises, then pushes.** Before each push the write job records an *intent* in the ledger and saves the
   state. If a run pushed and then could not record, or could not tell whether its push landed, the next run finds
   the promise, looks for the promised commit in the project's history, and completes the ledger. Nothing but the
@@ -599,16 +604,17 @@ the ledger.
 
 ## The ledger and the feed
 
-In the hive's state repository (`Bee-ruche/hive-state`), one folder per project. A project's run writes its own
-folder and no other, so two projects' runs never conflict: a push that finds the repository moved takes what the
-other run saved and pushes again, a bounded number of times. In each folder:
+On the project's own branch `hive-state`, at its root. Only the project's run writes it, its two jobs that write (`record`,
+`apply`), by pushes that only add to it; a push that finds the branch moved takes what was saved there meanwhile (a
+file beside the hive's) and pushes again, a bounded number of times. Each job reads it as it stands when the job starts.
+The hive's files there:
 
 - `ledger.jsonl`: append-only, one JSON object per line: `deal`, `expired`, `verdict`, `error` (a mark, with its
   kind), `intent` and `void` (a promise, and a promise whose push never landed), `unused`, and `ruling` (a
   guardian's ruling that did not end in an integration: "Guardians"); each carries the key of
   its run. **It holds no text a fork wrote**: logins, the numeric ids of the account and of its fork, task ids of
   the project, commit ids, instants, reason codes, a model identifier the project lists, whole numbers under the
-  hive's own keys, a file of the project as the registry names it, the judge's figures the project lists, and the
+  hive's own keys, a file of the project as its tasks name it, the judge's figures the project lists, and the
   bounds of a ruling under the project's own names for the figures. **A
   login is written beside a deal and beside an accepted candidate, which is a credit; a refusal, a run without an
   answer and an expired deal carry the account's number alone.** That is discretion, not secrecy: the deal names its
@@ -631,11 +637,11 @@ other run saved and pushes again, a bounded number of times. In each folder:
 
   A `deal` line carries the task, its member's login, the account's number and its fork's, when the deal starts
   and until when. When the member's ask named a part of the project it adds `prefer`: `{"file": <the part, as the
-  registry writes it>, "kept": true}`, or `{"file": …, "kept": false, "because": <one of the four reasons of "How
-  tasks are dealt">}`. An ask that named no part of the registry's leaves no `prefer` at all: a deal's line written
+  project's tasks write it>, "kept": true}`, or `{"file": …, "kept": false, "because": <one of the four reasons of "How
+  tasks are dealt">}`. An ask that named no part of the project's leaves no `prefer` at all: a deal's line written
   before this rule, or for such an ask, stays valid, and whatever reads the ledger takes both. The jobs that write
   copy nothing of a preference from the plan: before they write or push anything, they hold that it has that shape
-  and names a file of the project as the registry writes it, and they write the registry's own string.
+  and names a file of the project as its tasks write it, and they write the project's own string.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
   of judged refusals and the task's context; and, **under a hash of each login** that a worker computes for its
   own, the task a member holds, since when, until when and whether its candidate was seen (`deals`), and until
@@ -660,8 +666,12 @@ A task the judge keeps refusing asks for a stronger worker: the feed gives a `hi
 three different members refused, among those the judge has accepted something from. It is a hint for people;
 tasks are dealt by their own tier.
 
-**What a worker believes.** The registry it runs `hive.py` from is the hive's own: a task's text and files, the
-project's branch and its check come from there, never from the feed. The state is believed for what the hive did
+**What a worker believes.** The tool it runs is the protocol's own (its copy of `Bee-ruche/hive`, taken afresh at
+each run). A task's text and files, the project's branch and its check come from the project's settings and tasks,
+which each command reads on the project's default branch, at the commit the project's own address announces during
+the command, as bytes the tool hashes itself: never from the feed, and never from the fork or its clone, whatever
+they hold under those names. The state (a clone of the project's branch `hive-state`, taken afresh at each run) is
+believed for what the hive did
 for this member and nothing else: the task it dealt it and until when, its wait, whether its candidate was seen,
 whether its ask was used (is the ask's commit id in `ignored.json`: an ask the hive still reads is not asked
 again, and one that has waited six hours is reported to the volunteer), whether its account is one of the
@@ -673,7 +683,7 @@ project code ran in it: each command first checks that its git settings are the 
 stops the command: a filter, a hook, a credential helper, another address to push to, an included file, a reference
 that is neither a branch, a tag nor the stash), and starts the task, commits and pushes itself, so that the worker's
 assistant runs no git command of its own in the fork's clone. What a command decides on is never a value the clone
-holds: the fork's https address is worked out from the login and the registry, a task starts on the commit the
+holds: the fork's https address is worked out from the login and the project's repository, a task starts on the commit the
 project's own address announces, and a candidate is pushed only once
 the tool has shown, from bytes it hashed itself, that it starts from the project's history and changes only the
 task's files. Nor does a task start on what git made of the clone: git does not hash an object again when it reads
@@ -691,7 +701,8 @@ hour and the fork's own number, which adding forks to the list does not shift.
 
 ## A project's files
 
-- `hive/projects/<project>.json` in the registry: the repository, the hive's own branch in it (`branch`) and the
+- `hive/project.json`, in the project's own repository, on the branch it publishes: the repository (`repo`, the one
+  that holds the file), the hive's own branch in it (`branch`) and the
   branch the project publishes (`published`, which the hive never writes), the protected paths, the limits,
   the member rules (`min_account_age_days`, `deals_per_day`, `banned`, `only`, `preferences`: whether the
   part of the project an ask prefers is followed, true unless the file says false; and `per_guardian` and
@@ -709,8 +720,8 @@ hour and the fork's own number, which adding forks to the list does not shift.
   what the project requires of every candidate, `judge.require`, stays as the project wrote it), its guardians if
   it names any (`guardians`: `accounts`, their GitHub account numbers, and `waive`, the figures they may waive,
   each with the most a ruling may let it reach; a file without it takes no ruling, and one that names a guardian it also bans by number does not load: "Guardians"), and the project's pause
-  (`"paused": true`). A run reads this file, and the tasks, at the commit of the registry the
-  workflow names: a change acts once that line is moved to it.
+  (`"paused": true`). A run reads this file, and the tasks, at the commit of the published branch its plan names,
+  and a change acts from the run that plans after it ([hosting.md](hosting.md), "What a run reads, and when").
 
   **Every setting of that file is described, one by one, in `hive/settings.json`**: its key, its type, whether the
   file must give it or what the hive takes when the file says nothing, the bounds the hive enforces when it loads
@@ -726,20 +737,20 @@ hour and the fork's own number, which adding forks to the list does not shift.
   weigh together. A file that says otherwise, that names a setting the hive does not know (at its top, or under
   `limits`, `members` or `judge`: a key mistyped would leave a setting at its default), or that gives one of these
   blocks as anything but settings by name, does not load; `judge.options` are the project's plug-in's own and take
-  any name, and `in_service` is a mark the registry's own test reads, which the hive does not read. The hive's own
+  any name, and `in_service` is a mark that `Bee-ruche/registre`'s own test read, which the hive does not read. The hive's own
   constants bound what a run does besides (the branches it lists of
   one fork, what all the fetches of a run leave, what a plan carries to the other steps). Presets name no guardian:
   what guardians may waive depends on a project's judge, and `members.per_guardian` has recommendations of its own
   for a project that names them.
-- `hive/tasks/<project>.jsonl` in the registry: one task per line: `id`, `title`, `files` (exact paths, or a
+- `hive/tasks.jsonl`, beside it, read at the same commit: one task per line: `id`, `title`, `files` (exact paths, or a
   folder ending with `/`), and optionally `size`, `tier`, `goal`, `options`, `context`, `closed`. Tasks are
   written by the project's maintainers or generated by its splitter; they are trusted data.
 
 ## What this version does not do yet
 
-- Run in service: the workflow (four jobs; the plan's SHA-256 as a job output; the right to write the project in
-  `apply` alone, the right to write the state in `record` and `apply`), the state repository and the first project's
-  files are phase 1.
+- Run in service from a project's own repository: the run (`.github/workflows/run.yml`) and the example of what a
+  project holds (`examples/project/`) exist; no project calls it yet, and the two test projects still run from
+  `Bee-ruche/registre` until their repositories hold those files.
 - Deal more often than it judges (a light run of `plan` and `record` between two full runs), so that a worker
   waits minutes, not up to an hour, for its first task.
 - Judge in parallel (several candidates at once, then one confirming judgement), needed above a few thousand

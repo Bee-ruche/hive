@@ -131,7 +131,8 @@ says `"kind": "reference"` under `judge`, and lists in `judge.metrics` the figur
 ## The first project of this kind: `cjson`
 
 A port of [cJSON](https://github.com/DaveGamble/cJSON) (a JSON library in C, MIT) to Rust, leaf by leaf
-(`hive/projects/cjson.json`, `hive/tasks/cjson.jsonl`): the hive's second test project, of another nature than
+(its settings and tasks: `examples/reference-project/`, which its own repository is to hold as `hive/project.json` and
+`hive/tasks.jsonl`): the hive's second test project, of another nature than
 the first, so that the base is shaped by neither. Its repository holds cJSON's own files unchanged, with their
 licence, as the reference; a leaf is one Rust file over `core` alone (the project's build refuses `std`,
 allocation, `unsafe` and what its own rule lists), and a task writes one leaf. Five leaves to start with: four hexadecimal digits, a `\uXXXX` escape to UTF-8, the
@@ -141,7 +142,8 @@ cJSON's own: nothing is ever proposed to it from the hive.
 The project is declared **by invitation**, for the founder's own account alone (`members.only`). Its repository
 exists since 17 November 2026, and its file no longer says `"paused": true`. Its workflow file names a
 commit that holds that change since 17 November 2026, on the founder's decision
-([hive-workflow.md](hive-workflow.md)): the hive's hourly run works for it. A deal needs what any project's does: a
+(the registry's [hive-workflow.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/hive-workflow.md)): the hive's hourly run
+works for it, from `Bee-ruche/registre` until the project calls the hive's run itself ([hosting.md](hosting.md)). A deal needs what any project's does: a
 fork of the project under the invited account, and that fork's ask.
 
 On 17 November 2026 the five leaves were dealt to the founder's worker, one after another, and every candidate was

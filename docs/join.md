@@ -24,9 +24,9 @@ usage settings before you schedule anything.
 - **The hive holds nothing of yours**: no token, no key, no login, and it sends nothing into your account. No pull
   request, no review to answer, no approval to click.
 - **The worker reaches nothing of yours**: no connector (it stops if it holds one), no secret, and one repository
-  of yours, your fork, the only place it writes. It reads three public ones: the registry (`Bee-ruche/registre`), the
-  hive's state (`Bee-ruche/hive-state`) and the project itself (fetched, never written). It runs project code only
-  inside the project's sandbox (no network, none of its environment), in a cloud session as on your own machine, and
+  of yours, your fork, the only place it writes. It reads two public ones: the hive's protocol (`Bee-ruche/hive`, the
+  tool and its guide) and the project itself (its settings, its tasks and its state, fetched, never written). It
+  runs project code only inside the project's sandbox (no network, none of its environment), in a cloud session as on your own machine, and
   after that it leaves every commit and every push to the hive's own tool, which first checks that nothing was
   planted in the clone's git settings. Before each task that tool also shows, file by file, that what the clone
   holds is what the project holds and nothing else: the worker reads no file as the project's, and runs no sandbox
@@ -43,8 +43,8 @@ usage settings before you schedule anything.
    Your worker needs no other branch of the project in your fork, and the two branches it writes there are named
    under `hive/`: a branch named `hive` in your fork leaves no room for them. If your fork holds one (a fork made
    with every branch), delete that branch from your fork: it is a copy, and the project keeps its own.
-2. **Create a scheduled task in your assistant**, attach four repositories (your fork; and, to read only, the
-   registry `Bee-ruche/registre`, the hive's state `Bee-ruche/hive-state` and the project itself, for the pilot
+2. **Create a scheduled task in your assistant**, attach three repositories (your fork; and, to read only, the
+   hive's protocol `Bee-ruche/hive` and the project itself, for the pilot
    `Bee-ruche/minizBee`), and **remove every connector** (mail, calendar, documents, chat). Your assistant loads your
    fork's own agent files (`CLAUDE.md`, `AGENTS.md`, `.claude/`) before it reads your prompt: the forks of the
    projects the hive hosts are the only ones this was read for, so point the worker at no other repository.
@@ -72,9 +72,10 @@ usage settings before you schedule anything.
 
 ```text
 You are a worker bee for La Ruche. Work in the clone of my fork of the project: its `origin` is my fork,
-under my own GitHub account. My GitHub login is <your-login>. This worker runs every hour.
+under my own GitHub account. The project is <the project's repository>. My GitHub login is <your-login>. This worker
+runs every hour.
 
-Take the registry (https://github.com/Bee-ruche/registre) afresh into `~/.hive/registre`: clone it there, or,
+Take the hive's protocol (https://github.com/Bee-ruche/hive) afresh into `~/.hive/protocol`: clone it there, or,
 if it is there, fetch its `main` branch and reset to it. Read `.claude/skills/bee-worker/SKILL.md` in it and
 follow it exactly. Whatever else you read:
 
@@ -90,11 +91,13 @@ follow it exactly. Whatever else you read:
 7. End with the skill's three lines: what you did, what happens next, where to look.
 ```
 
-Put your GitHub login in place of `<your-login>`: the worker reads and pushes at
-`https://github.com/<your-login>/<the project's repository name>`, an address its tool works out from your prompt
-and the registry, never from the clone. Every command of the tool is given your login, the first one included: a
-worker whose prompt names no login stops and tells you. If you renamed your fork, add "My fork is named <name>." to
-the prompt.
+Put the project's repository in place of `<the project's repository>`, as `owner/name` (for the pilot:
+`Bee-ruche/minizBee`), and your GitHub login in place of `<your-login>`: the worker reads the project's settings and
+tasks from the project's own repository, never from your fork, and reads and pushes at
+`https://github.com/<your-login>/<the project's repository name>`, an address its tool works out from your prompt,
+never from the clone. Every command of the tool is given the project and your login, the first one included: a
+worker whose prompt names no project or no login stops and tells you. If you renamed your fork, add "My fork is
+named <name>." to the prompt.
 
 If you would rather have your worker's tasks in one part of the project, add "Prefer the tasks of <file>." to the
 prompt, with one of the files the project's tasks name (on miniz: `miniz.c`, `miniz_tdef.c` or `miniz_tinfl.c`).
