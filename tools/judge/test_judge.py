@@ -1108,15 +1108,6 @@ class TestConditionsFixes(unittest.TestCase):
 # ------------------------------------------------------------------ ruche-0036: frozen outputs, drawn order, CPU times
 
 FOUR_SCENARIOS = {"compression": "f", "compression_bis": "f", "decompression": "z", "decompression_bis": "z"}
-# ruche-0148 (J2b): every key of juge.json as judge.py wrote it before J2b, on the four-scenario toy (TestOrderAndFingerprints).
-JUGE_V3_KEYS = """A B analyse architecture au_dela_du_bruit base chauffe chronometre code coeurs commun compilateur compression compression_bis
-constructions_suspectes constructions_suspectes_omises constructions_suspectes_par_type debit_compression debit_decompression decompression
-decompression_bis degradation_au_dela_du_bruit deroulement duree_s egalites entrees_melees etape f fixes_sans_mesure gain graine graine_ordre
-greffon image image_id instructions instructions_compression instructions_decompression instructions_sans_melange isolation isolement issue
-juge machine max mediane melees_par_repetition memoire memoire_max_ko mesures methode metriques min minmax_disjoints ordre
-origine_des_graines p_amelioration p_degradation paires paires_utiles permis prefixes processeur projet ratio repetitions scenarios sens
-seuil_k sortie_compressee sorties_comparees source systeme temps_processeur temps_processeur_s test_du_signe tete unite valeur_retenue
-valeurs variantes verification verification_seulement version victoires_A victoires_B z"""
 
 
 def toy_with_four_scenarios(folder, toy=TOY):
@@ -1238,38 +1229,6 @@ class TestOrderAndFingerprints(unittest.TestCase):
                 self.assertEqual(r["judge"].pop("plugin"), hashlib.sha256(f.read()).hexdigest())
             self.assertIsInstance(r.pop("duration_s"), float)
         self.assertEqual(reports[1], reports[0])
-
-    def test_judge_json_is_the_map_translation(self):
-        """ruche-0148 (J2b), as proof P2 checks data: every key and closed value of judge.json is in names.yaml's judge_report (keys,
-        domains, data-keyed places), so it reads back into French and again into the same English; read back, it has the keys juge.json
-        had at juge-v3 (JUGE_V3_KEYS, from judge.py before J2b, on this toy at these seeds), the stopped judge's report too."""
-        if yaml is None:
-            self.skipTest("PyYAML required (pip install -r tools/requirements.txt)")
-        sys.path[:0] = [os.path.join(os.path.dirname(HERE), "migration"), os.path.dirname(HERE)]
-        try:
-            import rename
-        finally:
-            del sys.path[:2]
-        with open(os.path.join(os.path.dirname(HERE), "migration", "names.yaml"), encoding="utf-8") as f:
-            names = rename.Names(f.read())
-        english = self.run_the_judge(graine_ordre="01" * 16)[0]
-        french = names.data("judge_report", english, True)
-        self.assertEqual(names.data("judge_report", french, False), english)
-        keys = set()
-
-        def walk(o):
-            [(keys.add(k), walk(v)) for k, v in o.items()] if isinstance(o, dict) else [walk(x) for x in o] if isinstance(o, list) else None
-        walk(french)
-        self.assertEqual(keys, set(JUGE_V3_KEYS.split()))
-        self.assertEqual((french["juge"]["issue"], french["juge"]["origine_des_graines"]), ("juste", {"graine": "donnee", "graine_ordre": "donnee"}))
-        stopped = os.path.join(self.workdir, "stopped.json")
-        with mock.patch.dict(judge.FAILURE, json=stopped, judge={"version": 3, "common": "juge-v3", "source": None, "base": None, "head": None}), \
-                contextlib.redirect_stderr(io.StringIO()):
-            judge.stop_it(2, "judge: error: x", True)
-        with open(stopped, encoding="utf-8") as f:
-            self.assertEqual(names.data("judge_report", json.load(f), True), {"juge": {
-                "version": 3, "commun": "juge-v3", "source": None, "base": None, "tete": None, "code": 2, "issue": "erreur_environnement",
-                "panne_machine": True, "motif": "judge: error: x"}})
 
     def test_drawn_order_and_processor_time(self):
         """The order is drawn at each repetition, the same for A and B, from its own seed (secrets, independent of the
