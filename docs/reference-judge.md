@@ -18,7 +18,7 @@ comparison. What knows the project is the project's, at its tip.
 
 | Part | Where | Runs |
 | --- | --- | --- |
-| The kind: the steps below, the isolation (`container.py`), the safe reading (`lecture.py`), the draws, the comparison, the verdict | the registry | on the judge's machine |
+| The kind: the steps below, the isolation (`container.py`), the safe reading (`reading.py`), the draws, the comparison, the verdict | the registry | on the judge's machine |
 | The image | the registry: the manifest names an image the registry holds and never brings one: `common` (the common judge's), `rust` (the same with the system's `rustc` and `lld`) | — |
 | The manifest `bee/reference/project.json`: data | the project's tip, a path no candidate can change | never: it is read, every field checked against a floor and a cap |
 | `bee/reference/build-reference`, `bee/reference/build-unit`, the reference, the two drivers, the generator of cases, a blank unit | the project's tip, paths no candidate can change | in containers only |
