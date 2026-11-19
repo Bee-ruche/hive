@@ -438,7 +438,7 @@ class TestPlugin(unittest.TestCase):
         judge.load_plugin(self.base, {})
 
     def test_diff_no_longer_exists(self):
-        self.changed_plugin('SOURCES = ["rle.c", "rle.h"]', 'SOURCES = ["rle.c", "rle.h"]\n    DIFF = ["rle.c"]')
+        self.changed_plugin('\n    SOURCES = ["rle.c", "rle.h"]', '\n    SOURCES = ["rle.c", "rle.h"]\n    DIFF = ["rle.c"]')
         with self.assertRaises(reading.JudgeError):
             judge.load_plugin(self.base, {})
 
