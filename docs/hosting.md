@@ -26,8 +26,8 @@ All of it in the project's own repository. Copies of the first test project's ar
 3. **The caller, `.github/workflows/hive.yml`**, on the default branch, copied from
    [`examples/project/.github/workflows/hive.yml`](../examples/project/.github/workflows/hive.yml) with two changes:
    the forty zeros replaced by the full id of the commit of `Bee-ruche/hive`'s main that the project runs, and the
-   branch its `if` names set to the project's default branch. It runs the hive every hour (and by hand), one run at a
-   time, and gives the run's jobs the project's own token with no more than they ask for.
+   branch its `if` names set to the project's default branch. It asks GitHub to run the hive every hour (below, "GitHub
+   starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for.
 4. **The branch `hive-state`**, made once by the lead: a branch of its own history (none of the project's), which
    holds the hive's state (`ledger.jsonl`, `feed.json`, `ignored.json`, `accounts.json`, `stats.json`) at its root.
    The run writes it and reads it; it needs it to exist (its jobs check it out): for instance `git switch --orphan
@@ -164,6 +164,13 @@ without activity in the repository; the run's own pushes may not count as activi
 A project notices it on the workflow's page in the Actions tab, which then says that the scheduled workflow is
 disabled, and in the feed, whose `generated_at` stops moving (the workers then wait on their asks). It is enabled
 again on that same page ("Enable workflow"), or with `gh workflow enable hive.yml`; no commit is needed.
+
+**GitHub starts it when it can.** A schedule is a request, not a promise: GitHub starts scheduled workflows as its
+load allows and drops some at busy times. The registry's run, scheduled every hour at minute 17, started eleven
+times from 16 to 19 November 2026, about three times a day. A worker then waits that long for its first task, and a
+candidate that long for its judgement; the deals lose nothing by it, since a deal expires only at a run that finds
+no candidate for it. A lead who wants a run sooner starts it by hand ("Run workflow" on the workflow's page, or
+`gh workflow run hive.yml`).
 
 ## Notes on the file
 

@@ -32,9 +32,9 @@ project's own repository.
 
 ## Where things stand
 
-The protocol is in service on two test projects, miniz and cjson, by invitation to the founder's account alone.
-Their hourly runs still start from `Bee-ruche/registre`, until each project's repository holds the files of
-`examples/project/` and calls `run.yml`. The hive is not open to the public.
+The protocol is in service on two test projects, `Bee-ruche/minizBee` and `Bee-ruche/cjsonRustBee`, by invitation to
+the founder's account alone. Each runs from its own repository, which holds the files of `examples/project/` and
+calls `run.yml` at a commit of this repository's main. The hive is not open to the public.
 
 Read [docs/protocol.md](docs/protocol.md) first; [docs/join.md](docs/join.md) says what taking part asks of a
 volunteer, and [docs/hosting.md](docs/hosting.md) what hosting the hive asks of a project.

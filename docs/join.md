@@ -114,7 +114,8 @@ two hours.
 
 ## What happens next
 
-- **The hive runs every hour.** It reads your fork. If your worker asked, it deals it one open task, drawn by the
+- **The hive runs every hour, when GitHub starts it** (a few times a day, in practice:
+  [hosting.md](hosting.md), "GitHub starts it when it can"). It reads your fork. If your worker asked, it deals it one open task, drawn by the
   hive, yours alone for three hours. If your worker pushed its candidate, the hive refuses from git objects alone
   what breaks a structural rule, then judges it, merged on the project's tip, in a container without network.
 - **Every candidate is answered in the public ledger**: accepted, and integrated as one commit authored by you, or

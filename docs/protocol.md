@@ -6,8 +6,8 @@ calls the hive's run from there ([hosting.md](hosting.md)); in this text, « the
 `Bee-ruche/hive`, at the commit the project's run names: the hive's code and its judges.*
 
 > **Status: in service by invitation for two test projects** (miniz since 16 November 2026, cjson since
-> 17 November, with one worker, the founder's own, from `Bee-ruche/registre`; their runs move to the projects' own
-> repositories as [hosting.md](hosting.md) says). **Nobody else is invited
+> 17 November, with one worker, the founder's own, first from `Bee-ruche/registre`; since 19 November each runs from
+> its own repository, as [hosting.md](hosting.md) says). **Nobody else is invited
 > before a whole round of review by another model, on the code as it stands, finds nothing high or critical**
 > ([plan.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/plan.md), 7.2). In an
 > earlier draft, members competed for tasks and the hive decided who came first; review after review, by a model
@@ -749,9 +749,6 @@ hour and the fork's own number, which adding forks to the list does not shift.
 
 ## What this version does not do yet
 
-- Run in service from a project's own repository: the run (`.github/workflows/run.yml`) and the example of what a
-  project holds (`examples/project/`) exist; no project calls it yet, and the two test projects still run from
-  `Bee-ruche/registre` until their repositories hold those files.
 - Deal more often than it judges (a light run of `plan` and `record` between two full runs), so that a worker
   waits minutes, not up to an hour, for its first task.
 - Judge in parallel (several candidates at once, then one confirming judgement), needed above a few thousand
