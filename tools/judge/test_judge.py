@@ -1462,7 +1462,7 @@ sys.exit(int(os.environ.get("FAKE_DOCKER_CODE", "0")))
 
 class TestBounds(unittest.TestCase):
     """ruche-0038: what a container writes is bounded (file size, no log on the host's disk) and the host reads it within
-    bounds (the start of its standard output, the end of its standard error; outputs never beyond reading.OUTPUT_MAX)."""
+    bounds (the start of its standard output, the end of its standard error; outputs never beyond reading.OUTPUT_FILE_MAX)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="bee-bounds-")
@@ -1480,7 +1480,7 @@ class TestBounds(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_container_limits(self):
-        self.assertEqual(container.Docker.BOUNDS, ["--ulimit", f"fsize={reading.OUTPUT_MAX}", "--log-driver", "none"])
+        self.assertEqual(container.Docker.BOUNDS, ["--ulimit", f"fsize={reading.OUTPUT_FILE_MAX}", "--log-driver", "none"])
         container.Docker("sha256:" + "0" * 64).launch(["true"], [(self.dir, "/outputs", False)])
         with open(self.log) as f:
             arguments = f.readline().split()  # the run (ruche-0136: then inspect and rm)
@@ -1597,7 +1597,7 @@ class TestBounds(unittest.TestCase):
     def test_outputs_never_read_beyond_the_bound(self):
         with open(os.path.join(self.dir, "output"), "wb") as f:
             f.write(b"x" * 101)
-        with mock.patch.object(reading, "OUTPUT_MAX", 100), self.assertRaises(reading.Refusal):
+        with mock.patch.object(reading, "OUTPUT_FILE_MAX", 100), self.assertRaises(reading.Refusal):
             reading.read_output(self.dir, "output", maximum=1 << 30)
         self.assertEqual(reading.read_output(self.dir, "output", maximum=1 << 30), b"x" * 101)
 

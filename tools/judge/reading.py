@@ -12,7 +12,7 @@ import re
 import stat
 import sys
 
-OUTPUT_MAX = 256 * 1024 * 1024
+OUTPUT_FILE_MAX = 256 * 1024 * 1024
 
 
 class JudgeError(Exception):
@@ -38,11 +38,11 @@ def clean(data, maximum=1500):
     return text.replace("::", ": :")  # no GitHub workflow command
 
 
-def read_output(root, relative, maximum=OUTPUT_MAX):
+def read_output(root, relative, maximum=OUTPUT_FILE_MAX):
     """Reads root/relative without ever following a symbolic link (the container wrote in root).
 
-    Returns None if the file does not exist; Refusal if it is not a regular file or if it exceeds maximum (OUTPUT_MAX at most)."""
-    maximum, parts = min(maximum, OUTPUT_MAX), relative.split("/")
+    Returns None if the file does not exist; Refusal if it is not a regular file or if it exceeds maximum (OUTPUT_FILE_MAX at most)."""
+    maximum, parts = min(maximum, OUTPUT_FILE_MAX), relative.split("/")
     if any(p in ("", ".", "..") for p in parts):
         raise Refusal(f"invalid output path: {relative}")
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -84,7 +84,7 @@ def read_output(root, relative, maximum=OUTPUT_MAX):
         os.close(ffd)
 
 
-def require(root, relative, maximum=OUTPUT_MAX):
+def require(root, relative, maximum=OUTPUT_FILE_MAX):
     data = read_output(root, relative, maximum)
     if data is None:
         raise Refusal(f"output missing: {relative}")
@@ -180,13 +180,13 @@ class Outputs:
             raise JudgeError(f"unknown side: {side}")
         return self._roots[side]
 
-    def read(self, side, relative, maximum=OUTPUT_MAX):
+    def read(self, side, relative, maximum=OUTPUT_FILE_MAX):
         data = self.written(side, self._path(side, relative), maximum)
         if data is not None:
             self.read_paths.add((side, relative))
         return data
 
-    def require(self, side, relative, maximum=OUTPUT_MAX):
+    def require(self, side, relative, maximum=OUTPUT_FILE_MAX):
         data = self.read(side, relative, maximum)
         if data is None:
             raise Refusal(f"output missing: {relative}")
@@ -195,7 +195,7 @@ class Outputs:
     def status(self, side, relative):
         return status(None, relative, self.require(side, relative, 64))
 
-    def written(self, side, path, maximum=OUTPUT_MAX):
+    def written(self, side, path, maximum=OUTPUT_FILE_MAX):
         """The output written under this path (no translation of names), as it was frozen."""
         data = read_output(self._root(side), path, maximum)
         fingerprint = None if data is None else hashlib.sha256(data).hexdigest()

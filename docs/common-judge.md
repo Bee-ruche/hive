@@ -145,7 +145,7 @@ Safety rules, checked by the common judge (adversarial review of 28 October):
   the disassembler stops the judge (refusal or error), and unreadable bytes make it incomplete: never complete;
 - the judged files (`SOURCES`) are scanned whole, each file of B against A's, line splices joined, without
   git: only a net, the objects show the code produced;
-- disk and reads are bounded (ruche-0038): containers run with `--ulimit fsize` at `reading.OUTPUT_MAX` (256 MiB) and no
+- disk and reads are bounded (ruche-0038): containers run with `--ulimit fsize` at `reading.OUTPUT_FILE_MAX` (256 MiB) and no
   log on the host's disk, which keeps the first MiB of their standard output and the last of their error; no output is read
   beyond that size, and writing without end fails the judgement. `--workdir` names the judge's work folder (a size-bounded
   tmpfs, for one): filling it fails the judgement too.

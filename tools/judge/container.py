@@ -67,7 +67,7 @@ def copy_tree(source, target):
 
 
 class Docker:
-    # No file above reading.OUTPUT_MAX, no log on the host's disk; the host keeps OUTPUT_MAX of stdout (start), stderr (end).
+    # No file above reading.OUTPUT_FILE_MAX, no log on the host's disk; the host keeps OUTPUT_MAX of stdout (start), stderr (end).
     BOUNDS = ["--ulimit", f"fsize={256 << 20}", "--log-driver", "none"]
     OUTPUT_MAX = 1 << 20
 
