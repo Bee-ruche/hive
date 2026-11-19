@@ -1,5 +1,5 @@
 {
- "about": "Every setting of a project's file (hive/projects/<project>.json), as tools/hive/hive.py reads it: one entry for each, and no other. 'required': the file must give it; otherwise 'default' is what the hive takes when the file says nothing. 'least' and 'most' are bounds the hive enforces when it loads the file (a file outside them does not load); a setting without them is not bounded there; 'joint_bounds' are bounds on several settings together. 'fixed': the one value the hive takes. 'read_by': registry, for a mark the hive itself does not read. A key of the file, of its limits, of its members or of its judge that this list does not hold stops the file. A test of the hive (tools/hive/test_hive.py, TestTheSettingsList) holds this list to the code: neither changes alone.",
+ "about": "Every setting of a project's file (hive/project.json in the project's own repository, on the branch it publishes), as tools/hive/hive.py reads it: one entry for each, and no other. 'required': the file must give it; otherwise 'default' is what the hive takes when the file says nothing. 'least' and 'most' are bounds the hive enforces when it loads the file (a file outside them does not load); a setting without them is not bounded there; 'joint_bounds' are bounds on several settings together. 'fixed': the one value the hive takes. 'read_by': registry, for a mark the hive itself does not read. A key of the file, of its limits, of its members or of its judge that this list does not hold stops the file. A test of the hive (tools/hive/test_hive.py, TestTheSettingsList) holds this list to the code: neither changes alone.",
  "presets": {
   "about": "Recommended values for three ways of opening a project, whatever its judge. They are recommendations: a project's lead may change any of them, within the bounds. A setting that names no value for a way of opening keeps its default. A value written {\"ask\": ..., \"accounts\": ...} is a list of GitHub account numbers that only the lead can give ('one': exactly one; 'some': one or more). Guardians are not part of a preset: a project names them where its judge gives a figure they may waive (guardians.accounts), and members.per_guardian then has its own recommendations.",
   "trial": "One account, the project lead's own, to try the whole pipeline: no wait, many deals a day.",
@@ -12,7 +12,7 @@
   "identifier": "lower-case letters, digits and hyphens",
   "repository": "a GitHub repository, as owner/name",
   "branch": "a branch's own name, with no refs/ or heads/ in front",
-  "path": "a path in the registry",
+  "path": "a path in the project's repository",
   "command": "one command line",
   "boolean": "true or false",
   "whole number": "a whole number",
@@ -35,11 +35,11 @@
  },
  "settings": [
   {"key": "protocol", "section": "project", "type": "protocol", "required": true, "fixed": 1, "what": "The version of the hive's protocol the file is written for. A file that names another does not load."},
-  {"key": "project", "section": "project", "type": "identifier", "required": true, "what": "The project's name in the hive: lower-case letters, digits and hyphens. It is also the name of its file and of its state folder: a file whose project is not its own name does not load."},
-  {"key": "repo", "section": "project", "type": "repository", "required": true, "what": "The GitHub repository the hive reads and writes for this project."},
+  {"key": "project", "section": "project", "type": "identifier", "required": true, "what": "The project's name in the hive: lower-case letters, digits and hyphens. It names the project in its plan, its feed, its page and the commits of its state."},
+  {"key": "repo", "section": "project", "type": "repository", "required": true, "what": "The GitHub repository the hive reads and writes for this project: the one that holds this file. A file that names another does not load, at any step of the hive or any command of a worker."},
   {"key": "branch", "section": "project", "type": "branch", "default": "main", "presets": {"trial": "hive", "invitation": "hive", "open": "hive"}, "what": "The branch the hive writes: what its judge accepted, one commit per task. Never the branch the project publishes: a file that names one branch for both does not load."},
-  {"key": "published", "section": "project", "type": "branch", "required": true, "what": "The branch people take the project from. The hive never writes it: the project's maintainers move it to what they have read."},
-  {"key": "tasks", "section": "project", "type": "path", "required": true, "fixed": "hive/tasks/<project>.jsonl", "what": "Where the project's tasks are listed: one place, which bears the project's name."},
+  {"key": "published", "section": "project", "type": "branch", "required": true, "what": "The branch people take the project from: the repository's default branch, where this file and the tasks are read (a file that names another branch does not load). The hive never writes it: the project's maintainers move it to what they have read."},
+  {"key": "tasks", "section": "project", "type": "path", "required": true, "fixed": "hive/tasks.jsonl", "what": "Where the project's tasks are listed: one place, beside this file, read at the same commit."},
   {"key": "check", "section": "project", "type": "command", "default": "", "what": "The project's own quick check: one command line a worker runs in the project's sandbox before it submits. Empty: the project has none."},
   {"key": "paused", "section": "project", "type": "boolean", "default": false, "what": "True stops every step of the hive for this project: nothing is read, dealt, judged or written."},
   {"key": "in_service", "section": "project", "type": "boolean", "default": false, "read_by": "registry", "what": "A mark the hive itself does not read: the registry's own test holds that a project whose file does not say it is in service is paused, or open by invitation."},
@@ -93,10 +93,10 @@
  "not_settings": [
   "Where project code runs (the project's sandbox, the judge's containers, without network) is the hive's, the same for every project: no project file changes it.",
   "What a member may write (branches of its own fork, nothing else) and what the hive keeps of a fork's text (nothing) are the hive's.",
-  "The hive's own code and the commit of it that runs are the registry's: a project's file names a kind of judge, never brings one.",
+  "The hive's own code is Bee-ruche/hive's, at the commit the project's workflow names: a project's file names a kind of judge, never brings one.",
   "What is protected in every project (the 'always' of the protected setting): a project's file adds paths to these; it removes none.",
   "The hive's own counts: three failures that are a candidate's own before it is refused, six runs without an answer before a deal is closed at no cost, a day for a fork that could not be read, a wait that doubles up to seven days.",
   "The hive's own bounds on what a run does besides a project's limits, which have bounds of their own: the branches it lists of one fork, what all the fetches of a run leave, what a plan carries to the other steps, how long it weighs candidates.",
-  "A project's tasks are a file of their own (hive/tasks/<project>.jsonl); a task says its files, its tier, its goal and its options there, not in the project's file."
+  "A project's tasks are a file of their own (hive/tasks.jsonl); a task says its files, its tier, its goal and its options there, not in the project's file."
  ]
 }

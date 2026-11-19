@@ -178,7 +178,7 @@ class Case(unittest.TestCase):
         (self.state / name).write_text(data if isinstance(data, str) else json.dumps(data))
 
     def tasks(self, lines):
-        """Writes a task file as the registry keeps one (hive/tasks/<project>.jsonl) and returns its path: dicts as
+        """Writes a task file as a project keeps one (hive/tasks.jsonl) and returns its path: dicts as
         JSON, strings and bytes as they are."""
         path = self.root / "registry-tasks.jsonl"
         with open(path, "wb") as f:
@@ -1916,7 +1916,7 @@ class TestLogins(Case):
 
 
 def task(identifier, goal=None, **more):
-    """A task line as the registry's task file holds one."""
+    """A task line as a project's task file holds one."""
     return {"id": identifier, "title": f"Title of {identifier}", "files": ["lib.c"], **({"goal": goal} if goal is not None else {}), **more}
 
 
@@ -2035,7 +2035,7 @@ class TestGoal(Case):
         self.assertEqual(figures, {"toy-0001": "a", "toy-0005": "a", "toy-0009": "a", **{f"toy-{n:04d}": "b" for n in (2, 3, 4, 6, 7, 8, 10)}})
 
     def project(self, judge):
-        """Writes a project's file as the registry keeps one (hive/projects/<project>.json) and returns its path."""
+        """Writes a project's file of settings as a project keeps one (hive/project.json) and returns its path."""
         path = self.root / "registry-project.json"
         path.write_bytes(judge if isinstance(judge, bytes) else json.dumps({"protocol": 1, "project": "toy", "judge": judge}).encode())
         return str(path)
@@ -2511,7 +2511,7 @@ class TestEndToEnd(test_hive.Base):
         out = self.w.root / "site"
         with contextlib.redirect_stdout(io.StringIO()):
             page.main(["--state", str(self.w.state), "--out", str(out), "--title", "A toy project", "--repo-url", "https://github.com/Bee-ruche/toy",
-                       "--tasks", str(self.w.registry / "hive/tasks/toy.jsonl")])  # the registry's own task file, as a run has it
+                       "--tasks", str(self.w.tasks_file)])  # the project's own task file, as a run has it
         text, data = (out / "index.html").read_text(encoding="utf-8"), json.loads((out / "summary.json").read_text())
         seen = Seen(text)
         self.assertEqual(seen.row("alice"), ["alice", "1", "card · badge"])
@@ -2553,7 +2553,7 @@ class TestEndToEnd(test_hive.Base):
         """The lines are the hive's own: a candidate refused for the goal of its task, with the judge's figures, and two
         deals whose asks named a part of the project, one kept and one not."""
         tasks = [{**t, "goal": {"kind": "metric", "name": "gain_speed", "min": 0.02}} if t["id"] == "toy-0004" else t for t in test_hive.TASKS]
-        (self.w.registry / "hive/tasks/toy.jsonl").write_text("".join(json.dumps(t) + "\n" for t in tasks))
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in tasks))
         self.w.set_config({"judge": {"metrics": ["gain_speed", "sure_speed", "outputs_compared"]}})
 
         def judge(*a):
@@ -2572,7 +2572,7 @@ class TestEndToEnd(test_hive.Base):
                          (True, {"file": "lib.c", "kept": True}, {"file": "lib.c", "kept": False, "because": "needs_an_accepted_deal"}))
         out = self.w.root / "site"
         with contextlib.redirect_stdout(io.StringIO()):
-            page.main(["--state", str(self.w.state), "--out", str(out), "--tasks", str(self.w.registry / "hive/tasks/toy.jsonl")])
+            page.main(["--state", str(self.w.state), "--out", str(out), "--tasks", str(self.w.tasks_file)])
         text, summary = (out / "index.html").read_text(encoding="utf-8"), (out / "summary.json").read_text()
         seen, titles = Seen(text), {t["id"]: t["title"] for t in tasks}
         self.assertEqual([row for row in seen.rows if row[0] == "2026-11-12"], [

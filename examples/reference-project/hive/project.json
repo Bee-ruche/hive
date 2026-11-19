@@ -5,7 +5,7 @@
  "branch": "hive",
  "published": "main",
  "paused": false,
- "tasks": "hive/tasks/cjson.jsonl",
+ "tasks": "hive/tasks.jsonl",
  "check": "",
  "protected": [
   "bee/**",

@@ -48,7 +48,7 @@ LIMITS = {"limits": {"changed_lines": 50, "files": 3, "file_bytes": 2000, "commi
 
 def pool_world(root, hook=False):
     world = th.World(root, LIMITS)
-    (world.registry / "hive/tasks/toy.jsonl").write_text("".join(json.dumps(t) + "\n" for t in TASKS))
+    world.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in TASKS))
     if hook:
         path = world.upstream / "hooks/pre-receive"
         path.write_text(HOOK)
@@ -442,14 +442,14 @@ class TestTargetedSchedules(unittest.TestCase):
             try:
                 step()
             except hive.HiveError as error:  # (a push that failed, a tip that moved: never the plan's own word)
-                self.assertNotRegex(str(error), "does not bear out|as the registry writes them|unreadable", "the plan just made was refused")
+                self.assertNotRegex(str(error), "does not bear out|as its tasks write them|unreadable", "the plan just made was refused")
 
         kept = 0
         for seed in range(int(os.environ.get("HIVE_PLAN_SEEDS", "10"))):
             with self.subTest(seed=seed), tempfile.TemporaryDirectory() as root:
                 rng, s, hour = random.Random(seed), Sim(root), 12
                 forks = [s.w.fork(f"m{i}", 300 + i) for i in range(3)]
-                tasks_file, ledger_file = s.w.registry / "hive/tasks/toy.jsonl", s.w.state / "ledger.jsonl"
+                tasks_file, ledger_file = s.w.tasks_file, s.w.state / "ledger.jsonl"
                 closed, pushed, used = set(), set(), set()
 
                 def asks_used():

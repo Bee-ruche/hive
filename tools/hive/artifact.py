@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""How a job of the hive's run takes the files an earlier job of the same run left (docs/hive-workflow.md).
+"""How a job of the hive's run takes the files an earlier job of the same run left (docs/hosting.md).
 
 A job that is about to hold a key never unpacks another job's files with a general tool: an archive names its own
 paths, and a file written where code is later run from is run. This tool asks GitHub for the archive, reads from
@@ -12,7 +12,7 @@ bytes that give its checksum and sizes; then the directory that lists exactly th
 end of the file. No comment, no extra field, no other flag or method, nothing between two parts. Every byte is
 accounted for, so no other reader of the same archive can find in it a member this one did not see; and what the
 reading costs is bounded by the sizes asked for and a block at a time, never by what the archive says of itself
-(docs/hive-workflow.md says what could not be tried against GitHub).
+(docs/hosting.md says what could not be tried against GitHub).
 
 What it takes is still only data from a job that held no key: the caller checks it (the plan against the SHA-256
 its job published, the bundle against the plan) or believes it for nothing more than what that job may say (the

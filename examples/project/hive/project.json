@@ -5,7 +5,7 @@
  "branch": "hive",
  "published": "master",
  "paused": false,
- "tasks": "hive/tasks/miniz.jsonl",
+ "tasks": "hive/tasks.jsonl",
  "check": "bee/tests/lancer.sh",
  "protected": [
   "bee/**",

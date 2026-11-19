@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The public page of one hive project, made from its state folder (docs/protocol.md, "The ledger and the feed").
 
-    python3 tools/hive/page.py --state <state folder of one project> --out <folder>
+    python3 tools/hive/page.py --state <the project's state: a clone of its branch hive-state> --out <folder>
                                [--title "..."] [--repo-url https://github.com/owner/name]
-                               [--tasks <the registry's hive/tasks/<project>.jsonl>]
+                               [--tasks <the project's hive/tasks.jsonl>]
                                [--join | --join-url https://github.com/...]
                                [--site-url https://owner.github.io/site/project] [--now 2026-11-13T00:00:00Z]
 
@@ -137,7 +137,7 @@ GOAL_MORE = 8  # the further conditions of a task's goal that the page counts an
 # theirs had come to an end yet, or the last one had not been accepted (the ledger has one word for both).
 UNLISTED = "needs_an_accepted_deal"
 # What a deal's line says of the part of the project its ask preferred (hive.plan): the part is one of the files the
-# project's tasks name, as the registry writes it; kept or not; and, when not, one of these reasons, in this file's
+# project's tasks name, as they write it; kept or not; and, when not, one of these reasons, in this file's
 # own words. Checked again here: a path of printable ASCII, a yes or a no, a reason of this list.
 PART = re.compile(r"[!-~](?:[ -~]{0,198}[!-~])?\Z")
 PREFER_WORDS = {"not_offered": "the project does not offer preferences",
@@ -340,7 +340,7 @@ def goal_bounds(task):
 
 
 def read_tasks(path):
-    """({task id: metric}, {task id: bounds}) from the registry's task file of the project (hive/tasks/<project>.jsonl),
+    """({task id: metric}, {task id: bounds}) from the project's task file (hive/tasks.jsonl, in its repository),
     for the tasks whose goal is a gain (goal_metric) and for those whose goal bounds it (goal_bounds). It is the hive's
     own file, trusted as the feed is, and read with the same care: a line that is not a task says nothing, a task
     listed twice is read once, and only an identifier and two numbers are kept of it. The feed does not carry a task's
@@ -364,7 +364,7 @@ def read_tasks(path):
                 if bounds is not None:
                     asked[identifier] = bounds
     except OSError:
-        raise PageError("--tasks: the project's task file in the registry (hive/tasks/<project>.jsonl)") from None
+        raise PageError("--tasks: the project's task file (hive/tasks.jsonl, in its repository)") from None
     return goals, asked
 
 
@@ -372,8 +372,8 @@ PROJECT_BYTES = 1 << 20  # what the page reads of a project's file, at most
 
 
 def read_proofs(path):
-    """{<measure>} for each proof the project takes (the sure_<measure> of its judge.confirm), from the registry's file
-    of the project (hive/projects/<project>.json). It is the hive's own file, trusted as the task file is, and read
+    """{<measure>} for each proof the project takes (the sure_<measure> of its judge.confirm), from the project's file
+    of settings (hive/project.json, in its repository). It is the hive's own file, trusted as the task file is, and read
     with the same care: a plain file under that very name, no more than PROJECT_BYTES of it, and of it only
     identifiers are kept. A project that takes no proof gives an empty set: no figure then leads anything. Raises
     PageError when the file cannot be read or is not a project's file: it was named on the command line."""
@@ -386,7 +386,7 @@ def read_proofs(path):
         if not isinstance(confirm, list):
             raise ValueError("not a project's file")
     except (OSError, ValueError, RecursionError):
-        raise PageError("--project: the project's file in the registry (hive/projects/<project>.json)") from None
+        raise PageError("--project: the project's file of settings (hive/project.json, in its repository)") from None
     names = (matching(name[5:], METRIC) for name in confirm if isinstance(name, str) and name.startswith("sure_"))
     return {name for name in names if name is not None}
 
@@ -398,7 +398,7 @@ def read_goals(path):
 
 def read_prefer(prefer):
     """{"file", "kept", "because"} from what a deal's line says of the part its ask preferred, or None. The hive writes
-    the registry's own string there, never a fork's; this file checks it all the same: the part is a path of printable
+    the project's own string there, never a fork's; this file checks it all the same: the part is a path of printable
     ASCII (PART), kept is the value true or the value false, and a preference that was not kept gives one of the reasons
     of PREFER_WORDS (kept: no reason at all). Anything else says nothing."""
     if not isinstance(prefer, dict) or matching(prefer.get("file"), PART) is None or type(prefer.get("kept")) is not bool:
@@ -656,8 +656,8 @@ def rate(part, whole):
 def collect(state, now, tasks=None, project=None):
     """Everything the page shows, as plain data (it is also summary.json). Members are counted by account id and
     named by the login of their latest event; only members with an integration are named at all. `tasks` is the path
-    of the registry's task file of the project, or None: it says which figure each task asked for (read_goals).
-    `project` is the path of the registry's file of the project, or None: it says which proofs the project takes, and
+    of the project's task file, or None: it says which figure each task asked for (read_goals).
+    `project` is the path of the project's file of settings, or None: it says which proofs the project takes, and
     a card then leads with one of those measures only (read_proofs).
 
     Nobody is ranked. The members are every account with an accepted contribution, in the alphabetical order of their
@@ -1074,7 +1074,7 @@ def measured_words(item):
 
 def prefer_words(prefer):
     """One sentence for what a deal's line says of the part its ask preferred, as the children of a cell: this file's
-    words around the part's name, which the ledger holds as the registry writes it (read_prefer)."""
+    words around the part's name, which the ledger holds as the project's tasks write it (read_prefer)."""
     if prefer["kept"]:
         return ["The ask named ", el("code", prefer["file"]), ", and the hive kept it: the task dealt is one of that part."]
     return ["The ask named ", el("code", prefer["file"]), "; the hive did not keep it: ", PREFER_WORDS[prefer["because"]], "."]
@@ -1821,13 +1821,13 @@ def write(out, files):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The public page of one hive project, from its state folder.")
-    parser.add_argument("--state", required=True, help="the project's folder of the state repository (ledger.jsonl, feed.json, stats.json)")
+    parser.add_argument("--state", required=True, help="the project's state: a clone of its branch hive-state (ledger.jsonl, feed.json, stats.json)")
     parser.add_argument("--out", required=True, help="where index.html, badge.svg, summary.json, members/ and wins/ are written")
     parser.add_argument("--title", default="", help="one line saying what the project is, shown under its name")
     parser.add_argument("--repo-url", help="https://github.com/owner/name: integrations then link to their commit")
-    parser.add_argument("--tasks", help="the project's task file in the registry (hive/tasks/<project>.jsonl): a card then leads with "
+    parser.add_argument("--tasks", help="the project's task file (hive/tasks.jsonl, in its repository): a card then leads with "
                                         "the figure its task asked for, when the judge saw it beyond its noise")
-    parser.add_argument("--project", help="the project's file in the registry (hive/projects/<project>.json): a card then leads only "
+    parser.add_argument("--project", help="the project's file of settings (hive/project.json, in its repository): a card then leads only "
                                           "with a measure whose proof the project takes (judge.confirm)")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--join", action="store_true", help="the join page is join.html, beside index.html")

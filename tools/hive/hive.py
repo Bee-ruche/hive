@@ -27,17 +27,19 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
           what it started on, nothing else, pushes the
           judged commits (never anything but a descendant of the judged tip) and records.
 
-Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each first checks
-that the clone's own git settings are plain (plain_clone), then runs git so that no setting of the repository starts
-a program. What a command decides on comes from outside the clone: the fork's address is worked out from the login
-and the registry (own_fork), a task is started on the commit the project's own address announces (project_tip) and
-only once the work tree, read as files, is shown to hold that commit's files and nothing else (work_tree_proof), an
-ask carries no file and no history, and a candidate is pushed only once the commits and folders it rests on, read
-as bytes this file hashes itself, show that it starts from the project's history and changes only the task's files
-(candidate_proof). Every line they print on the standard output is one of these, and nothing else; what follows a
-keyword is a value this file checked or a sentence of its own, never a text of the feed or of the fork:
+Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each is told the
+project by its repository (--project owner/name, as the user's prompt names it) and reads the project's settings and
+tasks from the project's own address, on its default branch (hive_project). Each first checks that the clone's own git
+settings are plain (plain_clone), then runs git so that no setting of the repository starts a program. What a command
+decides on comes from outside the clone: the fork's address is worked out from the login and the project's settings
+(own_fork), a task is started on the commit the project's own address announces (project_tip) and only once the work
+tree, read as files, is shown to hold that commit's files and nothing else (work_tree_proof), an ask carries no file
+and no history, and a candidate is pushed only once the commits and folders it rests on, read as bytes this file
+hashes itself, show that it starts from the project's history and changes only the task's files (candidate_proof).
+Every line they print on the standard output is one of these, and nothing else; what follows a keyword is a value this
+file checked or a sentence of its own, never a text of the feed or of the fork:
 
-  PROJECT <id>                    setup: the hive's project this clone is a fork of
+  PROJECT <owner/name>            setup: the project this clone is a fork of, by its repository
   LOGIN <login>                   setup: the member the hive credits: the login given, which the origin agrees with
   UPSTREAM <ref>                  setup: the project's branch as this clone fetched it (no command decides on it)
   NOTE <sentence>                 setup: the fork holds settings your tool may have run: stop, tell the user
@@ -73,7 +75,7 @@ its work tree is not what the project's tip holds (start): nothing may be commit
 run from it, its sandbox included.
 
 Guardian side (same file, run at the root of the clone of the guardian's own fork, under the same checks of the
-clone): admit. It makes a ruling out of the command line and the registry (the task, the commit it admits, each
+clone): admit. It makes a ruling out of the command line and the project's settings (the task, the commit it admits, each
 figure it waives and up to what), on that commit, in a store of this tool's own, and pushes it to the guardian's own
 fork. It prints lines of the list above: PUSHED <commit> (the ruling is pushed), NOT-PUSHED <commit> (--no-push),
 WITHDRAWN (--withdraw: the ruling is taken back), THEN.
@@ -179,6 +181,16 @@ PROTECTED_DIRS = frozenset((
     ".devcontainer", ".continue", ".amazonq", ".clinerules", ".aider", ".zed", ".idea", ".opencode", ".kilocode", ".trae",
     ".agents", ".augment", ".aiassistant", ".qwen", ".crush", ".warp", ".openhands", ".idx", ".roo"))
 ALWAYS_PROTECTED = ("hive/**",)  # at the root: the hive's own files in a project
+# A project holds its own settings and tasks, in its own repository, on the branch it publishes (its default branch):
+# the hive reads them there, at one commit for a whole run (settings_at), and a worker reads them there too
+# (settings_in). Who can write that branch can change them; no contribution can (ALWAYS_PROTECTED).
+PROJECT_FILE = "hive/project.json"
+TASKS_FILE = "hive/tasks.jsonl"
+SETTINGS_BYTES = 16 << 20  # either of the two files larger than this is not read
+# The project's state (the ledger, the feed...): the files of one branch of the project's own repository, at its root,
+# written by the run's steps that write (record, apply) and by nothing else of the hive's (save_state).
+STATE_BRANCH = "hive-state"
+STATE_FILES = ("accounts.json", "feed.json", "ignored.json", "ledger.jsonl", "stats.json")
 DEFAULTS = {
     "branch": "main",
     "protected": [],
@@ -495,10 +507,20 @@ def plain_path(path):
 # Configuration, tasks, ledger
 
 
-def load_config(path):
-    """A project's hive configuration (hive/projects/<project>.json): trusted, read from the registry's own tree."""
+def load_config(path, repository=None):
+    """A project's settings from a file of this machine (hive/project.json as a project's repository holds it, read
+    by config_of). The steps of a run and a worker's commands read them from the project's repository itself
+    (settings_at, settings_in); this reads a copy (the tests, the settings list's own check)."""
     with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
+        return config_of(json.load(f), str(path), repository)
+
+
+def config_of(raw, path, repository=None):
+    """A project's hive configuration, its file hive/project.json as JSON (`path` names it in what is said): trusted,
+    read from the project's own repository, on the branch it publishes, at one commit (settings_at, settings_in). Who
+    can write that branch can change the project's settings. repository: the repository the file was read from
+    (owner/name), which the file's « repo » must name: a project's settings are about the repository that holds them,
+    and no other (None: a copy, which names no repository)."""
     if not isinstance(raw, dict) or raw.get("protocol") != PROTOCOL:
         raise HiveError(f"{path}: protocol {PROTOCOL} expected")
     # The keys of a project's file are the hive's: one it does not know is a mistake of the file (a key mistyped would
@@ -519,10 +541,12 @@ def load_config(path):
         config[key] = {**DEFAULTS[key], **(raw.get(key) or {})}
     if not (isinstance(config.get("project"), str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", config["project"])):
         raise HiveError(f"{path}: project: a lower-case identifier")
-    if config["project"] != Path(path).stem:  # the name is where its state is kept: two files never share one
-        raise HiveError(f"{path}: project: the file's own name ({Path(path).stem})")
     if not (isinstance(config.get("repo"), str) and REPO_NAME.match(config["repo"])):
         raise HiveError(f"{path}: repo: owner/name")
+    # The state, the forks and the branch the hive writes are the repository's that holds the file: a file that names
+    # another repository is about another project, and does not load (GitHub reads a repository's name in any case).
+    if repository is not None and config["repo"].lower() != repository.lower():
+        raise HiveError(f"{path}: repo: the repository that holds this file ({safe_text(repository, 140)}), and no other")
     if not plain_branch(config["branch"]):
         raise HiveError("the project's branch is not a plain branch name")
     published = config.get("published")
@@ -530,8 +554,8 @@ def load_config(path):
         raise HiveError(f"{path}: published: the branch people take the project from, which the hive never writes")
     if config["branch"].casefold() == published.casefold():
         raise HiveError(f"{path}: branch: the hive writes a branch of its own, never the one the project publishes ({published})")
-    if config.get("tasks") != f"hive/tasks/{config['project']}.jsonl":  # as its state: one place, which bears its name
-        raise HiveError(f"{path}: tasks: the project's own tasks file (hive/tasks/{config['project']}.jsonl)")
+    if config.get("tasks") != TASKS_FILE:  # one place, beside the settings, on the same commit
+        raise HiveError(f"{path}: tasks: the project's own tasks file ({TASKS_FILE})")
     if not isinstance(config.get("check", ""), str):
         raise HiveError(f"{path}: check: the project's own quick check, one command line")
     # A project whose file names one account alone may ask no wait at all: the wait is there for those nobody named,
@@ -746,12 +770,17 @@ def check_goals(config, tasks):
 
 
 def load_tasks(path):
-    """The project's tasks (JSON lines, trusted): id, title, files, and optionally size, tier, goal, options, closed."""
-    tasks = {}
+    """The project's tasks from a file of this machine (a copy of hive/tasks.jsonl: tasks_of)."""
     with open(path, encoding="utf-8") as f:
-        for number, line in enumerate(f, 1):
-            if not line.strip():
-                continue
+        return tasks_of(f.read().split("\n"), str(path))
+
+
+def tasks_of(lines, path):
+    """The project's tasks (JSON lines, trusted, read beside its settings: hive/tasks.jsonl): id, title, files, and
+    optionally size, tier, goal, options, closed."""
+    tasks = {}
+    for number, line in enumerate(lines, 1):
+        if line.strip():
             task = json.loads(line)
             if not (isinstance(task, dict) and isinstance(task.get("id"), str) and TASK_ID.match(task["id"])):
                 raise HiveError(f"{path}:{number}: a task needs an id like project-0001")
@@ -764,9 +793,37 @@ def load_tasks(path):
     return tasks
 
 
+def settings_from(settings, listed, repository):
+    """(configuration, tasks) of a project from the bytes of its two files, hive/project.json and hive/tasks.jsonl, as
+    one commit of its repository holds them (settings_at for a run, settings_in for a worker), with each goal checked
+    against its judge's figures. repository: the repository they were read from, which the file must name. Raises
+    HiveError, or ValueError, TypeError or RecursionError for bytes that are not the JSON this reads."""
+    config = config_of(json.loads(settings.decode("utf-8")), PROJECT_FILE, repository)
+    tasks = tasks_of(listed.decode("utf-8").split("\n"), TASKS_FILE)
+    check_goals(config, tasks)
+    return config, tasks
+
+
+def default_branch(listed):
+    """(branch, commit) from what `git ls-remote --symref <address> HEAD` printed: the branch a repository names as
+    its default one (its HEAD), and the commit that branch is at, each said once, the branch a plain branch's name
+    (plain_branch). None for anything else: a repository that names no default branch says nothing here."""
+    named, tips = [], []
+    for line in listed.splitlines():
+        (named if line.startswith("ref: ") else tips).append(line)
+    if len(named) != 1 or len(tips) != 1:
+        return None
+    reference, _, said = named[0][len("ref: "):].partition("\t")
+    commit, _, held = tips[0].partition("\t")
+    branch = reference[len("refs/heads/"):]
+    if said != "HEAD" or held != "HEAD" or not reference.startswith("refs/heads/") or not plain_branch(branch) or not is_sha(commit):
+        return None
+    return branch, commit
+
+
 def project_parts(tasks):
     """The parts of a project a member may say it prefers: every string that a task of the project, open or closed,
-    lists in `files`, as the registry writes it (a folder with its final « / »), sorted. One a marker's line cannot
+    lists in `files`, as the project's tasks write it (a folder with its final « / »), sorted. One a marker's line cannot
     carry (more than 200 characters) is not a part: the worker and the hive read the same list."""
     return sorted({path for task in tasks.values() for path in task["files"] if len(path) <= 200})
 
@@ -783,10 +840,10 @@ def prefer_ok(prefer):
 
 def deal_prefer(deal, tasks, config=None, ledger=None):
     """What a deal's line says of the part its member prefers, as a step that holds keys writes it: None when the
-    plan's deal names none; else the plan's « prefer » built again, from the registry's own string and this file's own
+    plan's deal names none; else the plan's « prefer » built again, from the project's own string and this file's own
     keys, never copied. The plan comes from the step that read the forks: a step that writes holds, by itself, that
-    the preference has the one shape a deal carries (prefer_ok), names one of the project's parts as the registry
-    writes them (project_parts), and says of the task it deals nothing the registry does not bear out: a kept
+    the preference has the one shape a deal carries (prefer_ok), names one of the project's parts as the project's
+    tasks write them (project_parts), and says of the task it deals nothing the project's tasks do not bear out: a kept
     preference deals a task of that part, and « no task of that part was free » is not said of one. Given the
     project's settings and the ledger as the plan counted with it (as_the_plan_counted), it also holds what the line
     says against them, as plan decides it: « not_offered » if and only if the project offers none; else
@@ -800,7 +857,7 @@ def deal_prefer(deal, tasks, config=None, ledger=None):
     prefer = deal["prefer"]
     part = next((part for part in project_parts(tasks) if part == prefer["file"]), None) if prefer_ok(prefer) else None
     if part is None:
-        raise HiveError("the plan names a preference that is not one of the project's files as the registry writes them: nothing is written")
+        raise HiveError("the plan names a preference that is not one of the project's files as its tasks write them: nothing is written")
     untrue = HiveError("the plan says of a deal's preference what the task it deals does not bear out: nothing is written")
     kept, because = prefer["kept"], prefer.get("because")
     listed = part in tasks.get(deal.get("task"), {}).get("files", ())
@@ -1185,7 +1242,7 @@ def read_marker(message):
           (+ « Hive-Model: <identifier> »): a candidate for the task the hive dealt to this member, in that deal.
     The member is the account the commit is for: it counts only in that account's own fork.
     « prefer » is what an ask's line says, as the fork wrote it and unchecked: an ask that names a part nobody knows
-    is still an ask, and the one use of the value is its comparison with the registry's own strings (discover). On
+    is still an ask, and the one use of the value is its comparison with the project's own strings (discover). On
     a submit the line means nothing: the marker stands as it would without it, and « prefer » is None."""
     found = {}
     for line in message.split("\n"):
@@ -1822,8 +1879,8 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
     next run, and the forks are read in an order drawn anew each hour, which no fork can shift.
 
     An ask may name the part of the project its member prefers. What the fork wrote there is compared with `parts`
-    (the registry's own strings: project_parts) and goes no further than that comparison: the entry keeps the
-    registry's string, or None for any other value, and nothing of the fork's is logged or handed on.
+    (the project's own strings: project_parts) and goes no further than that comparison: the entry keeps the
+    project's string, or None for any other value, and nothing of the fork's is logged or handed on.
 
     A GUARDIAN'S FORK IS READ FOR ITS RULINGS, in the same way and within the same bounds, whatever the project asks
     of a member: a project open by invitation, an account too young for it or one it bans may still be one its file
@@ -2133,7 +2190,7 @@ def check_rulings(plan_, config, tasks, ledger):
     ruling carries the commit it names (« whole »: true of every ruling the plan admits). Everything else is held
     here, from the project's file, its tasks and the ledger:
 
-    A candidate the plan says a guardian admitted. Its task may be one the registry has closed, or lists no more,
+    A candidate the plan says a guardian admitted. Its task may be one the project's tasks close, or list no more,
     since the plan: the step then answers the ruling void and does nothing else with it (process), as it refuses a
     member's candidate whose task was closed meanwhile. Otherwise the ruling stands (admissible: the account is
     one the file names; the ledger holds the refusal the ruling is about, for that task, and it is one a guardian
@@ -2143,16 +2200,16 @@ def check_rulings(plan_, config, tasks, ledger):
     free when the plan was made, and so was every open task that shares a file with it; no other ruling of the
     plan takes that task, no other candidate of the plan is for it or for one of those, and the plan deals none
     of them.
-    A ruling the plan says is void, for a task the registry lists and has not closed, or for none. It is void for
+    A ruling the plan says is void, for a task the project's tasks list and do not close, or for none. It is void for
     that very reason by admissible's own reading of what the plan gives. « duplicate », which is the plan's draw between rulings
     that stand on one commit, is said only of a ruling that would stand, and only in a plan that admits that same
     commit under another ruling: the answer of a ruling that lost the draw goes with the answer of the one that
     won it, never before (void_lines).
-    One case is the registry's doing and stops nothing, as for a candidate and for a commit a guardian admitted: the
-    plan names a task the registry has closed, or lists no more (already when the plan was made, or since; the
-    steps of a run in service read one registry). Whatever the plan said of such a ruling, « duplicate » included, the step answers it itself, with what
+    One case is the project's doing and stops nothing, as for a candidate and for a commit a guardian admitted: the
+    plan names a task the project's tasks close, or list no more (already when the plan was made, or since; the
+    steps of a run read the tasks of one commit). Whatever the plan said of such a ruling, « duplicate » included, the step answers it itself, with what
     it holds: void, « task_closed » (the plan's own reason only where this step's reading gives the same), and the
-    task as the registry names it now, or none: a task's name the registry does not list reaches no line. The
+    task as the project's tasks name it now, or none: a task's name they do not list reaches no line. The
     account is still one the file names, and the ruling one the ledger has not answered.
     Returns the rulings to answer void, each with the task and the reason its line carries (void_lines).
     No ruling is named twice in a plan, among those it admits and those it answers void: a ruling has one answer,
@@ -2194,11 +2251,11 @@ def check_rulings(plan_, config, tasks, ledger):
     judged = {entry["sha"] for entry in admitted}  # the commits this plan judges under a ruling
     answers = []
     for void in voids:
-        listed = void["task"] if void["task"] in tasks else None  # the task as the registry names it now, or none
+        listed = void["task"] if void["task"] in tasks else None  # the task as the project's tasks name it now, or none
         reason = admissible({**void, "task": listed}, config, tasks, ledger)
         if void["task"] is not None and (listed is None or tasks[listed].get("closed")):
-            # The plan names a task that the registry lists no more, or has closed: the ruling is void for that, by
-            # this step's own reading, whatever the plan said of it. The line is this step's: the registry's id or
+            # The plan names a task that the project's tasks list no more, or close: the ruling is void for that, by
+            # this step's own reading, whatever the plan said of it. The line is this step's: the project's own id or
             # none, never the plan's string; the plan's reason only where this reading gives the same.
             if reason not in ("malformed", "task_closed"):
                 raise untrue  # (an account the file does not name, a ruling the ledger already answers)
@@ -2221,7 +2278,7 @@ def check_cover(plan_, config, tasks, read, counted):
 
     The members that are active (active_members) are counted in `counted`, as the plan counted them: a place is
     held by a live deal, and the deals the plan says are over hold none. So a step first holds each of those
-    against the ledger and the registry, as far as they tell: it is a deal the ledger holds as live, of that
+    against the ledger and the project's settings, as far as they tell: it is a deal the ledger holds as live, of that
     account and that instant, and either its time is up at the plan's instant (its end and the project's grace are
     past) or its task is no longer open (closed, listed no more, or done). What the plan step alone read stays the
     plan's word: that the member's fork, read whole, held no candidate for a deal whose time is up.
@@ -2247,10 +2304,12 @@ def check_cover(plan_, config, tasks, read, counted):
         raise HiveError("the plan deals to more new members than the project's guardians cover: nothing is written")
 
 
-def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False):
+def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False, *, settings):
     """The run's plan: everything the later steps need to know about the forks, read once, now. The step that makes
     it runs nobody's code and holds no secret; no later step can change it; the steps that write read it and never
-    talk to a fork.
+    talk to a fork. settings: the commit of the project's published branch that `config` and `tasks` were read at
+    (settings_on); the plan names it, and every later step of the run reads the settings at that commit and at no
+    other (pinned_settings).
 
     THE HIVE DEALS THE TASKS. At any time at most one member may submit for a task: its holder, the member of the
     task's latest deal. So there is no order to decide among members, no instant to trust, and nothing to gain by
@@ -2295,8 +2354,8 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False)
 
     A MEMBER MAY SAY WHICH PART OF THE PROJECT IT PREFERS, and the hive follows it only when that costs its rules
     nothing. A part is one of the files the project's tasks name (project_parts). The ask names it (« Hive-Prefer »);
-    what the fork wrote is compared with the registry's strings and goes no further (discover): the plan, the ledger
-    and the logs hold the registry's string, and any other value is no preference at all. A member with several asks
+    what the fork wrote is compared with the project's own strings and goes no further (discover): the plan, the ledger
+    and the logs hold the project's string, and any other value is no preference at all. A member with several asks
     has a preference only if all of them name the same part. At the member's turn in step 4, with `mine` the tasks
     it could be dealt anyway (open, free, their rivals free, of its tier, and first those it never held in vain, as
     step 4 says), the preference is kept if and only if,
@@ -2312,7 +2371,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False)
          (one does: to follow the preference would be to choose that task, and nobody chooses a task).
     The task is then the one the same draw gives among the tasks of `mine` that list the part. In every other case
     the plain draw runs, unchanged. The deal says what happened (« prefer »: the part, kept or not, and why not); a
-    member whose ask names no part of the registry's has no « prefer » at all.
+    member whose ask names no part of the project's has no « prefer » at all.
     What holds whatever an ask says: a kept preference only ever yields a task that was already in `mine`, so the
     plain draw could have given it; and nothing else moves. Who is an asker and the order in which askers are served
     (the classes, then a draw of the member alone) read no preference; the waits, the day's deals, the tiers, the
@@ -2394,7 +2453,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False)
     voids, standing, second, taken = [], {}, {}, set()
     for entry in sorted(rulings, key=lambda e: draw(key, e["sha"])):
         ruling = {"ruling": entry["sha"], "guardian_id": entry["member_id"], "guardian": entry["login"],
-                  "task": entry["task"] if entry["task"] in tasks else None,  # the registry's own id, or none: never a fork's word
+                  "task": entry["task"] if entry["task"] in tasks else None,  # the project's own id, or none: never a fork's word
                   "sha": entry["commit"], "waive": entry["waive"], "whole": entry["whole"], "unlisted": entry["unlisted"]}
         reason = admissible(ruling, config, tasks, ledger)
         if reason is None and ruling["sha"] in standing:
@@ -2475,7 +2534,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False)
         tier = min(e["tier"] for e in asks[member_id])
         askers.append((klass, draw(key, member_id), member_id, tier, conditional))
     askers.sort()
-    # The part each member prefers: the registry's string its asks name, all of them the same one. Kept apart from the
+    # The part each member prefers: the project's string its asks name, all of them the same one. Kept apart from the
     # order above, which reads none of it.
     prefers = {}
     for member_id, group in asks.items():
@@ -2535,7 +2594,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False)
             dealt.append(line)
             for entry in asks[member_id]:
                 ignored[str(entry["repo_id"])].append(entry["sha"])  # an ask is used once
-    return {"protocol": PROTOCOL, "project": config["project"], "tip": tip, "at": iso(instant), "key": key,
+    return {"protocol": PROTOCOL, "project": config["project"], "settings": settings, "tip": tip, "at": iso(instant), "key": key,
             "ledger": {"lines": lines, "sha256": digest}, "landed": landed, "expiries": expiries, "deals": dealt, "conditional": conditional_deals,
             "queue": queue, "ignored": ignored, "accounts": accounts, "bundle_sha256": "",
             **({"rulings": voids} if voids else {})}  # (a plan that answers no ruling is, key for key, a plan of a project without guardians)
@@ -2739,7 +2798,7 @@ def read_plan(plan_, config):
     ledger_ok = isinstance(plan_, dict) and isinstance(plan_.get("ledger"), dict) and type(plan_["ledger"].get("lines")) is int \
         and plan_["ledger"]["lines"] >= 0 and isinstance(plan_["ledger"].get("sha256"), str)
     ok = (ledger_ok and plan_.get("protocol") == PROTOCOL and plan_.get("project") == config["project"]
-          and is_sha(plan_.get("tip")) and stamp(plan_.get("at"))
+          and is_sha(plan_.get("settings")) and is_sha(plan_.get("tip")) and stamp(plan_.get("at"))
           and isinstance(plan_.get("key"), str) and RUN_KEY.match(plan_["key"])
           and isinstance(plan_.get("queue"), list) and all(candidate_ok(c) for c in plan_["queue"])
           and isinstance(plan_.get("deals"), list) and all(deal_ok(c) for c in plan_["deals"])
@@ -2907,7 +2966,7 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
             if admit and admit["ruling"] in answered:
                 continue  # a ruling is answered once
             if admit and (task is None or task.get("closed") or entry["task"] in done):
-                # (The task as the registry names it, or none: a ruling's line names no task the registry does not list.)
+                # (The task as the project's tasks name it, or none: a ruling's line names no task they do not list.)
                 outcome.update(result="void", reason="task_done" if task is not None and not task.get("closed") else "task_closed",
                                task=task["id"] if task is not None else None)
                 continue
@@ -3190,7 +3249,7 @@ def verdict_event(outcome, instant, kind="verdict"):
 
 def ruling_event(ruling, instant, run, result, reason, **more):
     """The line of a ruling that did not end in an integration. `ruling`: what names it (its commit id, the
-    guardian's account number and login, the task as the registry names it or None, the commit it admits). result:
+    guardian's account number and login, the task as the project's tasks name it or None, the commit it admits). result:
     « void » (the ruling did not stand, or its task was closed or done before its commit could be judged again:
     RULING_VOID) or « refused » (the commit was judged again, or read again, and refused: one of REASONS). It is no
     verdict: it carries neither the member's number nor the deal, and nothing that counts a member's deals, waits
@@ -3203,12 +3262,12 @@ def ruling_event(ruling, instant, run, result, reason, **more):
 def void_lines(voids, run, instant, answered=()):
     """The ledger lines of the rulings a run answers void (once per ruling, whatever number of times the step runs).
     voids: what check_rulings returns: the plan's void rulings as the write step holds them, each with the task and
-    the reason its line carries (the registry's own id for the task, or none).
+    the reason its line carries (the project's own id for the task, or none).
     answered: the commits whose admitted ruling this run has answered (a verdict recorded, or a line of the ruling's
     own). A ruling that lost the draw (« duplicate ») has its line when the ruling that won it has its answer, in
     the same run: where the run did not reach the commit, could not tell its push's fate or was declined it, the
     ruling that won waits for the next run, and those that lost wait with it, unanswered. (One whose task the
-    registry closed is no « duplicate » any more: it is void for the task, and waits for nothing.)"""
+    project closed is no « duplicate » any more: it is void for the task, and waits for nothing.)"""
     return [ruling_event(void, instant, run, "void", void["reason"], judged=False) for void in voids
             if void["reason"] != "duplicate" or void["sha"] in answered]
 
@@ -3243,7 +3302,7 @@ def events_of(outcomes, instant, run):
 def deal_lines(deals, key, config, tasks):
     """The ledger lines of deals: their time starts now, when they are written and can be seen, not when they were
     planned. A deal whose ask named a part of the project says which, and whether the hive kept it (« prefer », as
-    deal_prefer builds it again from the registry); a deal whose ask named none has no such field."""
+    deal_prefer builds it again from the project's tasks); a deal whose ask named none has no such field."""
     at, lines = now(), []
     for d in deals:
         prefer = deal_prefer(d, tasks)
@@ -3270,7 +3329,7 @@ def record(plan_, config, tasks, ledger, state_folder):
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is recorded")
     counted = as_the_plan_counted(ledger, plan_)
     for deal in (*plan_["deals"], *plan_["conditional"]):
-        deal_prefer(deal, tasks, config, counted)  # a preference that is not the registry's, or not true, stops the step before it writes anything
+        deal_prefer(deal, tasks, config, counted)  # a preference that is not the project's, or not true, stops the step before it writes anything
     check_cover(plan_, config, tasks, as_the_plan_counted(ledger, plan_, expiries=False), counted)  # nor is a new member admitted beyond what the guardians cover
     # And so does a ruling the project's file and the ledger do not bear out. This step writes no answer to a ruling:
     # the write step does, once it has seen that the project's tip is still the plan's.
@@ -3315,7 +3374,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is applied")
     counted = as_the_plan_counted(ledger, plan_)
     for deal in (*plan_["deals"], *plan_["conditional"]):
-        deal_prefer(deal, tasks, config, counted)  # a preference that is not the registry's, or not true, stops the step before it pushes or writes anything
+        deal_prefer(deal, tasks, config, counted)  # a preference that is not the project's, or not true, stops the step before it pushes or writes anything
     check_cover(plan_, config, tasks, as_the_plan_counted(ledger, plan_, expiries=False), counted)  # and so does a new member beyond what the guardians cover
     void_rulings = check_rulings(plan_, config, tasks, counted)  # and a ruling the project's file and the ledger do not bear out
     # What this step writes in the ledger is dated now, when it is written: a wait counts from the moment its member
@@ -3608,6 +3667,19 @@ def judge_of(registry_root, settings, workdir):
     return JUDGES[settings["kind"]](registry_root, settings, workdir)
 
 
+# How each kind makes its judge's image: the program of the protocol's tree and its words, `tree` standing for the
+# project's own tree (the clone's work tree, its published branch). It runs in the judging job before any candidate's
+# code is on the machine, the one moment that job has the network for it (judge_image).
+JUDGE_IMAGES = {"common": ("tools/judge/judge.py", "--tooling", "tree", "--image-only"),
+                "reference": ("tools/judge/reference.py", "--tip", "tree", "--image-only")}
+
+
+def judge_image(registry_root, kind, tree):
+    """The command that makes the image of a kind of judge, from the project's own tree."""
+    program, *words = JUDGE_IMAGES[kind]
+    return [sys.executable, str(Path(registry_root) / program), *(str(tree) if word == "tree" else word for word in words)]
+
+
 # The kinds of suspect the common judge counts (tools/judge/judge.py: SEVERITY, its own words; a test holds the two
 # lists equal). The hive reads no other key of that count.
 SUSPECT_KINDS = ("incomplete_analysis", "architecture", "forbidden_call", "forbidden_symbol", "instruction", "bytes", "section",
@@ -3664,15 +3736,84 @@ def write_json(path, data):
         f.write("\n")
 
 
-def project_of(args):
-    registry = Path(args.registry)
-    if not isinstance(args.project, str) or not PROJECT_ID.match(args.project):  # it becomes a file's name
-        raise HiveError("--project: a project's identifier (lower-case letters, digits, dashes)")
-    config = load_config(registry / "hive/projects" / f"{args.project}.json")
-    tasks = load_tasks(registry / config["tasks"])
-    check_goals(config, tasks)
-    state = Path(args.state) / config["project"]
-    return config, tasks, state, Ledger(state)
+def repository_of(args):
+    """The repository a step runs for (--project, owner/name: the workflow gives the repository that called it). Its
+    file of settings must name it (config_of), and the state is its branch."""
+    name = args.project.split("/")[-1] if isinstance(args.project, str) else ""
+    if not (isinstance(args.project, str) and REPO_NAME.match(args.project) and name.strip(".") and not name.lower().endswith(".git")):
+        raise HiveError("--project: the project's repository on GitHub (owner/name), the one this run is for")
+    return args.project
+
+
+def published_tip(repo, remote, allow_local=False):
+    """(branch, commit): the branch the project publishes, which is its repository's default branch, and the commit it
+    is at, as the project's own repository says now (`remote`: the project's address, origin in a clone of it). The
+    commit is fetched into the clone if the clone lacks it. Each step of a run asks for itself: the plan step reads
+    the project's settings at that commit, and the steps that write hold that it is still the one (pinned_settings)."""
+    listed = git(repo, "ls-remote", "--symref", remote, "HEAD", timeout=60, env=transport(allow_local))
+    found = default_branch(listed.stdout)
+    if found is None:
+        raise HiveError("the project's repository does not say which branch it publishes (its default branch): nothing is done")
+    branch, commit = found
+    if git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0:
+        git(repo, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", remote, f"refs/heads/{branch}", timeout=600,
+            env=transport(allow_local))
+        if git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0:
+            raise HiveError("the commit the project's published branch is at could not be fetched: nothing is done")
+    return branch, commit
+
+
+def settings_at(repo, commit, repository):
+    """(configuration, tasks) of the project at one commit of its clone: hive/project.json and hive/tasks.jsonl, each
+    a plain file of that commit's own tree, read as git stores it there and no larger than SETTINGS_BYTES. A run reads
+    them at the commit its plan names, and at no other (pinned_settings): a step never mixes two versions of them."""
+    found = {}
+    for path in (PROJECT_FILE, TASKS_FILE):
+        listed = git_raw(repo, "--literal-pathspecs", "ls-tree", "-z", need_sha(commit), "--", path)
+        entry = re.fullmatch(rb"(?:100644|100755) blob ([0-9a-f]{40})\t" + re.escape(path.encode()) + rb"\0", listed.stdout)
+        if listed.returncode != 0 or entry is None:
+            raise HiveError(f"the project's commit {commit} holds no plain file {path}: no settings, nothing is done")
+        found[path] = git_capped(repo, "cat-file", "blob", entry.group(1).decode(), limit=SETTINGS_BYTES)
+        if found[path] is None:
+            raise HiveError(f"{path}: larger than {SETTINGS_BYTES} bytes: not read, nothing is done")
+    try:
+        return settings_from(found[PROJECT_FILE], found[TASKS_FILE], repository)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise HiveError(f"the project's settings ({PROJECT_FILE}, {TASKS_FILE}) are not the JSON the hive reads ({type(error).__name__}): "
+                        "nothing is done") from None
+
+
+def settings_on(repo, commit, branch, repository):
+    """The project's settings at the commit its published branch is at (published_tip): those of settings_at, whose
+    « published » must be that branch, the repository's default one. A project's settings live on the branch the
+    project publishes, and say which it is: a file that names another is a mistake, and nothing runs on it."""
+    config, tasks = settings_at(repo, commit, repository)
+    if config["published"] != branch:
+        raise HiveError(f"{PROJECT_FILE}: published: the repository's default branch ({branch}), where its settings are read")
+    return config, tasks
+
+
+def planned_settings(plan_):
+    """The commit of the project's settings a plan names: the commit its published branch was at when the plan was
+    made, which every step of the run reads the settings at. A plan that names none is not the hive's."""
+    commit = plan_.get("settings") if isinstance(plan_, dict) else None
+    if not is_sha(commit):
+        raise HiveError("the plan names no commit of the project's settings: it is not the hive's, nothing is done")
+    return commit
+
+
+def pinned_settings(repo, remote, plan_, repository, allow_local=False):
+    """The project's settings, for a step that writes (record, apply): read at the commit the plan names, once this
+    step has asked the project's repository itself (published_tip) and found its published branch still at that very
+    commit. Otherwise nothing is written: the settings may have changed since the plan (a task closed, an account
+    banned, the project paused), and the next run plans again on them. A plan that names any other commit than the
+    published branch's tip (an older one, another branch's) is not the hive's, and nothing of it is used."""
+    commit = planned_settings(plan_)
+    branch, tip = published_tip(repo, remote, allow_local)
+    if tip != commit:
+        raise HiveError("the project's published branch is not at the commit the plan read its settings at (it moved since, or the plan "
+                        "is not the hive's): nothing is written, the next run plans again")
+    return settings_on(repo, commit, branch, repository)
 
 
 def tip_of(repo, config):
@@ -3689,12 +3830,17 @@ def paused(config):
 
 def cmd_plan(args):
     """Step 1, no secret, nobody's code: reads the forks and writes the plan and the candidates' bundle. Prints the
-    plan's SHA-256, which the workflow publishes as this job's output: the steps that write check the plan against it."""
-    config, tasks, state, ledger = project_of(args)
+    plan's SHA-256, which the workflow publishes as this job's output: the steps that write check the plan against it.
+    The project's settings and tasks are read on the branch the project publishes, at the commit it is at now, and
+    the plan names that commit (« settings »): every later step of the run reads them there."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, tasks = settings_on(args.repo, commit, branch, repository)
+    state = Path(args.state)
     if paused(config):
-        write_json(args.out, {"protocol": PROTOCOL, "project": config["project"], "paused": True})
+        write_json(args.out, {"protocol": PROTOCOL, "project": config["project"], "paused": True, "settings": commit})
     else:
-        made = plan(args.repo, tip_of(args.repo, config), config, tasks, ledger, GhApi(), state)
+        made = plan(args.repo, tip_of(args.repo, config), config, tasks, Ledger(state), GhApi(), state, settings=commit)
         write_bundle(args.repo, made, args.bundle)
         write_json(args.out, made)
         print(f"{len(made['queue'])} candidate(s), {len(made['deals'])} deal(s), {len(made['conditional'])} kept for after "
@@ -3702,34 +3848,39 @@ def cmd_plan(args):
     print(f"plan_sha256={file_sha256(args.out)}")
 
 
-def published_plan(args, config):
-    """The plan, if it is the one step 1 published and the project is not paused; else None."""
+def published_plan(args):
+    """The plan, as the JSON it holds, if it is the one step 1 published: its SHA-256 is held against the job output
+    before anything of it is read."""
     if not re.fullmatch(r"[0-9a-f]{64}", args.plan_sha256) or file_sha256(args.plan) != args.plan_sha256:
         raise HiveError("the plan is not the one the first step published: nothing is done")
-    made = read_json(args.plan)
-    if paused(config) or (isinstance(made, dict) and made.get("paused")):
-        return None
-    return read_plan(made, config)
+    return read_json(args.plan)
 
 
 def cmd_record(args):
-    """Step 2, the state's write token only: nobody's code, no fork. Writes the plan's deals and publishes the feed."""
-    config, tasks, state, ledger = project_of(args)
-    found = published_plan(args, config)
-    if found is None:
+    """Step 2, the right to write the state only: nobody's code, no fork. Writes the plan's deals and publishes the
+    feed, on the project's settings as the plan read them, and only while the project's published branch is still at
+    the commit the plan read them at (pinned_settings)."""
+    repository = repository_of(args)
+    made = published_plan(args)
+    config, tasks = pinned_settings(args.repo, "origin", made, repository)
+    if paused(config) or (isinstance(made, dict) and made.get("paused")):
         return
-    instant, made = found
-    record(made, config, tasks, ledger, state)
+    instant, made = read_plan(made, config)
+    state = Path(args.state)
+    record(made, config, tasks, Ledger(state), state)
     if args.commit_state:
         save_state(args.state, config["project"], instant)
     print(f"{len(made['deals'])} deal(s) recorded, {len(made['expiries'])} closed for lack of a candidate")
 
 
 def cmd_judge(args):
-    """Step 3, no secret: judges the plan's candidates and writes the judge's answers by judged commit id."""
-    config, tasks, state, ledger = project_of(args)
+    """Step 3, no secret: judges the plan's candidates and writes the judge's answers by judged commit id. The
+    project's settings and tasks are read at the commit the plan names, as the steps that write read them: the two
+    derive the same commits."""
+    repository = repository_of(args)
     made = read_json(args.plan)
-    if paused(config) or (isinstance(made, dict) and made.get("paused")):
+    config, tasks = settings_at(args.repo, planned_settings(made), repository)
+    if paused(config) or made.get("paused"):
         write_json(args.out, {"answers": {}, "started": []})
         return
     read_bundle(args.repo, read_plan(made, config)[1], args.bundle)
@@ -3737,42 +3888,65 @@ def cmd_judge(args):
     write_json(args.out, {"answers": {}, "started": []})
     notes = {}
     verdicts, outcomes, started = judge_plan(
-        args.repo, made, config, tasks, ledger, judge, args.workdir,
+        args.repo, made, config, tasks, Ledger(args.state), judge, args.workdir,
         save=lambda answers, begun: write_state(Path(args.out).parent, Path(args.out).name, {"answers": answers, "started": begun}),
         notes=notes)
     write_json(args.out, {"answers": verdicts, "started": started, "down": notes.get("down") is True})
     print(f"{len(outcomes)} candidate(s), {len(verdicts)} judged, {sum(1 for o in outcomes if o['result'] == 'accepted')} accepted")
 
 
-STATE_PUSHES = 6  # how many times a run pushes its state when other projects' runs keep saving theirs first
+def cmd_image(args):
+    """The judging job's step with network, before any candidate's code is on the machine: makes the image of the
+    kind of judge the project's settings name, at the commit the plan names, from the project's own tree (the clone's
+    work tree). A project that is paused, or a plan that says so, makes none."""
+    repository = repository_of(args)
+    made = read_json(args.plan)
+    config, _ = settings_at(args.repo, planned_settings(made), repository)
+    if paused(config) or made.get("paused"):
+        return
+    made_it = subprocess.run(judge_image(args.registry, config["judge"]["kind"], args.repo), stdin=subprocess.DEVNULL)
+    if made_it.returncode != 0:
+        raise HiveError(f"the judge's image could not be made ({config['judge']['kind']}, code {made_it.returncode}): nothing is judged")
+
+
+STATE_PUSHES = 6  # how many times a run pushes the state when something else keeps saving to its branch first
 
 
 def save_state(state_root, project, instant):
-    """Commits and pushes the project's folder of the state repository (the ledger, the feed): the hive's memory."""
-    git(state_root, "add", "--all", "--", project)
-    if git(state_root, "diff", "--cached", "--quiet", "--", project, check=False).returncode == 0:
+    """Commits the project's state (the files the hive writes there: STATE_FILES, and no other) in the state's folder,
+    a work tree of the branch hive-state of the project's own repository, and pushes that branch: the hive's memory.
+    The push only adds to the branch (no force), and goes to that branch and to no other, whichever branch the
+    folder's work tree is on: a folder that is not on hive-state is not saved at all."""
+    if git(state_root, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip() != f"refs/heads/{STATE_BRANCH}":
+        raise HiveError(f"the state's folder is not a work tree of the branch {STATE_BRANCH}: nothing is saved")
+    names = [name for name in STATE_FILES if os.path.isfile(os.path.join(state_root, name))]
+    if not names:
+        return
+    git(state_root, "add", "--", *names)
+    if git(state_root, "diff", "--cached", "--quiet", "--", *names, check=False).returncode == 0:
         return
     identity = {"GIT_AUTHOR_NAME": ROBOT[0], "GIT_AUTHOR_EMAIL": ROBOT[1], "GIT_COMMITTER_NAME": ROBOT[0],
                 "GIT_COMMITTER_EMAIL": ROBOT[1]}
-    git(state_root, "commit", "--quiet", "-m", f"hive: {project} {iso(instant)}", "--", project, env=identity)
-    branch = git(state_root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    git(state_root, "commit", "--quiet", "-m", f"hive: {project} {iso(instant)}", "--", *names, env=identity)
+    pushed = ("push", "--quiet", "origin", f"HEAD:refs/heads/{STATE_BRANCH}")
     for again in range(STATE_PUSHES):
         if again:
             time.sleep(min(2 ** (again - 1), 30))
-        if git(state_root, "push", "--quiet", "origin", "HEAD", check=False, timeout=180).returncode == 0:
+        if git(state_root, *pushed, check=False, timeout=180).returncode == 0:
             return
-        # Another project's run may have saved its own folder meanwhile: take it, and push again. Each run writes its
-        # own folder only, so taking the other's never conflicts.
+        # Something else saved to the branch meanwhile (a file of a maintainer's beside the hive's): take it, and push
+        # again. What it saved in a file this run writes too is no file of anyone else's: git then stops on it, and
+        # nothing is chosen between the two (two runs of one project, which the caller's concurrency group forbids).
         mine = git(state_root, "rev-parse", "HEAD").stdout.strip()
-        git(state_root, "pull", "--quiet", "--rebase", "origin", branch, env=identity, timeout=180)
+        git(state_root, "pull", "--quiet", "--rebase", "origin", STATE_BRANCH, env=identity, timeout=180)
         if git(state_root, "rev-parse", "HEAD").stdout.strip() == mine:
-            # Nothing had moved there: the refusal is not another run's doing, and pushing again and again changes
+            # Nothing had moved there: the refusal is not another writer's doing, and pushing again and again changes
             # nothing. Once more, and git's own words if it is refused.
-            git(state_root, "push", "--quiet", "origin", "HEAD", timeout=180)
+            git(state_root, *pushed, timeout=180)
             return
-    raise HiveError(f"the state repository moved before each of this run's {STATE_PUSHES} pushes: the state of {project} is "
-                    "committed here and not saved there. Other projects' runs save theirs at the same moment, far more often "
-                    "than they should: a person must look at them")
+    raise HiveError(f"the branch {STATE_BRANCH} moved before each of this run's {STATE_PUSHES} pushes: the state of {project} is "
+                    "committed here and not saved there. Something else saves to that branch at the same moment, far more often "
+                    "than anything should: a person must look at it")
 
 
 JUDGE_DOWN = ("the judge failed on the project's own tip in this run: its machine is down, or the tip itself, as the last integrations "
@@ -3782,12 +3956,13 @@ JUDGE_DOWN = ("the judge failed on the project's own tip in this run: its machin
 
 def cmd_apply(args):
     """Step 4, the only one that can write to the project: nobody's code, no fork. The plan must be the one step 1
-    published."""
-    config, tasks, state, ledger = project_of(args)
-    found = published_plan(args, config)
-    if found is None:
+    published, and the project's published branch still at the commit it read the settings at (pinned_settings)."""
+    repository = repository_of(args)
+    made = published_plan(args)
+    config, tasks = pinned_settings(args.repo, args.remote, made, repository)
+    if paused(config) or (isinstance(made, dict) and made.get("paused")):
         return
-    instant, made = found
+    instant, made = read_plan(made, config)
     read_bundle(args.repo, made, args.bundle)
 
     def checkpoint():
@@ -3799,7 +3974,8 @@ def cmd_apply(args):
     except (OSError, ValueError, RecursionError):  # absent, not JSON, or nested so deep that reading it gives up
         handed = {}  # the judging step left nothing readable: no answer, and nobody is marked for it
     handed = handed if isinstance(handed, dict) else {}
-    outcomes, tip = apply(args.repo, args.remote, made, handed.get("answers"), config, tasks, ledger, state, checkpoint=checkpoint,
+    state = Path(args.state)
+    outcomes, tip = apply(args.repo, args.remote, made, handed.get("answers"), config, tasks, Ledger(state), state, checkpoint=checkpoint,
                           started=handed.get("started") or ())
     print(f"{sum(1 for o in outcomes if o['result'] == 'accepted')} integrated, tip {tip}")
     if handed.get("down") is True:
@@ -3809,8 +3985,13 @@ def cmd_apply(args):
 
 
 def cmd_feed(args):
-    """Writes the feed from the tasks and the ledger alone: for a project's first day, before any run."""
-    config, tasks, state, ledger = project_of(args)
+    """Writes the feed from the tasks and the ledger alone: for a project's first day, before any run. The settings
+    are read where a run reads them: on the project's published branch, at its tip."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, tasks = settings_on(args.repo, commit, branch, repository)
+    state = Path(args.state)
+    ledger = Ledger(state)
     write_state(state, "feed.json", build_feed(config, tasks, ledger, args.tip or ""))
     write_state(state, "stats.json", build_stats(ledger))
 
@@ -3819,12 +4000,16 @@ def cmd_feed(args):
 # Volunteer side: setup, next, start, ready, submit, at the root of the clone of the volunteer's own fork
 #
 # What a worker believes:
-#   - the registry this file runs from: the hive's own code, the projects' settings and their tasks. Trusted;
-#   - the hive's state (--state): believed for what the hive did for THIS member and for nothing else: the task it
-#     dealt it and until when, its wait, whether its candidate was seen and its ask used, whether it is one of the
-#     project's active members where the project's trusted base has all the members it covers (base_full), and whole
-#     numbers (how often a task was refused, how many members the base covers). Every other fact comes from the
-#     registry, and no text of the state is printed;
+#   - this file and the protocol's tree it runs from (the user's copy of Bee-ruche/hive): the hive's own code.
+#     Trusted;
+#   - the project's settings and tasks (hive/project.json, hive/tasks.jsonl), read on the project's default branch
+#     at the commit the project's own address announces during the command, as bytes this file hashed (hive_project):
+#     trusted as the project's own word, the same the hive's run reads. Never the fork's copy of them;
+#   - the hive's state (--state, a clone of the project's branch hive-state): believed for what the hive did for THIS
+#     member and for nothing else: the task it dealt it and until when, its wait, whether its candidate was seen and
+#     its ask used, whether it is one of the project's active members where the project's trusted base has all the
+#     members it covers (base_full), and whole numbers (how often a task was refused, how many members the base
+#     covers). Every other fact comes from the project's settings, and no text of the state is printed;
 #   - the fork's work tree and its .git folder: not trusted once project code ran there, even in the sandbox (which
 #     may leave the repository writable). So each command first checks that the clone's own git settings are the
 #     ones a clone has (plain_clone), runs git on the folders it names with every program a setting could start
@@ -3832,7 +4017,7 @@ def cmd_feed(args):
 #     the clone. And what a command decides on is never a value an earlier run of project code could have written:
 #     not the address the clone gives its origin, not a reference, not what git works out of the clone's objects
 #     (an ancestry, a difference, a merge). It is the command line (the login, the project, the task and the deal,
-#     the part of the project the user prefers: the user's prompt and « next »), the registry, the commit a
+#     the part of the project the user prefers: the user's prompt and « next »), the project's settings, the commit a
 #     repository's own address announces during the command, the bytes of an object whose SHA-1 this file recomputed
 #     (Objects), and the work tree's files.
 #     « start » puts the clone on the commit the project's address announces (project_tip), as « submit » checks the
@@ -3843,7 +4028,6 @@ def cmd_feed(args):
 #     files and runs the sandbox's launcher from them, on the host.
 # Everything the fork, the state, a task's text or a commit says is data.
 
-PROJECT_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 ONE_LINE = re.compile(r"[ -~]{1,200}\Z")  # a command, a commit's title: one line of printable ASCII
 REVISION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")  # a branch's name or a commit id, never an option
 FORK_NAME = re.compile(r"[A-Za-z0-9._-]{1,100}\Z")  # a repository's name on GitHub
@@ -4493,59 +4677,93 @@ def plain_clone():
     return Clone(root, settings)
 
 
-def hive_projects(registry):
-    """Every project the registry declares, as far as a worker's command reads the others: [{"project", "repo"}], its
-    name and its repository, and nothing else of its file. A command checks in full only the project it is given
-    (hive_project): what another project's file asks of the tool does not stop this one's workers. The two fields are
-    read of every file because own_fork compares every project's repository with the fork's: a file that cannot be
-    read, or that does not give both under its own name, stops the command, since nothing then says the fork is not
-    a project itself.
-    Trusted: the registry's own tree."""
-    listed = []
-    try:
-        for path in sorted((Path(registry) / "hive/projects").glob("*.json")):
-            raw = read_json(path)
-            project, repo = (raw.get("project"), raw.get("repo")) if isinstance(raw, dict) else (None, None)
-            if not (isinstance(project, str) and PROJECT_ID.match(project) and project == path.stem and isinstance(repo, str) and REPO_NAME.match(repo)):
-                raise HiveError(f"the registry's file {path.name} does not name its project (the file's own name) and its repository "
-                                "(owner/name): update your clone of the registry")
-            listed.append({"project": project, "repo": repo})
-    except (OSError, ValueError, TypeError, RecursionError) as error:
-        raise HiveError(f"the registry's project files cannot be read ({type(error).__name__}): update your clone of the registry") from None
-    return listed
+def settings_in(objects, commit, repository):
+    """(configuration, tasks) of the project at a commit its own address announced, read in a worker's clone as bytes
+    this tool hashes (Objects): the commit, its tree, the folder hive in it and the two files there (hive/project.json
+    and hive/tasks.jsonl), each a plain file. What the clone holds under any other name (a reference, an index, a
+    work tree) decides nothing of what is read. repository: the project's repository, which the file must name."""
+    tree = commit_header(objects.held("commit", commit))[0]
+    found = {}
+    for path in (PROJECT_FILE, TASKS_FILE):
+        folder, name = path.encode().split(b"/")
+        holder = folder_listing(objects.held("tree", tree)).get(folder)
+        entry = folder_listing(objects.held("tree", holder[1])).get(name) if holder and holder[0] == FOLDER_MODE else None
+        if entry is None or entry[0] not in (0o100644, 0o100755):
+            raise HiveError(f"the project holds no plain file {path} on its default branch: check the project's repository (owner/name) "
+                            "against the user's prompt; if it is the one, stop and tell the user")
+        found[path] = objects.held("blob", entry[1])
+        if len(found[path]) > SETTINGS_BYTES:
+            raise HiveError(f"the project's {path} is larger than this tool reads: stop, and tell the user")
+    return settings_from(found[PROJECT_FILE], found[TASKS_FILE], repository)
 
 
-def hive_project(registry, project):
-    """(configuration, tasks, every project's name and repository) of the project a worker names: read from the
-    registry, as « submit » and the hive itself read them. The name goes into a path: it is checked first."""
-    if not isinstance(project, str) or not PROJECT_ID.match(project):
-        raise HiveError("--project: a project's identifier, as setup printed it (lower-case letters, digits, dashes)")
+def project_repository(project):
+    """The project's repository as a worker's command is told it (--project, owner/name, as the user's prompt names
+    it): a repository's name on GitHub, and nothing else. It is half of every address the command talks to."""
+    name = project.split("/")[-1] if isinstance(project, str) else ""
+    if not (isinstance(project, str) and REPO_NAME.match(project) and name.strip(".") and not name.lower().endswith(".git")):
+        raise HiveError("--project: the project's repository on GitHub, owner/name, as the user's prompt names it")
+    return project
+
+
+def hive_project(clone, project, given=None):
+    """(configuration, tasks) of the project a worker is told about: --project, its repository on GitHub (owner/name),
+    as the user's prompt names it. Read where the hive's own run reads them: hive/project.json and hive/tasks.jsonl on
+    the project's default branch, the branch it publishes, at the commit the project's own address announces during
+    this command (never the fork's, never a reference of the clone), fetched into the clone if it lacks it, and read as
+    bytes this tool hashes (settings_in). The file must name that repository and that branch. A file this tool refuses
+    (a setting out of its bounds, a judge it does not hold) stops the command in one line that says which setting: the
+    project's workers stop until its maintainers mend it. Each command asks it once it has checked the fork it pushes
+    to (own_fork): a clone whose origin is not that fork talks to no address at all."""
+    address = project_address(project_repository(project), given)
+    not_asked = ("the project's repository could not be asked for its settings ({error}). Nothing was committed or pushed: run the command "
+                 "again; if it fails again, stop and tell the user")
     try:
-        config = load_config(Path(registry) / "hive/projects" / f"{project}.json")
-        tasks = load_tasks(Path(registry) / config["tasks"])
-    except FileNotFoundError:
-        raise HiveError(f"the registry declares no project {project}, or lacks its tasks: update your clone of the registry") from None
-    except (OSError, ValueError, TypeError, RecursionError) as error:
-        raise HiveError(f"the project's files cannot be read ({type(error).__name__}): update your clone of the registry") from None
+        found = default_branch(clone.git("ls-remote", "--symref", address, "HEAD", to=address, timeout=60).stdout)
+    except HiveError as error:
+        raise HiveError(not_asked.format(error=error)) from None
+    if found is None:
+        raise HiveError("the project's repository does not say which branch it publishes (its default branch): check the project's "
+                        "repository (owner/name) against the user's prompt; if it is the one, stop and tell the user")
+    branch, commit = found
+    with Objects(clone) as objects:  # (whether the clone holds it, as bytes that hash to its id: nothing else of the clone's is asked)
+        held = objects.read("commit", commit) is not None
+    if not held:
+        try:
+            clone.git("fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", address, f"refs/heads/{branch}",
+                      to=address, timeout=900)
+        except HiveError as error:
+            raise HiveError(not_asked.format(error=error)) from None
+    try:
+        with Objects(clone) as objects:
+            config, tasks = settings_in(objects, commit, project)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise HiveError(f"the project's settings ({PROJECT_FILE}, {TASKS_FILE}) cannot be read ({type(error).__name__}): stop, and tell "
+                        "the user") from None
+    if config["published"] != branch:
+        raise HiveError(f"{PROJECT_FILE}: published: the repository's default branch ({branch}), where its settings are read: stop, "
+                        "and tell the user")
     if not (isinstance(config["branch"], str) and REVISION.match(config["branch"]) and ".." not in config["branch"]):
         raise HiveError("the project's branch is not a plain branch name")
-    return config, tasks, hive_projects(registry)
+    return config, tasks
 
 
-def own_fork(clone, config, configs, login, fork=None):
+def own_fork(clone, project, login, fork=None):
     """The address of the member's own fork, the only one a worker command reads or pushes to:
     https://github.com/<login>/<name>. Neither part comes from the clone: the login is the command line's (the
-    user's prompt names it), and the name is the project's own repository name, from the registry,
-    unless --fork gives another (a fork its owner renamed). The address the clone itself gives its origin is whatever
-    ran in the clone last: no push follows it. It is only compared with the address derived here, and the command
-    stops if it names another repository. Refused too: the project's own repository, as the origin or as the
-    address. Whether the owner is a person's account or an organization's cannot be told without asking GitHub: the
-    hive reads no organization's fork, and the worker's guide says so.
+    user's prompt names it), and the name is the project's own repository name, as the command line names the project
+    (--project, owner/name: the project's settings must name the same repository, hive_project), unless --fork gives
+    another (a fork its owner renamed). The address the clone itself gives its origin is whatever ran in the clone
+    last: no push follows it. It is only compared with the address derived here, and the command stops if it names
+    another repository, before it talks to any address. Refused too: the project's own repository, as the origin or
+    as the address. Whether the owner is a person's account or an organization's cannot be told without asking
+    GitHub: the hive reads no organization's fork, and the worker's guide says so.
 
     In the tests a fork is a folder of the machine, which names nobody: that folder is then the address. A folder is
     an address only while LOCAL_REMOTES is set, which no option and no variable does (plain_clone refuses it
     otherwise), and never when the origin is an address on GitHub."""
-    name = config["repo"].split("/")[1] if fork is None else fork
+    project = project_repository(project)
+    name = project.split("/")[1] if fork is None else fork
     if not (FORK_NAME.match(name) and name.strip(".")) or name.endswith(".git"):
         raise HiveError("--fork: the name of your fork's repository on GitHub, and nothing else (letters, digits, dots, dashes)")
     address = f"https://github.com/{login}/{name}"
@@ -4556,8 +4774,7 @@ def own_fork(clone, config, configs, login, fork=None):
     if owner is None:  # a folder of the machine (tests): it names nobody
         return origin
     for said, named in (("origin", f"{owner}/{repository}"), (address, f"{login}/{name}")):
-        project = next((other["repo"] for other in configs if other["repo"].lower() == named.lower()), None)
-        if project:
+        if named.lower() == project.lower():
             raise HiveError(f"{said} is the project itself ({project}), not a fork of it: a worker pushes only to its user's own "
                             "fork. Fork the project under your own account, and run this in a clone of that fork")
     if not same_repository(origin, address):
@@ -4567,10 +4784,11 @@ def own_fork(clone, config, configs, login, fork=None):
     return address
 
 
-def project_address(config, given=None):
-    """The project's own address: https://github.com/<its repository>.git, by the registry. (The tests give another,
-    --upstream-url, which may only be a folder of the machine and only while LOCAL_REMOTES is set.)"""
-    address = f"https://github.com/{config['repo']}.git"
+def project_address(repository, given=None):
+    """The project's own address: https://github.com/<its repository>.git, its repository as the command line names
+    it or as its settings write it. (The tests give another, --upstream-url, which may only be a folder of the machine
+    and only while LOCAL_REMOTES is set.)"""
+    address = f"https://github.com/{repository}.git"
     if given and given != address and remote_parts(given) != (None, None, "file"):
         raise HiveError("--upstream-url: the project's own address, and no other")
     return given or address
@@ -4598,7 +4816,7 @@ def project_tip(clone, address, branch):
         raise HiveError(f"the project's repository could not be asked for its tip ({error}). Nothing was committed or pushed: run the "
                         "command again; if it fails again, stop and tell the user") from None
     if tip is None:
-        raise HiveError("the project's repository does not list the project's branch: update your clone of the registry; if this happens "
+        raise HiveError("the project's repository does not list the project's branch: check the project's settings; if this happens "
                         "again, stop and tell the user")
     return tip
 
@@ -4706,7 +4924,7 @@ def in_words(step, sentence):
 
 def candidate_proof(clone, tip, candidate, task, limits):
     """What « submit » shows of a candidate before it moves a branch or pushes. It rests on the commit the project's
-    own address announced (`tip`), on the task's files as the registry gives them, and on bytes this tool hashed
+    own address announced (`tip`), on the task's files as the project's tasks give them, and on bytes this tool hashed
     itself (Objects): never on a reference of the clone, nor on anything git worked out of the clone's objects (an
     ancestry, a difference, a merge), which are what an earlier run of project code may have arranged.
 
@@ -5122,50 +5340,38 @@ def push(clone, url, source, branch):
 
 
 def cmd_setup(args):
-    """Volunteer side: checks that this is a plain clone of the volunteer's own fork, finds the project it is a fork
-    of, adds it as the « upstream » remote and fetches its tip, and the whole of its history if the clone was cut
+    """Volunteer side: checks that this is a plain clone of the volunteer's own fork of the project it is told about,
+    adds the project as the « upstream » remote and fetches its tip, and the whole of its history if the clone was cut
     short and the project's own check reads old commits. It runs first, in a clone that is usually fresh.
 
-    The member's login is the command line's, as for every other command: the user's prompt names it, and none is
-    taken from the clone. The owner the origin names is only compared with it (own_fork), and LOGIN says back the
-    login given. The project may still come from the clone when --project is absent: it is the one whose repository
-    has the origin's name. That only chooses among the hive's own projects, which the registry lists: the fork's
-    address is then worked out from the login and that project's own repository name, and the origin must agree
-    with it."""
+    The project is the command line's (--project, its repository: the user's prompt names it), as for every other
+    command, and so is the member's login: none is taken from the clone. The project's settings are read from the
+    project's own address (hive_project), and the fork's address is worked out from the login and the project's own
+    repository name; the owner and the name the origin gives are only compared with them (own_fork), and LOGIN says
+    back the login given."""
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    if args.project is not None and not PROJECT_ID.match(args.project):
-        raise HiveError("--project: a project's identifier (lower-case letters, digits, dashes)")
     # start and submit tell git which tree's .gitattributes to follow (--attr-source), and submit merges without a work
     # tree: a git that knows the first knows the second. An older one would fail later, in the middle of a task.
     if clone.git("version", attributes=EMPTY_TREE, check=False).returncode != 0:
         raise HiveError("the git of this machine is too old for this tool (it does not take the option --attr-source, which git has "
                         "had since 2023): stop, and tell the user to install a newer git")
-    configs = hive_projects(args.registry)
     origin = clone.settings.get("remote.origin.url")
     if origin is None:
         raise HiveError("this clone has no origin: run this in a clone of your own fork of the project")
-    # setup runs first, in a clone that is usually fresh: when the command line names no project, the project is the
-    # one, among the hive's own, whose repository has the origin's name. It is then said (PROJECT), and every later
-    # command is given it on its command line. The login is never the origin's: own_fork compares the two.
-    _, name, _ = remote_parts(origin)
     login = args.login
-    chosen = [c for c in configs if (c["project"] == args.project if args.project else c["repo"].split("/")[1].lower() == (name or "").lower())]
-    if len(chosen) != 1:
-        known = ", ".join(c["project"] for c in configs) or "none"
-        raise HiveError(f"which project is this fork of? Give --project (the hive's projects: {known})")
-    # The project found is read in full, with its tasks, as every later command reads it: a registry that lacks
-    # either stops the worker here, before it is dealt anything.
-    config, _, configs = hive_project(args.registry, chosen[0]["project"])
-    own_fork(clone, config, configs, login, args.fork)
+    own_fork(clone, args.project, login, args.fork)
     if clone.git("remote", "get-url", "--push", "origin", to=origin).stdout.strip() != clone.git("remote", "get-url", "origin", to=origin).stdout.strip():
         raise HiveError("a push to origin would not go to the address it is fetched from (a pushInsteadOf rule of your git settings): "
                         "a worker pushes only to the address it checked. Remove the rule, or use a machine without it")
+    # The project is read in full, with its tasks, as every later command reads it: settings that this tool refuses, or
+    # that are not there, stop the worker here, before it is dealt anything.
+    config, _ = hive_project(clone, args.project, args.upstream_url)
     branch = config["branch"]
     if not (isinstance(branch, str) and REVISION.match(branch) and ".." not in branch):
         raise HiveError("the project's branch is not a plain branch name")
-    url = project_address(config, args.upstream_url)
+    url = project_address(config["repo"], args.upstream_url)
     current = clone.settings.get("remote.upstream.url")
     if current is None:
         try:
@@ -5199,7 +5405,7 @@ def cmd_setup(args):
     if lacking():
         raise HiveError("this clone does not hold a commit that the project's own check reads by its id: take a full clone of "
                         "your fork (git clone, without --depth) and run setup again")
-    print(f"PROJECT {config['project']}")
+    print(f"PROJECT {config['repo']}")
     print(f"LOGIN {login}")
     print(f"UPSTREAM upstream/{branch}")
     for name in TOOL_FILES:
@@ -5345,8 +5551,9 @@ def waiting_ask(clone, url, login, state):
 
 
 def cmd_next(args):
-    """Volunteer side: what this worker does now. The project, its tasks and its check come from the registry; the
-    state says only what the hive did for this member. One of
+    """Volunteer side: what this worker does now. The project, its tasks and its check come from the project's own
+    settings, read from its own address (hive_project); the state (a clone of the project's branch hive-state) says
+    only what the hive did for this member. One of
       TASK <id>        the hive dealt it this task (then DEAL, UNTIL, the task's data, CHECK, THEN)
       ASK              it holds no task and no ask is waiting: « ready » asks the hive for one
       ASK-UNANSWERED   its ask has waited ASK_PATIENCE_HOURS: the user's to look at
@@ -5354,24 +5561,24 @@ def cmd_next(args):
                        the project is paused; no feed yet; a feed this tool does not read; the wait after a deal
                        that ended without an accepted candidate; a project whose trusted base has the members it
                        covers, for an account that is not one of them (base_full); an ask the hive has not
-                       answered yet; a candidate pushed and not answered yet; a task the registry does not list as
-                       open; too little left of the deal to start."""
+                       answered yet; a candidate pushed and not answered yet; a task the project's tasks do not list
+                       as open; too little left of the deal to start."""
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    config, tasks, configs = hive_project(args.registry, args.project)
-    fork = own_fork(clone, config, configs, args.login, args.fork)
+    fork = own_fork(clone, args.project, args.login, args.fork)
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
     paused_now = "WAIT: the project is paused: the hive deals nothing and judges nothing for now"
     if config.get("paused"):
         print(paused_now)
         return
-    state = Path(args.state) / config["project"]
+    state = Path(args.state)
     status, feed = read_untrusted(state / "feed.json", STATE_BYTES)
     if status == "absent":
         print("WAIT: the hive has not published a feed for this project yet")
         return
     if status != "ok" or not isinstance(feed, dict) or type(feed.get("protocol")) is not int or feed["protocol"] != PROTOCOL:
-        print("WAIT: the hive's feed is not one this tool reads: update your clone of the registry")
+        print("WAIT: the hive's feed is not one this tool reads: update your copy of the hive's tool (Bee-ruche/hive)")
         return
     if feed.get("paused") is True:
         print(paused_now)
@@ -5389,7 +5596,7 @@ def cmd_next(args):
                   "member for now; come back later")
         elif asked is None:
             print(f"ASK: you hold no task. If this worker runs at least every {again} hours, ask for one: hive.py ready --project "
-                  f"{config['project']} {said_again(args)}")
+                  f"{config['repo']} {said_again(args)}")
         elif now() - asked >= dt.timedelta(hours=ASK_PATIENCE_HOURS):
             print(f"ASK-UNANSWERED since {iso(asked)}: the hive has not dealt you a task for {ASK_PATIENCE_HOURS} hours: stop, do not "
                   "ask again in this run, tell the user")
@@ -5401,7 +5608,7 @@ def cmd_next(args):
     if deal.get("candidate") is True or pushed_candidate(clone, fork, deal["task"], deal["at"]):
         print("WAIT: your candidate is pushed and the hive has not answered it yet")
     elif task is None or task.get("closed"):
-        print("WAIT: the hive dealt you a task that your clone of the registry does not list as open: update it")
+        print("WAIT: the hive dealt you a task that the project's tasks do not list as open")
     elif left < WORK_MARGIN_HOURS:
         print(f"WAIT: your deal ends at {deal['until']}, under {WORK_MARGIN_HOURS} hour from now: too late to start")
     else:
@@ -5421,8 +5628,8 @@ def cmd_next(args):
         if check:
             print(f"CHECK (inside the sandbox only): {SANDBOX} {check}")
         print(f"THEN: put the clone on the project's tip for this task: hive.py start --project "
-              f"{config['project']} --task {task['id']} --deal {deal['at']} {said_again(args)}; then change only the task's files, and "
-              f"run: hive.py submit --project {config['project']} --task {task['id']} --deal {deal['at']} {said_again(args)} --message "
+              f"{config['repo']} --task {task['id']} --deal {deal['at']} {said_again(args)}; then change only the task's files, and "
+              f"run: hive.py submit --project {config['repo']} --task {task['id']} --deal {deal['at']} {said_again(args)} --message "
               "\"<one line: what you changed>\"")
 
 
@@ -5696,8 +5903,8 @@ def cmd_start(args):
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    config, tasks, configs = hive_project(args.registry, args.project)
-    own_fork(clone, config, configs, args.login, args.fork)
+    own_fork(clone, args.project, args.login, args.fork)
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
     task = tasks.get(args.task)
     if task is None:
         raise HiveError(f"task {safe_text(args.task, 40)} is not in the project's tasks")
@@ -5707,7 +5914,7 @@ def cmd_start(args):
         raise HiveError("--deal: the instant 'next' printed after DEAL")
     # The commit the task starts from is the one the project's own address announces now, fetched if the clone lacks it:
     # never the clone's own reference for it (refs/remotes/upstream/<branch>), which is whatever ran in the clone last.
-    tip = project_tip(clone, project_address(config, args.upstream_url), config["branch"])
+    tip = project_tip(clone, project_address(config["repo"], args.upstream_url), config["branch"])
     in_the_way = branch_in_the_way(clone)
     if in_the_way:
         raise HiveError(f"this clone has a branch named {in_the_way}, where this tool keeps its own (hive/submit/<task>): git cannot make "
@@ -5806,7 +6013,7 @@ def cmd_start(args):
         print(f"REMOVED {removed} leftover file(s) or folder(s) of an earlier run")
     print(f"STARTED {branch} at {tip}")
     print(f"THEN: change only the task's files; build and test inside the sandbox only, never on the host; run no git command "
-          f"yourself; then run: hive.py submit --project {config['project']} --task {task['id']} --deal {args.deal} {said_again(args)} "
+          f"yourself; then run: hive.py submit --project {config['repo']} --task {task['id']} --deal {args.deal} {said_again(args)} "
           "--message \"<one line: what you changed>\"")
 
 
@@ -5818,14 +6025,13 @@ def cmd_ready(args):
     message, and « next » its date, which is this tool's own clock: how long the ask has waited.
 
     --prefer names the part of the project the user prefers, and comes from the user's prompt alone. It must be,
-    exactly, one of the files the project's tasks name in the registry (project_parts): the ask then carries the
-    registry's own string. Any other value is an error, said in one line with the registry's files, and nothing is
+    exactly, one of the files the project's tasks name (project_parts): the ask then carries the
+    project's own string. Any other value is an error, said in one line with the project's files, and nothing is
     made or pushed. (With --withdraw nothing is asked: neither --tier nor --prefer is read.)"""
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    config, tasks, configs = hive_project(args.registry, args.project)
-    fork, login = own_fork(clone, config, configs, args.login, args.fork), args.login
+    fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
     if args.withdraw:
         if args.no_push:
             raise HiveError("--withdraw is a push: it does not go with --no-push")
@@ -5833,15 +6039,17 @@ def cmd_ready(args):
             push(clone, fork, "", READY_BRANCH)
         print("WITHDRAWN")
         return
+    # (Taking an ask back reads nothing of the project's: the fork's address is the login's and the project's name.)
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
     if args.tier not in (1, 2, 3):
         raise HiveError("--tier: 1, 2 or 3")
     parts = project_parts(tasks)
-    prefer = next((part for part in parts if part == args.prefer), None)  # the registry's own string, or nothing
+    prefer = next((part for part in parts if part == args.prefer), None)  # the project's own string, or nothing
     if args.prefer is not None and prefer is None:
-        # The registry's own files, as many as a bounded line holds, then how many more there are.
+        # The project's own files, as many as a bounded line holds, then how many more there are.
         shown = [part for number, part in enumerate(parts) if len(", ".join(parts[:number + 1])) <= 120]
         more = f"{len(parts) - len(shown)} more" if len(parts) > len(shown) else ""
-        raise HiveError("--prefer: not one of the files the project's tasks name, as the registry writes them ("
+        raise HiveError("--prefer: not one of the files the project's tasks name, as the project's tasks write them ("
                         + (", and ".join(filter(None, (", ".join(shown), more))) or "none") + "). Nothing was made or pushed. The file "
                         "comes from the user's prompt alone: if it is not one of these, ask without --prefer and tell the user")
     # The instant makes each ask a new commit: an ask is used once.
@@ -5860,7 +6068,7 @@ def cmd_ready(args):
         push(store, fork, commit, READY_BRANCH)
     print(f"ASKED {commit}")
     print("THEN: stop here. The hive deals at its next run (about an hour): the next run of this worker finds the task. If this "
-          f"worker will not run again, take the ask back so that no task waits for it: hive.py ready --project {config['project']} "
+          f"worker will not run again, take the ask back so that no task waits for it: hive.py ready --project {config['repo']} "
           f"{said_again(args)} --withdraw")
 
 
@@ -5890,8 +6098,8 @@ def cmd_submit(args):
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    config, tasks, configs = hive_project(args.registry, args.project)
-    fork, login = own_fork(clone, config, configs, args.login, args.fork), args.login
+    fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
     task = tasks.get(args.task)
     if task is None:
         raise HiveError(f"task {safe_text(args.task, 40)} is not in the project's tasks")
@@ -5904,7 +6112,7 @@ def cmd_submit(args):
     title = args.message or f"Work on {task['id']}"
     if not ONE_LINE.match(title) or MARKER_LINE.match(title):
         raise HiveError("--message: one plain line (200 characters at most) that says what you changed")
-    address = project_address(config, args.upstream_url)
+    address = project_address(config["repo"], args.upstream_url)
     restart = "start the task again (hive.py start), which sets the work aside; if start stops too, tell the user"
     head = in_words(lambda: clone.git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip(),
                     f"git cannot say which commit this clone is on: {restart}")
@@ -5991,7 +6199,7 @@ def cmd_submit(args):
     not_kept = "" if kept else NOT_KEPT
     hours = max(1, config["deal_hours"] - WORK_MARGIN_HOURS)
     print(f"THEN: {figures['files']} file(s) and {figures['lines']} changed line(s) are with the hive. If this worker runs at least "
-          f"every {hours} hours (hourly is best), ask for its next task now (hive.py ready --project {config['project']} "
+          f"every {hours} hours (hourly is best), ask for its next task now (hive.py ready --project {config['repo']} "
           f"{said_again(args)}): the hive deals it as soon as this candidate is accepted; if it is refused, the ask stays and is served "
           f"once the wait is over. If it does not run that often, do not ask: a task dealt and left costs a wait.{not_kept}")
 
@@ -6002,7 +6210,7 @@ NOT_KEPT = (" This clone's own branch could not be moved to the candidate, which
 
 
 # Guardian side: admit, at the root of the clone of the guardian's own fork. A guardian is an account the project's
-# file names; the command is a worker's command in everything it believes and checks (the registry, the command line,
+# file names; the command is a worker's command in everything it believes and checks (the project's settings, the command line,
 # a plain clone, the fork's address worked out from the login), and it decides nothing: whether the ruling stands is
 # the hive's to say, from the project's file and its ledger, and it says so on a line of the ledger.
 RULE_BRANCH = "hive/rule/{task}"
@@ -6016,7 +6224,7 @@ def cmd_admit(args):
     fork has for that task's rulings (RULE_BRANCH), where it replaces the previous one. --withdraw deletes that
     branch instead: a ruling the hive has not answered yet is then no longer there to be read.
 
-    Everything the ruling says comes from the command line and the registry. The task is one of the project's, and
+    Everything the ruling says comes from the command line and the project's settings. The task is one of the project's, and
     open. --commit is a commit's full id: the ledger's refusal gives it. Each --waive is <figure>=<bound>: a figure
     the project's file lets a guardian waive, written as the file writes it, and a bound between what the project
     requires of that figure and the most its file lets a ruling reach; anything else is an error, said in one line
@@ -6031,8 +6239,8 @@ def cmd_admit(args):
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
-    config, tasks, configs = hive_project(args.registry, args.project)
-    fork, login = own_fork(clone, config, configs, args.login, args.fork), args.login
+    fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
     task = tasks.get(args.task)
     if task is None:
         raise HiveError(f"task {safe_text(args.task, 40)} is not in the project's tasks")
@@ -6048,13 +6256,13 @@ def cmd_admit(args):
         raise HiveError(f"task {task['id']} is closed: the hive takes no ruling for it")
     allowed = waivable(config)
     if not allowed:
-        raise HiveError(f"the project {config['project']} names no guardian in the registry: the hive takes no ruling for it")
+        raise HiveError(f"the project {config['project']} names no guardian in its settings: the hive takes no ruling for it")
     if not is_sha(args.commit):
         raise HiveError("--commit: the full id of the commit to admit (forty hexadecimal digits), as the ledger's refusal gives it")
     waived = {}
     for given in args.waive or ():
         name, _, bound = given.partition("=")
-        figure = next((listed for listed in allowed if listed == name), None)  # the registry's own string, or nothing
+        figure = next((listed for listed in allowed if listed == name), None)  # the project's own string, or nothing
         value = (float(bound) if "." in bound else int(bound)) if BOUND.match(bound) else None
         if figure is None or figure in waived or value is None or not allowed[figure][0] <= value <= allowed[figure][1]:
             listed = ", ".join(f"{figure} from {least} to {most}" for figure, (least, most) in sorted(allowed.items()))
@@ -6087,7 +6295,7 @@ def cmd_admit(args):
     print(f"PUSHED {ruling}")
     print("THEN: stop here. The hive reads the ruling at its next run (about an hour) and answers it once, on a line of its ledger: "
           "the commit is judged again on the project's tip as soon as its task is free. To take the ruling back before it is "
-          f"answered: hive.py admit --project {config['project']} --task {task['id']} {said_again(args)} --withdraw")
+          f"answered: hive.py admit --project {config['repo']} --task {task['id']} {said_again(args)} --withdraw")
 
 
 # A worker command removes files, runs git and pushes under its user's name; on a system where none of that was ever
@@ -6132,38 +6340,45 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     def hive_side(p):
-        p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]), help="the registry's tree (trusted)")
-        p.add_argument("--project", required=True)
-        p.add_argument("--state", required=True, help="the state folder (a clone of the hive's state repository)")
+        p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]),
+                       help="the protocol's own tree, at the commit the run uses (trusted): the judges' code")
+        p.add_argument("--project", required=True, help="the project's repository (owner/name): the one this run is for")
+        p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin: its settings "
+                                                     "are read there, on its published branch")
+        p.add_argument("--state", required=True, help="the state's folder: a work tree of the branch hive-state of the project's repository")
 
     def from_plan(p):
         p.add_argument("--plan", required=True)
         p.add_argument("--plan-sha256", required=True, help="what step 1 published as its job's output")
-        p.add_argument("--commit-state", action="store_true", help="commit and push the state folder's repository")
+        p.add_argument("--commit-state", action="store_true", help="commit the state and push it to the project's branch hive-state")
 
     p = sub.add_parser("plan", help="step 1: read the forks, write the plan and the bundle (no secret, nobody's code)")
     hive_side(p)
-    p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin")
     p.add_argument("--out", required=True)
     p.add_argument("--bundle", required=True)
     p.set_defaults(run=cmd_plan)
-    p = sub.add_parser("record", help="step 2: write the plan's deals and the feed (the state's write token only)")
+    p = sub.add_parser("record", help="step 2: write the plan's deals and the feed (the right to write the state only)")
     hive_side(p)
     from_plan(p)
     p.set_defaults(run=cmd_record)
     p = sub.add_parser("judge", help="step 3: judge the plan's candidates (no secret)")
     hive_side(p)
-    p.add_argument("--repo", required=True)
     p.add_argument("--plan", required=True)
     p.add_argument("--bundle", required=True)
     p.add_argument("--workdir", required=True)
     p.add_argument("--judge-workdir")
     p.add_argument("--out", required=True)
     p.set_defaults(run=cmd_judge)
+    p = sub.add_parser("image", help="the judging job's step with network: make the judge's image of the kind the project's settings name")
+    p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]),
+                   help="the protocol's own tree, at the commit the run uses (trusted): the judges' code")
+    p.add_argument("--project", required=True, help="the project's repository (owner/name): the one this run is for")
+    p.add_argument("--repo", required=True, help="a clone of the project: its work tree is what the image is made from")
+    p.add_argument("--plan", required=True)
+    p.set_defaults(run=cmd_image)
     p = sub.add_parser("apply", help="step 4: push and record (the only step that can write to the project; nobody's code, no fork)")
     hive_side(p)
     from_plan(p)
-    p.add_argument("--repo", required=True)
     p.add_argument("--remote", default="origin")
     p.add_argument("--bundle", required=True)
     p.add_argument("--verdicts", required=True)
@@ -6175,52 +6390,45 @@ def main(argv=None):
 
     def worker_side(p, pushes=False):
         p.set_defaults(volunteer=True)
-        p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]), help="the registry's tree (trusted: this tool's own)")
+        p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name, as your user's prompt names it: "
+                                                        "its settings, its tasks and its tip are read from its own address")
         p.add_argument("--login", required=True, help="your GitHub login: the account your fork is under (your user's prompt names it)")
         p.add_argument("--fork", help="the name of your fork's repository, if it is not the project's own (a fork you renamed)")
+        p.add_argument("--upstream-url", help=argparse.SUPPRESS)
         if pushes:
             p.add_argument("--no-push", action="store_true", help="make the commit without pushing it")
 
-    p = sub.add_parser("setup", help="volunteer: check this clone of your fork, find its project and fetch the project's tip")
+    p = sub.add_parser("setup", help="volunteer: check this clone of your fork and fetch the project's tip")
     worker_side(p)
-    p.add_argument("--project", help="the hive's project this clone is a fork of, if its repository has another name than the project's")
-    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
     p.set_defaults(run=cmd_setup)
     p = sub.add_parser("next", help="volunteer: what to do now (the task the hive dealt you, ask for one, or wait)")
     worker_side(p)
-    p.add_argument("--project", required=True)
-    p.add_argument("--state", required=True, help="a clone of the hive's state repository")
+    p.add_argument("--state", required=True, help="a clone of the project's branch hive-state (the hive's state for it)")
     p.set_defaults(run=cmd_next)
     p = sub.add_parser("start", help="volunteer: set aside what an earlier run left, put the clone on the task's branch at the "
                                      "project's tip, and show that its work tree holds that tip's files and nothing else (before the work)")
     worker_side(p)
-    p.add_argument("--project", required=True)
     p.add_argument("--task", required=True)
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
-    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
     p.set_defaults(run=cmd_start)
     p = sub.add_parser("ready", help="volunteer: ask the hive for a task (pushes the ask to your fork)")
     worker_side(p, pushes=True)
-    p.add_argument("--project", required=True)
     p.add_argument("--tier", type=int, default=3, help="the hardest tier this worker takes (1, 2 or 3)")
-    p.add_argument("--prefer", help="the part of the project your user's prompt prefers: one of the files its tasks name, as the registry "
-                                    "writes it (leave it out if the prompt names none)")
+    p.add_argument("--prefer", help="the part of the project your user's prompt prefers: one of the files its tasks name, as the project's "
+                                    "tasks write it (leave it out if the prompt names none)")
     p.add_argument("--withdraw", action="store_true", help="take the ask back instead")
     p.set_defaults(run=cmd_ready)
     p = sub.add_parser("submit", help="volunteer: commit the task's files, check them as the hive will, mark the candidate of your "
                                       "deal and push it to your fork")
     worker_side(p, pushes=True)
-    p.add_argument("--project", required=True)
     p.add_argument("--task", required=True)
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
-    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
     p.add_argument("--message", help="one plain line that says what you changed (the work commit's title)")
     p.add_argument("--model", help="your model's identifier, if the project lists it; leave it out if you are not sure")
     p.set_defaults(run=cmd_submit)
     p = sub.add_parser("admit", help="guardian: admit one commit the hive refused for a figure the project lets its guardians waive "
                                      "(pushes the ruling to your fork)")
     worker_side(p, pushes=True)
-    p.add_argument("--project", required=True)
     p.add_argument("--task", required=True, help="the task the commit was a candidate for")
     p.add_argument("--commit", help="the commit to admit: its full id, as the ledger's refusal gives it")
     p.add_argument("--waive", action="append", metavar="FIGURE=BOUND", help="a figure the ruling waives and up to what, once for each figure")
