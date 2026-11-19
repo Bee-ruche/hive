@@ -283,7 +283,8 @@ the hive runs those git commands with an empty attribute source.
   that is not in its fork, change history, or write anything but the project's listed figures, as numbers, into
   the ledger. The judge's container is what stands between a contribution and that job.
 - **The settings are read at one commit for the whole run.** The plan names the commit of the project's published
-  branch it read the settings and the tasks at; the judging job reads them there, and the jobs that write read them
+  branch it read the settings and the tasks at; the judging job reads them there, and judges nothing when its own clone
+  of the project is at another commit (the branch moved since the plan); the jobs that write read them
   there too, once they have asked the project's repository themselves and found the published branch still at that
   commit: otherwise they write nothing, and the next run plans on the settings as they are then. A plan that names
   any other commit is not the hive's. The judging and the write job go through the same candidates, with the same

@@ -70,6 +70,10 @@ makes for each job and whose reach is this repository alone.
     only add to them;
   - on tags: "Restrict creations".
   (The token cannot change a file under `.github/workflows/`: GitHub refuses that to the token of a workflow.)
+  What a job's token could do if it leaked, while its job runs, is therefore what those rules let it: write the
+  branch `hive-state` (the project's ledger and feed) and the hive's own branch (where accepted work lands, which
+  the maintainers read before they publish it); nothing else of the repository. The steps that hold a token that
+  writes run no contributor's code, and keep it in the two places git needs it (below).
 - **Artifacts**: the run keeps each for three days.
 
 ## What each job may do
@@ -86,9 +90,9 @@ them apart:
 
 What carries it:
 
-1. **The plan's SHA-256 is a job output**, not a file: `record` and `apply` receive it from GitHub, not from an
-   artifact a later job could have replaced, and refuse a plan that does not match. The bundle's SHA-256 is in the
-   plan.
+1. **The plan's SHA-256 is a job output**, not a file: `record`, `apply` and the judging job's two steps receive it
+   from GitHub, not from an artifact a later job could have replaced, and refuse a plan that does not match. The
+   bundle's SHA-256 is in the plan.
 2. **A job that writes takes the earlier jobs' files itself, by name, before its token is written anywhere**
    (`tools/hive/artifact.py take`): it asks GitHub for the archive, reads from it the members it expects (their exact
    names, up to a size) and writes each under that name in a folder of its own, byte by byte accounted for; an
@@ -113,7 +117,9 @@ is one is a line of the project's settings, which changes as any line of them do
 
 - **The settings and the tasks are read at one commit for the whole run.** `plan` asks the project's repository which
   branch it publishes (its default branch) and where it is, reads `hive/project.json` and `hive/tasks.jsonl` at that
-  commit, and names the commit in the plan (« settings »). `judge` reads them at that commit. `record` and `apply` ask
+  commit, and names the commit in the plan (« settings »). The judging job's clone is the published branch's tip when
+  it starts: unless it is the plan's commit, its two steps (`image`, `judge`) do nothing and nothing is judged; the
+  judging reads the settings at that commit, and the image is made from that tree. `record` and `apply` ask
   the repository themselves where the published branch is now: if it is no longer at the plan's commit, they write
   nothing, to the state or to the project, and the next run plans on the settings as they are then. A plan that names
   any other commit (an older one, another branch's) is not the hive's. So a change to the settings (a task closed, an
@@ -121,7 +127,7 @@ is one is a line of the project's settings, which changes as any line of them do
   nothing more. Any commit to the published branch does the same to the run in flight, whether or not it changes
   `hive/`: maintainers who publish while the hive judges cost that run its answers, which the next run gives again.
 - **The judge's image** is made by `hive.py image`, before any candidate's code is on the machine, for the kind of
-  judge the settings name, from the project's tree as the judging job cloned it.
+  judge the settings name, from the project's tree as the judging job cloned it: the plan's commit (above).
 - **The state** is the branch `hive-state` as each job checks it out when it starts: `judge` and `apply` start after
   `record` and read what it wrote. A push of the state only adds to the branch; one that finds it moved takes what
   was saved there and pushes again, a bounded number of times, and stops where the same file was written by both
@@ -130,10 +136,20 @@ is one is a line of the project's settings, which changes as any line of them do
 ## Which version of the hive a project runs
 
 **One commit of `Bee-ruche/hive`'s main, named in the caller**, by its full id. The hive's code, the judges' and the
-run's text change for the project when a commit of its own changes that line, and at no other time. GitHub serves any
-commit of a repository's network by its id, a fork's included: the run's first step refuses a commit that
-`Bee-ruche/hive`'s main does not hold, but a workflow file at such a commit is not the hive's at all, so the lead copies
-the id from the main branch of `Bee-ruche/hive` itself, and reviews the change of that line as any other.
+run's text change for the project when a commit of its own changes that line, and at no other time.
+
+**That line is the project's trust boundary.** Whatever commit it names runs with the project's token, and its own
+`run.yml` decides what it checks. The run's first step refuses a commit that `Bee-ruche/hive`'s main does not hold, and
+that catches an honest mistake, nothing more:
+
+- **a hostile pin is not caught.** GitHub serves any commit of a repository's network by its id, under that
+  repository's name, a fork's commit included: a commit from a fork of `Bee-ruche/hive`, named in the line, runs that
+  fork's `run.yml`, which simply leaves the check out;
+- **a downgrade is not caught** either: an older commit of main passes the check, with whatever that commit lacked.
+
+So the lead copies the id from the main branch of `Bee-ruche/hive` itself, and a change of that line is reviewed as
+code is: a `CODEOWNERS` line that names the project's maintainers for `.github/workflows/hive.yml`, with a ruleset on
+the published branch that requires a pull request and the code owners' review, so that no one changes the pin alone.
 
 ## Stopping the hive
 
@@ -142,6 +158,12 @@ the id from the main branch of `Bee-ruche/hive` itself, and reviews the change o
 - **Its work, not its runs**: `"paused": true` in `hive/project.json`, on the published branch. No fork is read,
   nothing is dealt, judged, integrated or written to the state, from the run that plans after it; a run in flight
   when it lands writes nothing more (the published branch moved).
+
+**GitHub stops it by itself, too.** In a public repository, GitHub disables the scheduled workflows after 60 days
+without activity in the repository; the run's own pushes may not count as activity, so a lead does not rely on them.
+A project notices it on the workflow's page in the Actions tab, which then says that the scheduled workflow is
+disabled, and in the feed, whose `generated_at` stops moving (the workers then wait on their asks). It is enabled
+again on that same page ("Enable workflow"), or with `gh workflow enable hive.yml`; no commit is needed.
 
 ## Notes on the file
 
