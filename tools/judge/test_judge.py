@@ -378,6 +378,12 @@ class TestPlugin(unittest.TestCase):
         with open(toy_file(self.base, "plugin"), "w", encoding="utf-8") as f:
             f.write(text)
 
+    def test_version(self):
+        """Version 5 (judge-v5): the judges in English, one plugin contract; judge.json names it in judge.common."""
+        self.assertEqual((judge.COMMON_VERSION, judge.common_tag(), judge.common_tag(4)), (5, "judge-v5", "judge-v4"))
+        self.assertEqual(judge.PLUGIN_PATH, os.path.join("bee", "judge", "project.py"))
+        self.assertFalse(hasattr(judge, "PLUGIN_NAMES") or hasattr(judge, "EnglishPlugin"))
+
     def test_toy_plugin(self):
         """The toy's bee/judge/project.py keeps the contract: every name, its fingerprint, its directions; an unknown option is
         refused."""
