@@ -1,0 +1,245 @@
+# The hive's run for one project (docs/hosting.md says how a project sets it up, docs/protocol.md what each job may do).
+# A reusable workflow, and nothing else: a project calls it from a short workflow of its own, every hour, pinned to a
+# commit of this repository's main branch (examples/project/.github/workflows/hive.yml). It runs in the project's
+# repository with the project's own GITHUB_TOKEN, whose reach is that repository alone: no secret, no GitHub App, no
+# environment. Four jobs: plan (reads the forks; reads only), record (writes the project's branch hive-state), judge
+# (candidates' code runs only in containers without network; reads only), apply (pushes what the judge accepted to the
+# project's branch for the hive, and writes the state). Each job runs the hive's code at this workflow's own commit, of
+# Bee-ruche/hive and of no other repository. tools/hive/test_hive.py (TestTheRunWorkflow) holds this file word for
+# word: whoever changes a line here changes that test in the same commit, in sight of a reviewer.
+name: Hive
+on:
+  workflow_call:
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+    steps:
+      - name: This workflow's own repository and commit, on Bee-ruche/hive's main (the hive's code runs from there)
+        id: protocol
+        env:
+          REPOSITORY: ${{ job.workflow_repository }}
+          COMMIT: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "${REPOSITORY,,}" == bee-ruche/hive && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "this workflow is not Bee-ruche/hive's at a full commit: nothing runs" >&2; exit 1; }
+          state="$(timeout 60 gh api "repos/Bee-ruche/hive/compare/main...$COMMIT" --jq .status)" || state="API error or timeout"
+          [[ "$state" == identical || "$state" == behind ]] || { echo "this workflow's commit $COMMIT is not on Bee-ruche/hive's main ($state): nothing runs" >&2; exit 1; }
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Bee-ruche/hive
+          ref: ${{ steps.protocol.outputs.commit }}
+          path: protocol
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: hive-state
+          path: state
+          persist-credentials: false
+      - name: The project, in full (its branches under refs/remotes/origin)
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git clone --quiet "https://github.com/$REPOSITORY" project
+      - name: Plan (reads the project's settings on its published branch, and the forks, once; only the read-only token gh needs)
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 protocol/tools/hive/hive.py plan --registry protocol --project "$REPOSITORY" --repo project --state state \
+            --out plan.json --bundle candidates.bundle >> "$GITHUB_OUTPUT"
+          touch candidates.bundle
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plan
+          path: plan.json
+          retention-days: 3
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: candidates
+          path: candidates.bundle
+          retention-days: 3
+
+  record:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: This workflow's own repository and commit, on Bee-ruche/hive's main (the hive's code runs from there)
+        id: protocol
+        env:
+          REPOSITORY: ${{ job.workflow_repository }}
+          COMMIT: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "${REPOSITORY,,}" == bee-ruche/hive && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "this workflow is not Bee-ruche/hive's at a full commit: nothing runs" >&2; exit 1; }
+          state="$(timeout 60 gh api "repos/Bee-ruche/hive/compare/main...$COMMIT" --jq .status)" || state="API error or timeout"
+          [[ "$state" == identical || "$state" == behind ]] || { echo "this workflow's commit $COMMIT is not on Bee-ruche/hive's main ($state): nothing runs" >&2; exit 1; }
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Bee-ruche/hive
+          ref: ${{ steps.protocol.outputs.commit }}
+          path: protocol
+          persist-credentials: false
+      - name: Take the plan (one named file, before the job's token is written anywhere)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir taken
+          python3 protocol/tools/hive/artifact.py take --name plan --member plan.json:67108864 --into taken/plan
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: hive-state
+          path: state
+      - name: The project (its settings are read at the commit the plan names)
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git clone --quiet "https://github.com/$REPOSITORY" project
+      - name: Record the deals and publish the feed (while the published branch is still where the plan read the settings)
+        env:
+          PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 protocol/tools/hive/hive.py record --registry protocol --project "$REPOSITORY" --repo project --state state \
+            --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256" --commit-state
+
+  judge:
+    needs:
+      - plan
+      - record
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - name: This workflow's own repository and commit, on Bee-ruche/hive's main (the hive's code runs from there)
+        id: protocol
+        env:
+          REPOSITORY: ${{ job.workflow_repository }}
+          COMMIT: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "${REPOSITORY,,}" == bee-ruche/hive && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "this workflow is not Bee-ruche/hive's at a full commit: nothing runs" >&2; exit 1; }
+          state="$(timeout 60 gh api "repos/Bee-ruche/hive/compare/main...$COMMIT" --jq .status)" || state="API error or timeout"
+          [[ "$state" == identical || "$state" == behind ]] || { echo "this workflow's commit $COMMIT is not on Bee-ruche/hive's main ($state): nothing runs" >&2; exit 1; }
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Bee-ruche/hive
+          ref: ${{ steps.protocol.outputs.commit }}
+          path: protocol
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: hive-state
+          path: state
+          persist-credentials: false
+      - name: The project
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git clone --quiet "https://github.com/$REPOSITORY" project
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: plan
+          path: taken/plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidates
+          path: taken/candidates
+      - name: The judge's image (with network; the kind the project's settings name, built from the project's own tree; no candidate's code runs here)
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 protocol/tools/hive/hive.py image --registry protocol --project "$REPOSITORY" --repo project \
+            --plan taken/plan/plan.json
+      - name: Judge the plan's candidates (their code runs only in containers without network)
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p work judge-work
+          python3 protocol/tools/hive/hive.py judge --registry protocol --project "$REPOSITORY" --repo project --state state \
+            --plan taken/plan/plan.json --bundle taken/candidates/candidates.bundle --workdir work \
+            --judge-workdir judge-work --out verdicts.json
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verdicts
+          path: verdicts.json
+          retention-days: 3
+
+  apply:
+    needs:
+      - plan
+      - record
+      - judge
+    # Even when the judging failed (what it left is used); never when a person cancelled the run.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: This workflow's own repository and commit, on Bee-ruche/hive's main (the hive's code runs from there)
+        id: protocol
+        env:
+          REPOSITORY: ${{ job.workflow_repository }}
+          COMMIT: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "${REPOSITORY,,}" == bee-ruche/hive && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "this workflow is not Bee-ruche/hive's at a full commit: nothing runs" >&2; exit 1; }
+          state="$(timeout 60 gh api "repos/Bee-ruche/hive/compare/main...$COMMIT" --jq .status)" || state="API error or timeout"
+          [[ "$state" == identical || "$state" == behind ]] || { echo "this workflow's commit $COMMIT is not on Bee-ruche/hive's main ($state): nothing runs" >&2; exit 1; }
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Bee-ruche/hive
+          ref: ${{ steps.protocol.outputs.commit }}
+          path: protocol
+          persist-credentials: false
+      - name: Take the plan, the candidates and the judge's answers (named files, before the job's token is written anywhere)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir taken
+          python3 protocol/tools/hive/artifact.py take --name plan --member plan.json:67108864 --into taken/plan
+          python3 protocol/tools/hive/artifact.py take --name candidates --member candidates.bundle:2147483648 \
+            --into taken/candidates
+          # No answers at all is a case the write step knows: an archive that is missing, or refused, is that case.
+          python3 protocol/tools/hive/artifact.py take --name verdicts --member verdicts.json:16777216 \
+            --into taken/verdicts || { mkdir -p taken/verdicts && echo '{}' > taken/verdicts/verdicts.json; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: hive-state
+          path: state
+      - name: The project
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git clone --quiet "https://github.com/$REPOSITORY" project
+      - name: Push what the judge accepted, and record (the job's token reaches git as a header for the project's address alone)
+        env:
+          PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+          REPOSITORY: ${{ github.repository }}
+          TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -C project config "http.https://github.com/$REPOSITORY.extraheader" "Authorization: Basic $auth"
+          python3 protocol/tools/hive/hive.py apply --registry protocol --project "$REPOSITORY" --repo project --state state \
+            --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256" \
+            --bundle taken/candidates/candidates.bundle --verdicts taken/verdicts/verdicts.json --commit-state
