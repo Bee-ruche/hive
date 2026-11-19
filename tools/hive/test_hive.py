@@ -76,6 +76,17 @@ def sh(*command, cwd, check=True, stdin=None):
     return subprocess.run(command, cwd=cwd, env={**os.environ, **GIT_ENV, **QUIET_GIT}, check=check, capture_output=True, text=True, input=stdin)
 
 
+def hive_pauses(waits, real=time.sleep):
+    """A time.sleep that records the pauses the hive's own code takes and lets any other caller sleep for real: patching
+    time.sleep patches it for the whole process, and subprocess, waiting on a slow child, polls it with sleeps of its own."""
+    def sleep(seconds):
+        if sys._getframe(1).f_globals is vars(hive):
+            waits.append(seconds)
+        else:
+            real(seconds)
+    return sleep
+
+
 def judge_by_content(base, candidate, task, tip, commit):
     """The fake judge: refuses a candidate whose lib.c says REFUSE, fails on ENVERR, measures a gain on FAST."""
     judge_by_content.seen.append((candidate / "lib.c").read_bytes() if (candidate / "lib.c").exists() else None)
@@ -2401,7 +2412,7 @@ class TestFirstReview(Base):
 
             with mock.patch.object(hive, "transport", return_value={"GIT_ALLOW_PROTOCOL": "file"}), \
                     mock.patch.dict(os.environ, {"GIT_ALLOW_PROTOCOL": "file"}), mock.patch.object(hive, "git", racing), \
-                    mock.patch.object(hive.time, "sleep", waits.append):
+                    mock.patch.object(hive.time, "sleep", hive_pauses(waits)):
                 try:
                     hive.save_state(mine, "toy", hive.now())
                     said = None
@@ -2450,7 +2461,7 @@ class TestFirstReview(Base):
                     raise hive.HiveError("git push failed (1): refused")
                 return subprocess.CompletedProcess(args, 1, "", "refused")
 
-            with mock.patch.object(hive, "git", refused), mock.patch.object(hive.time, "sleep", waits.append), \
+            with mock.patch.object(hive, "git", refused), mock.patch.object(hive.time, "sleep", hive_pauses(waits)), \
                     self.assertRaisesRegex(hive.HiveError, r"git push failed \(1\): refused\Z"):
                 hive.save_state(state, "toy", hive.now())
         self.assertEqual((len(pushes), waits), (2, []))
