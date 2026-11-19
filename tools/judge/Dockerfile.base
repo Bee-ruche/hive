@@ -1,0 +1,22 @@
+# The Bee judge's common image (tools/judge/, docs/common-judge.md).
+#
+# Built BEFORE any file of the PR is mounted: it is the only step with network.
+# Then everything that touches the PR's code (compilation, execution, measurements) runs in
+# containers of this image, without network, read-only, without privilege (tools/judge/judge.py).
+#
+# tools/judge/container.py adds to this file a RUN line with the project's own packages (the plugin's
+# PAQUETS), then the unprivileged user. The image's label is the fingerprint of the whole.
+#
+# Base image pinned by fingerprint (multi-architecture index: x86-64 and ARM64), pulled from the mirror
+# of Docker Hub that Google keeps (no anonymous rate limit on shared CI machines).
+FROM mirror.gcr.io/library/ubuntu@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+
+# gcc, make, libc6-dev: compiling the project, the harness and the chrono launcher; binutils: analysis of the
+# objects (nm, objdump); valgrind: instruction count; python3-minimal: the projects' tooling.
+RUN apt-get update -q \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+      gcc make binutils libc6-dev valgrind python3-minimal \
+ && rm -rf /var/lib/apt/lists/*
+
+# Link to the root: each folder of the judge is mounted there at its own depth, at the same rank everywhere (container.LINK).
+RUN ln -s / /.racine
