@@ -5,7 +5,8 @@ service since 2 November 2026, tag `juge-v3`; version 2 from 2 November 2026, ta
 version 1 from 28 October 2026, tag `juge-v1`.
 
 *In this text, « the registry » is `Bee-ruche/registre`, where the common judge was written and where its tags are.
-This repository holds the registry's `tools/judge/` as of commit 2baa4d2, and a copy of its reusable workflow,
+This repository holds the registry's `tools/judge/` as of commit 2baa4d2 (its tests since read the reusable workflow
+here, and leave to the registry the one that checked the map of its move to English names), and a copy of that workflow,
 [`examples/workflows/judge.yml`](../examples/workflows/judge.yml). A label `ruche-NNNN` names the registry's task
 under which a change was made.*
 
