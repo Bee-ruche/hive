@@ -9,7 +9,7 @@ reference does, on cases drawn when it is judged (docs/reference-judge.md).
 Exit code: 0 correct, 1 refused (the candidate's doing), 2 failure to judge (the machine's, the project's or the
 registry's own).
 
-Who holds what. This file, the isolation (container.py) and the safe reading (lecture.py) are the registry's: they
+Who holds what. This file, the isolation (container.py) and the safe reading (reading.py) are the registry's: they
 run on the judge's machine. The project's part is at ITS TIP, under paths a candidate cannot change: a manifest
 that is data (bee/reference/project.json), two build scripts, two drivers, a generator, the reference itself. The
 candidate brings the files of ONE unit. Nothing of the tip and nothing of the candidate runs on the host: scripts,
@@ -40,7 +40,7 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import container  # noqa: E402
-from lecture import Erreur, Panne, Refus, journal, lire_sortie, propre  # noqa: E402
+from reading import JudgeError, MachineFailure, Refusal, clean, log, read_output  # noqa: E402
 
 MANIFEST = "bee/reference/project.json"
 BUILD_REFERENCE, BUILD_UNIT = "bee/reference/build-reference", "bee/reference/build-unit"
@@ -71,15 +71,15 @@ STATE = {}               # what the report says of a judgement that stops: the s
 def whole(value, bounds, name):
     low, high = bounds
     if type(value) is not int or not low <= value <= high:
-        raise Erreur(f"the manifest's {name}: a whole number from {low} to {high}")
+        raise JudgeError(f"the manifest's {name}: a whole number from {low} to {high}")
     return value
 
 
 def paths(value, name, least=1):
     if not isinstance(value, list) or not least <= len(value) <= 64 or not all(isinstance(p, str) and PATH.fullmatch(p) for p in value):
-        raise Erreur(f"the manifest's {name}: a list of plain relative paths")
+        raise JudgeError(f"the manifest's {name}: a list of plain relative paths")
     if len(set(value)) != len(value):
-        raise Erreur(f"the manifest's {name}: a path is listed twice")
+        raise JudgeError(f"the manifest's {name}: a path is listed twice")
     return list(value)
 
 
@@ -91,42 +91,42 @@ def within(path, others):
 def check_manifest(raw):
     """The manifest as the kind uses it. Anything else than the fields below, in the shapes below: a failure to judge."""
     if not isinstance(raw, dict) or set(raw) != {"image", "reference", "skeleton", "units", *NUMBERS}:
-        raise Erreur("the manifest: exactly the fields image, reference, skeleton, units, " + ", ".join(sorted(NUMBERS)))
+        raise JudgeError("the manifest: exactly the fields image, reference, skeleton, units, " + ", ".join(sorted(NUMBERS)))
     if not isinstance(raw["image"], str) or raw["image"] not in IMAGES:
-        raise Erreur("the manifest's image: the name of an image the registry holds (" + ", ".join(sorted(IMAGES)) + ")")
+        raise JudgeError("the manifest's image: the name of an image the registry holds (" + ", ".join(sorted(IMAGES)) + ")")
     manifest = {"image": raw["image"], "reference": paths(raw["reference"], "reference"), "skeleton": paths(raw["skeleton"], "skeleton")}
     for name, bounds in NUMBERS.items():
         manifest[name] = whole(raw[name], bounds, name)
     for needed, where in ((BUILD_REFERENCE, "reference"), (BUILD_UNIT, "skeleton")):
         if not any(needed == p or needed.startswith(p + "/") for p in manifest[where]):
-            raise Erreur(f"the manifest's {where} must hold {needed}")
+            raise JudgeError(f"the manifest's {where} must hold {needed}")
     units = raw["units"]
     if not isinstance(units, dict) or not 1 <= len(units) <= 256 or not all(isinstance(n, str) and NAME.fullmatch(n) for n in units):
-        raise Erreur("the manifest's units: names of lower-case letters, digits and underscores")
+        raise JudgeError("the manifest's units: names of lower-case letters, digits and underscores")
     manifest["units"], taken = {}, []
     for name, unit in units.items():
         if not isinstance(unit, dict) or set(unit) != {"files", "blank", "refuses", *UNIT_NUMBERS}:
-            raise Erreur(f"the manifest's unit {name}: exactly the fields files, blank, refuses, " + ", ".join(sorted(UNIT_NUMBERS)))
+            raise JudgeError(f"the manifest's unit {name}: exactly the fields files, blank, refuses, " + ", ".join(sorted(UNIT_NUMBERS)))
         files = paths(unit["files"], f"unit {name}: files")
         if not isinstance(unit["blank"], list) or len(unit["blank"]) != len(files) or not all(isinstance(p, str) and PATH.fullmatch(p) for p in unit["blank"]):
-            raise Erreur(f"the manifest's unit {name}: blank: one plain relative path for each of its files")
+            raise JudgeError(f"the manifest's unit {name}: blank: one plain relative path for each of its files")
         if type(unit["refuses"]) is not bool:
-            raise Erreur(f"the manifest's unit {name}: refuses is true or false")
+            raise JudgeError(f"the manifest's unit {name}: refuses is true or false")
         checked = {"files": files, "blank": list(unit["blank"]), "refuses": unit["refuses"]}
         for key, bounds in UNIT_NUMBERS.items():
             checked[key] = whole(unit[key], bounds, f"unit {name}: {key}")
         if checked["cases"] * (4 + checked["case_bytes"]) > STREAM_BYTES or checked["cases"] * (9 + checked["answer_bytes"]) > STREAM_BYTES:
-            raise Erreur(f"the manifest's unit {name}: its cases, or their answers, could pass {STREAM_BYTES} bytes")
+            raise JudgeError(f"the manifest's unit {name}: its cases, or their answers, could pass {STREAM_BYTES} bytes")
         for path in files:
             # A unit's file is the candidate's: never a path the reference's side or the skeleton is read from, never
             # under bee/ (the project's own tooling), never another unit's.
             if within(path, manifest["reference"] + manifest["skeleton"] + taken) or path == "bee" or path.startswith("bee/"):
-                raise Erreur(f"the manifest's unit {name}: {path} is also the project's own, or another unit's")
+                raise JudgeError(f"the manifest's unit {name}: {path} is also the project's own, or another unit's")
         taken += files
         manifest["units"][name] = checked
     for name, unit in manifest["units"].items():  # a blank is the project's own file: never one a candidate writes
         if any(within(path, taken) or path == "bee" for path in unit["blank"]):
-            raise Erreur(f"the manifest's unit {name}: a blank file is a unit's own file")
+            raise JudgeError(f"the manifest's unit {name}: a blank file is a unit's own file")
     return manifest
 
 
@@ -190,15 +190,15 @@ def copy_paths(root, listed, target, blame, limit=SOURCE_BYTES, file_limit=None,
         for relative in listed:
             regular_files(root, relative, found)
     except (OSError, ValueError) as error:
-        raise blame(f"a path that is not a plain file or folder ({propre(str(error), 200)})") from None
+        raise blame(f"a path that is not a plain file or folder ({clean(str(error), 200)})") from None
     if files_only and sorted(relative for relative, _ in found) != sorted(listed):
         raise blame("a unit's file that is not a plain file")
     total = 0
     for relative, executable in found:
         try:
-            data = lire_sortie(root, relative, min(limit - total, file_limit or limit) if limit > total else 0)
-        except Refus as error:
-            raise blame(f"{relative}: {propre(str(error), 200)}") from None
+            data = read_output(root, relative, min(limit - total, file_limit or limit) if limit > total else 0)
+        except Refusal as error:
+            raise blame(f"{relative}: {clean(str(error), 200)}") from None
         if data is None:
             raise blame(f"{relative}: missing")
         total += len(data)
@@ -229,7 +229,7 @@ def snapshot(root):
             else:
                 seen[relative] = ("other",)
             if len(seen) > 400000:
-                raise Erreur("the project's tree holds too many entries for this judge")
+                raise JudgeError("the project's tree holds too many entries for this judge")
     return seen
 
 
@@ -249,32 +249,32 @@ def tip_is_ready(tip, files):
     (a candidate's tree is plain files and could never equal it), the folder of each of the unit's files, and
     nothing at a file's path that a candidate could not replace by a file (a folder)."""
     if os.path.lexists(os.path.join(tip, ".git")):
-        raise Erreur("the tip's tree is a repository (the project's file names a history): a project of this kind names none")
+        raise JudgeError("the tip's tree is a repository (the project's file names a history): a project of this kind names none")
     for relative in files:
         parts = relative.split("/")
         try:
             os.close(descend(tip, parts[:-1]))
         except OSError:
-            raise Erreur(f"the tip does not hold the folder of {relative}: the project keeps a file there, written or not") from None
+            raise JudgeError(f"the tip does not hold the folder of {relative}: the project keeps a file there, written or not") from None
         try:
             mode = os.lstat(os.path.join(tip, relative)).st_mode
         except FileNotFoundError:
             continue
         if stat.S_ISDIR(mode):
-            raise Erreur(f"the tip holds a folder at {relative}, where a unit's file goes")
+            raise JudgeError(f"the tip holds a folder at {relative}, where a unit's file goes")
 
 
 def only_the_unit_differs(tip, candidate, files):
-    """Refus unless the candidate's tree is the tip's everywhere but at the unit's files. The base integrates the
+    """Refusal unless the candidate's tree is the tip's everywhere but at the unit's files. The base integrates the
     whole tree a candidate gives: what this judge does not build must be what the project already holds."""
     ours, theirs = snapshot(tip), snapshot(candidate)
     for relative in files:  # the unit's files are the candidate's to hold, whether the tip has them or not
         ours.pop(relative, None), theirs.pop(relative, None)
     if ours != theirs:
-        raise Refus("the candidate changes something else than its unit's files")
+        raise Refusal("the candidate changes something else than its unit's files")
     for relative, what in ours.items():
         if what[0] == "file" and not same_bytes(os.path.join(tip, relative), os.path.join(candidate, relative)):
-            raise Refus("the candidate changes something else than its unit's files")
+            raise Refusal("the candidate changes something else than its unit's files")
 
 
 # ---------------------------------------------------------------- containers: what each outcome means is said here
@@ -292,28 +292,28 @@ def bounded_folder(path, megabytes):
 
 
 def launch(docker, command, mounts, pids, seconds, blame, what, entry=None):
-    """One container, to its end. A time bound reached, or an exit status that is not 0, is `blame`'s (Refus: the
-    candidate's doing; Erreur: the project's or the machine's). Docker's own failure is always the machine's."""
+    """One container, to its end. A time bound reached, or an exit status that is not 0, is `blame`'s (Refusal: the
+    candidate's doing; JudgeError: the project's or the machine's). Docker's own failure is always the machine's."""
     # The judge stops a container at its time bound (container.Docker.launch). Should the judge itself be killed, the
     # container still ends: the command runs under « timeout », inside, a little later.
     command = ["timeout", "-s", "KILL", str(seconds + GRACE)] + command
     try:
         ran = docker.launch(command, mounts, pids=pids, entry=entry, timeout_seconds=seconds)
-    except Panne:
+    except MachineFailure:
         raise
-    except Refus:  # container.Docker.launch's word for a container that ran and was stopped at its time
+    except Refusal:  # container.Docker.launch's word for a container that ran and was stopped at its time
         raise blame(f"{what}: stopped at its time bound ({seconds} s)") from None
     if ran.returncode != 0:
-        raise blame(f"{what}: exit status {ran.returncode}. " + propre(ran.stderr, 600))
+        raise blame(f"{what}: exit status {ran.returncode}. " + clean(ran.stderr, 600))
     return ran
 
 
 def left(root, name, maximum, blame, what):
     """A file a container left in root, read without following anything, or None when there is none."""
     try:
-        return lire_sortie(root, name, maximum)
-    except Refus as error:
-        raise blame(f"{what}: {propre(str(error), 200)}") from None
+        return read_output(root, name, maximum)
+    except Refusal as error:
+        raise blame(f"{what}: {clean(str(error), 200)}") from None
 
 
 def keep_file(folder, name, data, executable=False):
@@ -333,7 +333,7 @@ class Judgement:
     """The containers of one judgement: the image, the manifest's bounds, the work folder."""
 
     def __init__(self, image, manifest, work):
-        self.docker, self.manifest, self.work, self.count = container.Docker(image, memoire=f"{manifest['memory_mb']}m"), manifest, work, 0
+        self.docker, self.manifest, self.work, self.count = container.Docker(image, memory=f"{manifest['memory_mb']}m"), manifest, work, 0
 
     def folder(self, name):
         self.count += 1
@@ -344,11 +344,11 @@ class Judgement:
         kept = self.folder("reference")
         with bounded_folder(self.folder("out"), self.manifest["output_mb"]) as out:
             launch(self.docker, ["sh", "/src/" + BUILD_REFERENCE], [(sources, "/src", True), (out, "/out", False)],
-                   self.manifest["build_processes"], self.manifest["reference_seconds"], Erreur, "the reference's build")
+                   self.manifest["build_processes"], self.manifest["reference_seconds"], JudgeError, "the reference's build")
             for name in ("reference", "generate"):
-                data = left(out, name, self.manifest["output_mb"] << 20, Erreur, f"the reference's build: /out/{name}")
+                data = left(out, name, self.manifest["output_mb"] << 20, JudgeError, f"the reference's build: /out/{name}")
                 if data is None:
-                    raise Erreur(f"the reference's build left no /out/{name}")
+                    raise JudgeError(f"the reference's build left no /out/{name}")
                 keep_file(kept, name, data, executable=True)
         return kept
 
@@ -366,10 +366,10 @@ class Judgement:
     def generate(self, reference, unit, count, seed):
         with bounded_folder(self.folder("cases"), megabytes(STREAM_BYTES)) as out:
             launch(self.docker, ["/ref/generate", unit, str(count)], [(reference, "/ref", True), (out, "/cases", False)],
-                   self.manifest["build_processes"], self.manifest["reference_seconds"], Erreur, "the generator", entry=(seed.hex() + "\n").encode())
-            data = left(out, "cases", STREAM_BYTES, Erreur, "the generator: /cases/cases")
+                   self.manifest["build_processes"], self.manifest["reference_seconds"], JudgeError, "the generator", entry=(seed.hex() + "\n").encode())
+            data = left(out, "cases", STREAM_BYTES, JudgeError, "the generator: /cases/cases")
         if data is None:
-            raise Erreur("the generator left no /cases/cases")
+            raise JudgeError("the generator left no /cases/cases")
         return data
 
     def answers(self, command, binary, where, cases, most, seconds, blame, what, processes=2):
@@ -390,17 +390,17 @@ def parse_cases(data, unit):
     cases, at = [], 0
     for _ in range(unit["cases"]):
         if at + 4 > len(data):
-            raise Erreur("the generator wrote fewer cases than the manifest's count")
+            raise JudgeError("the generator wrote fewer cases than the manifest's count")
         (size,) = struct.unpack_from("<I", data, at)
         at += 4
         if size > unit["case_bytes"] or at + size > len(data):
-            raise Erreur("the generator wrote a case longer than the manifest's bound, or cut short")
+            raise JudgeError("the generator wrote a case longer than the manifest's bound, or cut short")
         cases.append(data[at:at + size])
         at += size
     if at != len(data):
-        raise Erreur("the generator wrote more than the manifest's count of cases")
+        raise JudgeError("the generator wrote more than the manifest's count of cases")
     if len(set(cases)) < (len(cases) + 3) // 4:
-        raise Erreur("the generator wrote the same cases over and over")
+        raise JudgeError("the generator wrote the same cases over and over")
     return cases
 
 
@@ -410,22 +410,22 @@ def parse_answers(data, unit):
     answers, at = [], 0
     for index in range(unit["cases"]):
         if at + 9 > len(data):
-            raise Erreur("the reference answered fewer cases than it was given")
+            raise JudgeError("the reference answered fewer cases than it was given")
         position, status, size = struct.unpack_from("<IBI", data, at)
         at += 9
         if position != index or status not in (0, 1) or size > unit["answer_bytes"] or (status == 1 and size) or at + size > len(data):
-            raise Erreur("the reference wrote an answer that is not well framed")
+            raise JudgeError("the reference wrote an answer that is not well framed")
         answers.append((status, data[at:at + size]))
         at += size
     if at != len(data):
-        raise Erreur("the reference wrote more than one answer per case")
+        raise JudgeError("the reference wrote more than one answer per case")
     refused = sum(status for status, _ in answers)
     if unit["refuses"] and (refused == 0 or refused == len(answers)):
-        raise Erreur("the manifest says the unit refuses some inputs: the cases drawn must hold a refusal and an answer")
+        raise JudgeError("the manifest says the unit refuses some inputs: the cases drawn must hold a refusal and an answer")
     if not unit["refuses"] and refused:
-        raise Erreur("the manifest says the unit refuses nothing, and the reference refused a case")
+        raise JudgeError("the manifest says the unit refuses nothing, and the reference refused a case")
     if len(answers) > 1 and len(set(answers)) < 2:
-        raise Erreur("every case drawn has the same answer: a unit that always says it would pass")
+        raise JudgeError("every case drawn has the same answer: a unit that always says it would pass")
     return answers
 
 
@@ -452,45 +452,45 @@ def order_of(seed, build, run, count):
 # ---------------------------------------------------------------- one judgement
 
 def image_of(manifest):
-    label = container.build_image(IMAGES[manifest["image"]], os.environ.get("BEE_JUGE_RESEAU"))
+    label = container.build_image(IMAGES[manifest["image"]], os.environ.get("BEE_JUDGE_NETWORK"))
     return container.image_id(label)
 
 
 def read_manifest(tip):
     try:
-        data = lire_sortie(tip, MANIFEST, MANIFEST_BYTES)
-    except (Refus, OSError) as error:
-        raise Erreur(f"the project's manifest ({MANIFEST}) cannot be read: {propre(str(error), 200)}") from None
+        data = read_output(tip, MANIFEST, MANIFEST_BYTES)
+    except (Refusal, OSError) as error:
+        raise JudgeError(f"the project's manifest ({MANIFEST}) cannot be read: {clean(str(error), 200)}") from None
     if data is None:
-        raise Erreur(f"the project's tip holds no manifest ({MANIFEST})")
+        raise JudgeError(f"the project's tip holds no manifest ({MANIFEST})")
     try:
         return check_manifest(json.loads(data.decode("utf-8")))
     except (ValueError, RecursionError) as error:
-        raise Erreur(f"the project's manifest is not JSON: {propre(str(error), 200)}") from None
+        raise JudgeError(f"the project's manifest is not JSON: {clean(str(error), 200)}") from None
 
 
 def judge(args, work):
-    """One judgement, step by step (docs/reference-judge.md). Returns the report's figures; Refus: code 1; Erreur: code 2."""
+    """One judgement, step by step (docs/reference-judge.md). Returns the report's figures; Refusal: code 1; JudgeError: code 2."""
     STATE["step"] = 1
     manifest = read_manifest(args.tip)
     if not NAME.fullmatch(args.unit or "") or args.unit not in manifest["units"]:
-        raise Erreur("the task names no unit of the project's manifest")
+        raise JudgeError("the task names no unit of the project's manifest")
     unit = manifest["units"][args.unit]
     if sorted(args.task_file or []) != sorted(unit["files"]):
-        raise Erreur("the task's files are not exactly its unit's files")
+        raise JudgeError("the task's files are not exactly its unit's files")
     needed = budget(manifest)
     if needed > args.budget:
-        raise Erreur(f"the manifest's bounds add up to {needed} s, above the {args.budget} s a judgement of this project is given")
+        raise JudgeError(f"the manifest's bounds add up to {needed} s, above the {args.budget} s a judgement of this project is given")
     tip_is_ready(args.tip, unit["files"])
     judgement = Judgement(image_of(manifest), manifest, work)
     if not args.tip_itself:  # what can be told of a candidate without running anything is told first
         only_the_unit_differs(args.tip, args.candidate, unit["files"])
         candidate_sources = judgement.folder("candidate-sources")
-        copy_paths(args.candidate, unit["files"], candidate_sources, Refus, file_limit=manifest["unit_bytes"], files_only=True)
+        copy_paths(args.candidate, unit["files"], candidate_sources, Refusal, file_limit=manifest["unit_bytes"], files_only=True)
 
     STATE["step"] = 2
     sources = judgement.folder("reference-sources")
-    copy_paths(args.tip, manifest["reference"], sources, Erreur)
+    copy_paths(args.tip, manifest["reference"], sources, JudgeError)
     reference = judgement.build_reference(sources)
 
     # The control: the skeleton with the project's BLANK unit in the unit's place builds, twice, into two different
@@ -498,36 +498,36 @@ def judge(args, work):
     # candidate wrote is built or run in another's judgement, or in the question about the tip itself.
     STATE["step"] = 3
     control_sources = judgement.folder("control-sources")
-    copy_paths(args.tip, manifest["skeleton"], control_sources, Erreur)
+    copy_paths(args.tip, manifest["skeleton"], control_sources, JudgeError)
     for path, blank in zip(unit["files"], unit["blank"]):
         try:
-            data = lire_sortie(args.tip, blank, manifest["unit_bytes"])
-        except (Refus, OSError) as error:
-            raise Erreur(f"the project's blank unit {blank}: {propre(str(error), 200)}") from None
+            data = read_output(args.tip, blank, manifest["unit_bytes"])
+        except (Refusal, OSError) as error:
+            raise JudgeError(f"the project's blank unit {blank}: {clean(str(error), 200)}") from None
         if data is None:
-            raise Erreur(f"the project's tip holds no blank unit {blank}")
+            raise JudgeError(f"the project's tip holds no blank unit {blank}")
         keep_file(os.path.dirname(os.path.join(control_sources, path)), os.path.basename(path), data)
-    (control, first), (_, second) = (judgement.build_unit(control_sources, args.unit, Erreur, CONTROL) for _ in range(2))
+    (control, first), (_, second) = (judgement.build_unit(control_sources, args.unit, JudgeError, CONTROL) for _ in range(2))
     if first == second:
-        raise Erreur("the project's build gives the same binary for two nonces: it must make the binary follow the nonce")
-    nothing = judgement.answers(["/unit/driver"], control, "/unit", b"", 1, manifest["run_seconds"], Erreur, "the project's driver, given no case")
+        raise JudgeError("the project's build gives the same binary for two nonces: it must make the binary follow the nonce")
+    nothing = judgement.answers(["/unit/driver"], control, "/unit", b"", 1, manifest["run_seconds"], JudgeError, "the project's driver, given no case")
     if nothing:
-        raise Erreur("the project's driver, given no case, wrote something")
+        raise JudgeError("the project's driver, given no case, wrote something")
 
     binaries = []
     if not args.tip_itself:
         STATE["step"] = 4  # the skeleton is the tip's, whatever the candidate's tree holds; the unit's files are the candidate's
-        copy_paths(args.tip, manifest["skeleton"], candidate_sources, Erreur)
-        binaries = [judgement.build_unit(candidate_sources, args.unit, Refus)[0] for _ in range(manifest["variants"])]
+        copy_paths(args.tip, manifest["skeleton"], candidate_sources, JudgeError)
+        binaries = [judgement.build_unit(candidate_sources, args.unit, Refusal)[0] for _ in range(manifest["variants"])]
 
     STATE["step"] = 5  # only now: no build of the candidate's has seen the seed, the cases or their order
     seed = bytes.fromhex(args.seed) if args.seed else draw_seed()
     STATE["seed"], STATE["seed_origin"] = seed.hex(), "given" if args.seed else "drawn"
     cases = parse_cases(judgement.generate(reference, args.unit, unit["cases"], seed), unit)
     written = judgement.answers(["/ref/reference", args.unit], reference, "/ref", frame_cases(cases), STREAM_BYTES,
-                                manifest["reference_seconds"], Erreur, "the reference's run", processes=manifest["build_processes"])
+                                manifest["reference_seconds"], JudgeError, "the reference's run", processes=manifest["build_processes"])
     if written is None:
-        raise Erreur("the reference's run left no /answers/answers")
+        raise JudgeError("the reference's run left no /answers/answers")
     expected = parse_answers(written, unit)
 
     STATE["step"] = 6
@@ -541,10 +541,10 @@ def judge(args, work):
             wanted = frame_answers([expected[index] for index in order])
             what = f"build {build + 1}, run {run + 1} of unit {args.unit}"
             given = judgement.answers(["/unit/driver"], binary, "/unit", frame_cases([cases[index] for index in order]), len(wanted) + 1,
-                                      manifest["run_seconds"], Refus, what)
+                                      manifest["run_seconds"], Refusal, what)
             STATE["step"] = 8
             if given != wanted:
-                raise Refus(f"{what}: its answers are not the reference's")
+                raise Refusal(f"{what}: its answers are not the reference's")
             STATE["step"], runs = 7, runs + 1
     STATE["step"] = 8
     return {"cases_compared": len(cases) * runs, "builds": len(binaries), "runs": runs}  # what was done, not what was asked
@@ -582,12 +582,12 @@ def main(argv=None):
     parser.add_argument("--image-only", action="store_true", help="prepare the image the tip's manifest names, and stop")
     args = parser.parse_args(argv)
     if args.image_only:
-        journal("image ready: " + image_of(read_manifest(args.tip)))
+        log("image ready: " + image_of(read_manifest(args.tip)))
         return 0
     if args.seed is not None and not SEED.fullmatch(args.seed):
-        raise Erreur("--seed: 64 hexadecimal digits")
+        raise JudgeError("--seed: 64 hexadecimal digits")
     if not args.tip_itself and not args.candidate:
-        raise Erreur("--candidate is needed, unless --tip-itself")
+        raise JudgeError("--candidate is needed, unless --tip-itself")
     if args.workdir:
         os.makedirs(args.workdir, exist_ok=True)
     work = tempfile.mkdtemp(prefix="reference-", dir=args.workdir)
@@ -596,11 +596,11 @@ def main(argv=None):
         figures = judge(args, work)
     finally:
         if args.keep:
-            journal(f"work folder kept: {work}")
+            log(f"work folder kept: {work}")
         else:
             shutil.rmtree(work, ignore_errors=True)
     write_report(args.json, {"kind": "reference", "code": 0, "unit": args.unit, **STATE, **figures})
-    journal(f"correct: {figures}")
+    log(f"correct: {figures}")
     return 0
 
 
@@ -618,9 +618,9 @@ if __name__ == "__main__":
     where = next((sys.argv[i + 1] for i, word in enumerate(sys.argv[:-1]) if word == "--json"), None)
     try:
         sys.exit(main())
-    except Refus as refusal:
-        sys.exit(stop(1, f"judge: REFUSED: {propre(str(refusal), 2000)}", where))
-    except Erreur as error:
-        sys.exit(stop(2, f"judge: failure to judge: {propre(str(error), 2000)}", where))
+    except Refusal as refusal:
+        sys.exit(stop(1, f"judge: REFUSED: {clean(str(refusal), 2000)}", where))
+    except JudgeError as error:
+        sys.exit(stop(2, f"judge: failure to judge: {clean(str(error), 2000)}", where))
     except Exception:  # noqa: BLE001 — a defect of the judge itself: never a success, never a raw trace
-        sys.exit(stop(2, "judge: internal error: " + propre(traceback.format_exc(), 3000), where))
+        sys.exit(stop(2, "judge: internal error: " + clean(traceback.format_exc(), 3000), where))

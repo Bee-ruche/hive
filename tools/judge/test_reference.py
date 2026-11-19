@@ -2,9 +2,9 @@
 """Tests of Bee's judge of the second kind (tools/judge/reference.py, docs/reference-judge.md).
 
   python3 tools/judge/test_reference.py                          what needs no container
-  BEE_JUGE_INTEGRATION=1 python3 tools/judge/test_reference.py   + the whole judge, in containers, on the toy project
+  BEE_JUDGE_INTEGRATION=1 python3 tools/judge/test_reference.py   + the whole judge, in containers, on the toy project
                                                                  (tools/judge/reference_toy/), honest and HOSTILE
-  BEE_JUGE_RESEAU=host                                           the network of « docker build » (machines without a bridge)
+  BEE_JUDGE_NETWORK=host                                           the network of « docker build » (machines without a bridge)
 
 The hostile units below are texts of C written here, built and run ONLY in the judge's containers.
 """
@@ -26,11 +26,11 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "hive"))
 
 import reference  # noqa: E402
-from lecture import Erreur, Panne, Refus  # noqa: E402
+from reading import JudgeError, MachineFailure, Refusal  # noqa: E402
 
 TOY = HERE / "reference_toy"
 MANIFEST = json.loads((TOY / "bee/reference/project.json").read_text())
-CONTAINERS = os.environ.get("BEE_JUGE_INTEGRATION") == "1" and shutil.which("docker")
+CONTAINERS = os.environ.get("BEE_JUDGE_INTEGRATION") == "1" and shutil.which("docker")
 
 UPPER = """#include "unit.h"
 
@@ -196,19 +196,19 @@ class TestTheManifest(Base):
                       {**MANIFEST, "units": {"upper": {**unit, "files": ["bee"]}}}, {**MANIFEST, "units": {"upper": {**unit, "files": ["bee/reference/build-unit"]}}},
                       {**MANIFEST, "units": {"upper": unit, "other": unit}}, {**MANIFEST, "units": {"upper": unit, "other": {**unit, "files": ["port"]}}},
                       {**MANIFEST, "units": {"upper": unit, "other": {**unit, "files": ["port/upper.c/x"]}}}):
-            with self.subTest(wrong=str(wrong)[-90:]), self.assertRaises(Erreur) as raised:
+            with self.subTest(wrong=str(wrong)[-90:]), self.assertRaises(JudgeError) as raised:
                 reference.check_manifest(wrong)
-            self.assertNotIsInstance(raised.exception, Panne)
+            self.assertNotIsInstance(raised.exception, MachineFailure)
         for number, text in enumerate((b"{", b"\xff", b"[" * 100000, b"null", b"")):
             tip = write_tree(self.root / f"tip{number}", {"bee/reference/project.json": text})
-            with self.subTest(text=text[:10]), self.assertRaises(Erreur):
+            with self.subTest(text=text[:10]), self.assertRaises(JudgeError):
                 reference.read_manifest(str(tip))
         gone = write_tree(self.root / "gone", {"bee/reference/project.json": None})
         linked = write_tree(self.root / "linked", {"bee/reference/project.json": lambda tree: (
             (tree / "bee/reference/project.json").unlink(), os.symlink(TOY / "bee/reference/project.json", tree / "bee/reference/project.json"))})
         large = write_tree(self.root / "large", {"bee/reference/project.json": manifest_with() + " " * reference.MANIFEST_BYTES})
         for tip in (gone, linked, large):
-            with self.subTest(tip=tip.name), self.assertRaises(Erreur):
+            with self.subTest(tip=tip.name), self.assertRaises(JudgeError):
                 reference.read_manifest(str(tip))
 
     def test_the_images_a_manifest_may_name(self):
@@ -220,7 +220,7 @@ class TestTheManifest(Base):
         for name, packages in reference.IMAGES.items():
             with mock.patch.object(reference.container, "build_image", return_value="label") as build, \
                     mock.patch.object(reference.container, "image_id", return_value="sha256:" + "1" * 64) as identity, \
-                    mock.patch.dict(os.environ, {"BEE_JUGE_RESEAU": "host"}):
+                    mock.patch.dict(os.environ, {"BEE_JUDGE_NETWORK": "host"}):
                 self.assertEqual(reference.image_of(reference.check_manifest({**MANIFEST, "image": name})), "sha256:" + "1" * 64)
             self.assertEqual((build.call_args[0], identity.call_args[0]), ((packages, "host"), ("label",)), "run by its id, not by a name")
 
@@ -243,10 +243,10 @@ class TestTheFraming(unittest.TestCase):
         self.assertEqual(reference.parse_cases(data, self.unit), [b"", b"ab", b"abcd"])
         for wrong in (b"", data[:-1], data + b"\0", data + b"\0\0\0\0", reference.frame_cases([b"", b"ab"]), reference.frame_cases([b"", b"ab", b"abcde"]),
                       b"\xff\xff\xff\xff" + data[4:], reference.frame_cases([b"", b"ab", b"abcd", b"x"])):
-            with self.subTest(wrong=wrong), self.assertRaises(Erreur):
+            with self.subTest(wrong=wrong), self.assertRaises(JudgeError):
                 reference.parse_cases(wrong, self.unit)
         many = {**self.unit, "cases": 8}
-        with self.assertRaisesRegex(Erreur, "over and over"):
+        with self.assertRaisesRegex(JudgeError, "over and over"):
             reference.parse_cases(reference.frame_cases([b"a"] * 8), many)
         self.assertEqual(len(reference.parse_cases(reference.frame_cases([b"a"] * 7 + [b"b"]), many)), 8, "two different cases among eight: enough to go on")
 
@@ -268,13 +268,13 @@ class TestTheFraming(unittest.TestCase):
                       framed((0, 0, 9, b"AB"), (1, 1, 0, b""), (2, 0, 0, b"")),  # a length beyond the file
                       framed((0, 0, 2, b"AB"), (1, 0, 0, b""), (2, 0, 0, b"")),  # the unit refuses some inputs: none here
                       framed((0, 1, 0, b""), (1, 1, 0, b""), (2, 1, 0, b""))):  # and not all of them
-            with self.subTest(wrong=wrong), self.assertRaises(Erreur):
+            with self.subTest(wrong=wrong), self.assertRaises(JudgeError):
                 reference.parse_answers(wrong, self.unit)
         never = {**self.unit, "refuses": False}
         self.assertEqual(reference.parse_answers(framed((0, 0, 1, b"A"), (1, 0, 0, b""), (2, 0, 1, b"B")), never), [(0, b"A"), (0, b""), (0, b"B")])
-        with self.assertRaisesRegex(Erreur, "refuses nothing"):
+        with self.assertRaisesRegex(JudgeError, "refuses nothing"):
             reference.parse_answers(data, never)
-        with self.assertRaisesRegex(Erreur, "the same answer"):
+        with self.assertRaisesRegex(JudgeError, "the same answer"):
             reference.parse_answers(framed((0, 0, 1, b"A"), (1, 0, 1, b"A"), (2, 0, 1, b"A")), never)
         self.assertEqual(reference.parse_answers(framed((0, 0, 1, b"A")), {**never, "cases": 1}), [(0, b"A")], "one case has one answer")
 
@@ -313,13 +313,13 @@ class TestTreesOnTheHost(Base):
                               ("empty-folder", {"x": lambda tree: (tree / "newdir").mkdir()}),
                               ("pipe", {"x": lambda tree: os.mkfifo(tree / "pipe")})):
             candidate = write_tree(self.root / name, {"port/upper.c": UPPER, **changes})
-            with self.subTest(change=name), self.assertRaisesRegex(Refus, "something else than its unit's files"):
+            with self.subTest(change=name), self.assertRaisesRegex(Refusal, "something else than its unit's files"):
                 reference.only_the_unit_differs(str(tip), str(candidate), files)
         # a link the project itself holds is compared by where it points, and never followed
         with_link = write_tree(self.root / "tip-link", {"x": lambda tree: os.symlink("/etc/passwd", tree / "doc")})
         reference.only_the_unit_differs(str(with_link), str(write_tree(self.root / "cand-link", {"port/upper.c": UPPER}, source=with_link)), files)
         moved = write_tree(self.root / "cand-moved", {"x": lambda tree: ((tree / "doc").unlink(), os.symlink("/etc/shadow", tree / "doc"))}, source=with_link)
-        with self.assertRaises(Refus):
+        with self.assertRaises(Refusal):
             reference.only_the_unit_differs(str(with_link), str(moved), files)
 
     def test_what_the_tip_must_hold_for_a_unit_to_be_written(self):
@@ -338,14 +338,14 @@ class TestTreesOnTheHost(Base):
                                  ("repository-file", lambda t: (t / ".git").write_text("gitdir: /elsewhere\n"), "is a repository")):
             tree = write_tree(self.root / name)
             make(tree)
-            with self.subTest(tip=name), self.assertRaisesRegex(Erreur, said) as raised:
+            with self.subTest(tip=name), self.assertRaisesRegex(JudgeError, said) as raised:
                 reference.tip_is_ready(str(tree), files)
-            self.assertNotIsInstance(raised.exception, Panne)
+            self.assertNotIsInstance(raised.exception, MachineFailure)
 
     def test_paths_are_copied_as_bytes_and_nothing_is_followed(self):
         tip = write_tree(self.root / "tip")
         target = self.root / "copied"
-        listed = reference.copy_paths(str(tip), ["harness", "bee/reference/build-unit"], str(target), Erreur)
+        listed = reference.copy_paths(str(tip), ["harness", "bee/reference/build-unit"], str(target), JudgeError)
         self.assertEqual(sorted(listed), ["bee/reference/build-unit", "harness/blank_unit.c", "harness/frames.h", "harness/generate.c", "harness/reference_driver.c",
                                           "harness/unit.h", "harness/unit_driver.c"])
         self.assertEqual((target / "harness/unit.h").read_bytes(), (TOY / "harness/unit.h").read_bytes())
@@ -367,22 +367,22 @@ class TestTreesOnTheHost(Base):
                 ("folder-link-above", lambda t: (shutil.rmtree(t / "harness"), os.symlink(outside, t / "harness")), ["harness/secret"]),
                 ("pipe", lambda t: os.mkfifo(t / "harness/pipe"), ["harness"]),
                 ("missing", lambda t: None, ["harness/none.h"])):
-            for blame in (Refus, Erreur):
+            for blame in (Refusal, JudgeError):
                 with self.subTest(trap=name, blame=blame.__name__), self.assertRaises(blame) as raised:
                     reference.copy_paths(trapped(f"{name}-{blame.__name__}", make), listed, str(self.root / f"to-{name}-{blame.__name__}"), blame)
                 self.assertIs(type(raised.exception), blame)
         big = trapped("big", lambda t: (t / "port/upper.c").write_bytes(b"/" * 70000))
-        with self.assertRaises(Refus):
-            reference.copy_paths(big, ["port/upper.c"], str(self.root / "to-big"), Refus, file_limit=65536)
-        self.assertEqual(reference.copy_paths(big, ["port/upper.c"], str(self.root / "to-big-2"), Refus, file_limit=70000), ["port/upper.c"])
-        with self.assertRaises(Erreur):
-            reference.copy_paths(big, ["port", "harness"], str(self.root / "to-big-3"), Erreur, limit=70100)
+        with self.assertRaises(Refusal):
+            reference.copy_paths(big, ["port/upper.c"], str(self.root / "to-big"), Refusal, file_limit=65536)
+        self.assertEqual(reference.copy_paths(big, ["port/upper.c"], str(self.root / "to-big-2"), Refusal, file_limit=70000), ["port/upper.c"])
+        with self.assertRaises(JudgeError):
+            reference.copy_paths(big, ["port", "harness"], str(self.root / "to-big-3"), JudgeError, limit=70100)
         # a unit's file is a file: a folder under its name, empty or not, is not one
         for name, make in (("empty", lambda t: ((t / "port/upper.c").unlink(), (t / "port/upper.c").mkdir())),
                            ("full", lambda t: ((t / "port/upper.c").unlink(), (t / "port/upper.c").mkdir(), (t / "port/upper.c/x.c").write_text("int x;\n")))):
-            with self.subTest(folder=name), self.assertRaisesRegex(Refus, "not a plain file"):
-                reference.copy_paths(trapped(f"folder-{name}", make), ["port/upper.c"], str(self.root / f"to-folder-{name}"), Refus, files_only=True)
-        self.assertEqual(reference.copy_paths(str(tip), ["port/upper.c"], str(self.root / "to-file"), Refus, files_only=True), ["port/upper.c"])
+            with self.subTest(folder=name), self.assertRaisesRegex(Refusal, "not a plain file"):
+                reference.copy_paths(trapped(f"folder-{name}", make), ["port/upper.c"], str(self.root / f"to-folder-{name}"), Refusal, files_only=True)
+        self.assertEqual(reference.copy_paths(str(tip), ["port/upper.c"], str(self.root / "to-file"), Refusal, files_only=True), ["port/upper.c"])
 
 
 class TestWhatAnOutcomeMeans(unittest.TestCase):
@@ -399,30 +399,30 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
                     raise self.outcome
                 return subprocess.CompletedProcess(command, self.outcome, b"", b"said ::warning:: \x1b[31m")
 
-        for blame in (Refus, Erreur):
+        for blame in (Refusal, JudgeError):
             with self.assertRaisesRegex(blame, r"the step: stopped at its time bound \(7 s\)") as raised:
-                reference.launch(Docker(Refus("timeout of 7 s exceeded in the container (sh)")), ["sh"], [], 5, 7, blame, "the step")
+                reference.launch(Docker(Refusal("timeout of 7 s exceeded in the container (sh)")), ["sh"], [], 5, 7, blame, "the step")
             self.assertIs(type(raised.exception), blame)
             with self.assertRaisesRegex(blame, r"the step: exit status 137\. said : :warning: : \?\[31m") as raised:
                 reference.launch(Docker(137), ["sh"], [], 5, 7, blame, "the step")
             self.assertIs(type(raised.exception), blame)
-            with self.assertRaises(Panne):
-                reference.launch(Docker(Panne("failure of the judge's machine")), ["sh"], [], 5, 7, blame, "the step")
+            with self.assertRaises(MachineFailure):
+                reference.launch(Docker(MachineFailure("failure of the judge's machine")), ["sh"], [], 5, 7, blame, "the step")
         docker = Docker(0)
-        self.assertEqual(reference.launch(docker, ["x"], [("a", "/a", True)], 9, 11, Refus, "s", entry=b"n\n").returncode, 0)
+        self.assertEqual(reference.launch(docker, ["x"], [("a", "/a", True)], 9, 11, Refusal, "s", entry=b"n\n").returncode, 0)
         self.assertEqual(docker.asked, (["timeout", "-s", "KILL", "41", "x"], [("a", "/a", True)], 9, b"n\n", 11),
                          "the command under a time of its own, a little after the judge's: it ends even if the judge is gone")
 
     def test_the_command_line(self):
         for wrong in (["--tip", "t", "--seed", "xyz"], ["--tip", "t", "--seed", "A" * 64], ["--tip", "t"]):
-            with self.subTest(wrong=wrong), self.assertRaises(Erreur):
+            with self.subTest(wrong=wrong), self.assertRaises(JudgeError):
                 reference.main(wrong)
         with mock.patch.object(reference, "image_of", return_value="sha256:" + "0" * 64) as image:
             self.assertEqual(reference.main(["--tip", str(TOY), "--image-only"]), 0)
         self.assertEqual(image.call_args[0][0]["image"], "common")
 
 
-@unittest.skipUnless(CONTAINERS, "the whole judge: BEE_JUGE_INTEGRATION=1 and Docker")
+@unittest.skipUnless(CONTAINERS, "the whole judge: BEE_JUDGE_INTEGRATION=1 and Docker")
 class TestTheJudgeInContainers(Base):
     """The whole judge, in containers, on the toy project: honest units, then hostile ones."""
 
@@ -691,9 +691,9 @@ class TestTheJudgeInContainers(Base):
         """The image a port to Rust names: the compiler, the linker that lays a binary's sections in an order it is
         given, and the C compiler of the reference's side."""
         import container
-        docker = container.Docker(reference.image_of(reference.check_manifest({**MANIFEST, "image": "rust"})), memoire="256m")
+        docker = container.Docker(reference.image_of(reference.check_manifest({**MANIFEST, "image": "rust"})), memory="256m")
         ran = reference.launch(docker, ["sh", "-c", "rustc --version && ld.lld --version && cc --version && ld.lld --help | grep -c shuffle-sections"],
-                               [], 16, 60, Erreur, "the image's tools")
+                               [], 16, 60, JudgeError, "the image's tools")
         said = ran.stdout.decode()
         self.assertRegex(said, r"(?s)\Arustc 1\.\d+\.\d+ .*LLD \d+\..*\bcc \(.*\n[1-9]\d*\n\Z")
 

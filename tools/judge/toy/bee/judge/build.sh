@@ -1,17 +1,17 @@
 #!/bin/sh
-# Construction d'une variante (A = base, B = PR) du projet jouet, DANS le conteneur sans réseau.
-# Lancé par le juge commun (outils/juge/juge.py) : construire.sh <sources> <outillage_base> <sortie>
-#   <sources>         rle.c et rle.h de la variante (lecture seule)
-#   <outillage_base>  copie de la BASE : bee/judge/ et ses en-têtes dans base/
-#   <sortie>          dossier inscriptible : obj/ (un objet par fichier .c du projet) et execution
-# Le harnais est compilé avec rle.h de la BASE ; seul rle.c de la variante l'est avec ses propres en-têtes.
-# Les relevés d'analyse (nm, objdump) sont produits ensuite par le juge commun sur tous les objets de obj/.
+# Build of a variant (A = base, B = PR) of the toy project, INSIDE the container without network.
+# Run by the common judge (tools/judge/judge.py): build.sh <sources> <base_tooling> <output>
+#   <sources>         the variant's rle.c and rle.h (read-only)
+#   <base_tooling>    copy of the BASE: bee/judge/ and its headers in base/
+#   <output>          writable folder: obj/ (one object per .c file of the project) and execution
+# The harness is compiled with the BASE's rle.h; only the variant's rle.c is compiled with its own headers.
+# The analysis surveys (nm, objdump) are then made by the common judge on every object of obj/.
 set -eu
 umask 000
 sources="$1"
-outillage="$2"
-sortie="$3"
-mkdir -p "$sortie/obj"
-cc -O2 -g -std=gnu99 -I"$sources" -c "$sources/rle.c" -o "$sortie/obj/rle.o"
-cc -O2 -g -std=gnu99 -Wall -Wextra -I"$outillage/base" "$outillage/bee/judge/execution.c" "$sortie/obj/rle.o" -o "$sortie/execution"
-echo "construction terminée"
+tooling="$2"
+output="$3"
+mkdir -p "$output/obj"
+cc -O2 -g -std=gnu99 -I"$sources" -c "$sources/rle.c" -o "$output/obj/rle.o"
+cc -O2 -g -std=gnu99 -Wall -Wextra -I"$tooling/base" "$tooling/bee/judge/execution.c" "$output/obj/rle.o" -o "$output/execution"
+echo "build done"

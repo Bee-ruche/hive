@@ -3458,15 +3458,16 @@ exec {real} "$@"
         self.assertEqual(hive.SUSPECT_KINDS, tuple(re.findall(r'"([a-z_]+)"', listed.group(1))), "the judge's own list of kinds")
         self.assertTrue(all(hive.METRIC.match(f"suspects_{kind}") for kind in hive.SUSPECT_KINDS))
         path = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "judge.json"
-        flagged = [{"type": "octets", "detail": "rdtsc: 1 occurrence(s) at 0f31 in unit.o"}] * 2 + [{"type": "source", "detail": "a line"}]
+        flagged = [{"type": "bytes", "detail": "rdtsc: 1 occurrence(s) at 0f31 in unit.o"}] * 2 + [{"type": "source", "detail": "a line"}]
         path.write_text(json.dumps({"judge": {"suspicious_constructs": flagged, "suspicious_constructs_by_type": {
-            "octets": 2, "source": 1, "section": 0, "symbole": True, "instruction": "3", "appel_externe": -1, "architecture": 2.0,
-            "a_kind_of_its_own": 4, "octets\n": 5}}}), encoding="utf-8")
+            "bytes": 2, "source": 1, "section": 0, "symbol": True, "instruction": "3", "external_call": -1, "architecture": 2.0,
+            "a_kind_of_its_own": 4, "bytes\n": 5, "octets": 6}}}), encoding="utf-8")
         figures = hive.judge_figures({"suspects": "3", "outputs_compared": "12"}, path)
-        self.assertEqual(figures, {"suspects": 3, "outputs_compared": 12, "suspects_octets": 2, "suspects_source": 1})
-        self.assertEqual(hive.clean_report(figures, ["suspects", "suspects_octets"]), {"suspects": 3, "suspects_octets": 2},
+        self.assertEqual(figures, {"suspects": 3, "outputs_compared": 12, "suspects_bytes": 2, "suspects_source": 1},
+                         "a kind's word of before judge-v5 (octets) is no kind the judge knows")
+        self.assertEqual(hive.clean_report(figures, ["suspects", "suspects_bytes"]), {"suspects": 3, "suspects_bytes": 2},
                          "kept in the ledger when the project lists it, as any figure")
-        for other in ({"judge": {"suspicious_constructs_by_type": ["octets"]}}, {"judge": "octets"}, {"judge": {}}, {}):
+        for other in ({"judge": {"suspicious_constructs_by_type": ["bytes"]}}, {"judge": "bytes"}, {"judge": {}}, {}):
             path.write_text(json.dumps(other), encoding="utf-8")
             self.assertEqual(hive.judge_figures({"suspects": "0", "outputs_compared": "12"}, path), {"suspects": 0, "outputs_compared": 12})
 

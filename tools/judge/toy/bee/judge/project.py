@@ -1,73 +1,73 @@
-"""Greffon du projet jouet (rle) pour le juge commun Bee : modèle d'un greffon et sujet des méta-tests.
+"""The toy project's (rle) plugin for the Bee common judge: a model of a plugin and the meta-tests' subject.
 
-Un greffon est lu par le juge commun depuis la BASE de la PR, jamais depuis la PR. Il ne voit les
-sorties du conteneur qu'à travers lecture.Sorties et n'exécute rien de ce que le conteneur a produit.
-Il ne fait confiance qu'à la base (A) et à lui-même (ici, un codec de référence écrit en Python).
+The common judge reads a plugin from the PR's BASE, never from the PR. It sees the container's outputs
+only through reading.Outputs and runs nothing the container produced. It trusts only the base (A) and
+itself (here, a reference codec written in Python).
 """
 
 import re
 import subprocess
 import zlib
 
-from entrees import Entree, perturber
-from lecture import Erreur, Refus
+from inputs import Input, perturb
+from reading import JudgeError, Refusal
 
-RLE_OK, RLE_INVALIDE, RLE_TAMPON_TROP_PETIT = 0, -1, -2
+RLE_OK, RLE_INVALID, RLE_BUFFER_TOO_SMALL = 0, -1, -2
 
 
-def compresser(d):
-    """Codec de référence, identique octet pour octet à rle.c de la base (sinon : juge mal monté)."""
-    sortie = bytearray(len(d).to_bytes(4, "little"))
+def compress(d):
+    """The reference codec, byte for byte the base's rle.c (otherwise: judge badly set up)."""
+    output = bytearray(len(d).to_bytes(4, "little"))
 
-    def litteraux(debut, fin):
-        while debut < fin:
-            k = min(128, fin - debut)
-            sortie.append(k - 1)
-            sortie.extend(d[debut:debut + k])
-            debut += k
+    def literals(start, end):
+        while start < end:
+            k = min(128, end - start)
+            output.append(k - 1)
+            output.extend(d[start:start + k])
+            start += k
 
-    i = debut = 0
+    i = start = 0
     while i < len(d):
-        plage = 1
-        while i + plage < len(d) and plage < 130 and d[i + plage] == d[i]:
-            plage += 1
-        if plage >= 3:
-            litteraux(debut, i)
-            sortie += bytes([plage + 125, d[i]])
-            i += plage
-            debut = i
+        run = 1
+        while i + run < len(d) and run < 130 and d[i + run] == d[i]:
+            run += 1
+        if run >= 3:
+            literals(start, i)
+            output += bytes([run + 125, d[i]])
+            i += run
+            start = i
         else:
-            i += plage
-    litteraux(debut, len(d))
-    return bytes(sortie) + zlib.crc32(d).to_bytes(4, "little")
+            i += run
+    literals(start, len(d))
+    return bytes(output) + zlib.crc32(d).to_bytes(4, "little")
 
 
-def decompresser(z):
-    """Décompression de référence ; None si le flux est invalide."""
+def decompress(z):
+    """The reference decompression; None if the stream is invalid."""
     if len(z) < 8:
         return None
-    longueur, i, sortie = int.from_bytes(z[:4], "little"), 4, bytearray()
-    while i < len(z) - 4 and len(sortie) < longueur:
+    length, i, output = int.from_bytes(z[:4], "little"), 4, bytearray()
+    while i < len(z) - 4 and len(output) < length:
         c = z[i]
         i += 1
         if c < 128:
             if i + c + 1 > len(z) - 4:
                 return None
-            sortie += z[i:i + c + 1]
+            output += z[i:i + c + 1]
             i += c + 1
         else:
             if i >= len(z) - 4:
                 return None
-            sortie += bytes([z[i]]) * (c - 125)
+            output += bytes([z[i]]) * (c - 125)
             i += 1
-    if len(sortie) != longueur or i != len(z) - 4 or zlib.crc32(bytes(sortie)) != int.from_bytes(z[-4:], "little"):
+    if len(output) != length or i != len(z) - 4 or zlib.crc32(bytes(output)) != int.from_bytes(z[-4:], "little"):
         return None
-    return bytes(sortie)
+    return bytes(output)
 
 
 class Project:
-    NAME = "jouet"
-    PACKAGES = []                       # l'image commune suffit
+    NAME = "toy"
+    PACKAGES = []                       # the common image is enough
     SOURCES = ["rle.c", "rle.h"]
     REQUIRED_SOURCES = ["rle.c", "rle.h"]
     TOOLING = ["bee/judge"]
@@ -79,140 +79,140 @@ class Project:
     SCENARIOS = {"compression": "f", "decompression": "z"}
     INSTRUCTIONS = ("compression", "decompression")
     METRICS = [
-        ("debit_compression", "higher", "Mo/s"),
-        ("debit_decompression", "higher", "Mo/s"),
+        ("compression_throughput", "higher", "MB/s"),
+        ("decompression_throughput", "higher", "MB/s"),
         ("ratio", "higher", "ratio"),
-        ("memoire_max_ko", "lower", "Ko"),
+        ("max_memory_kb", "lower", "KB"),
     ]
-    METHOD = {"memoire": "ru_maxrss du processus du scénario « compression », lu par wait4"}
+    METHOD = {"max_memory_kb": "ru_maxrss of the process of the scenario « compression », read by wait4"}
 
     def __init__(self, options):
-        self.identique = options.pop("sortie_compressee", "identique") == "identique"
-        # A commit of the base whose rle.c joins the corpus, read from its git objects: judge.yml fetches them when
-        # the fork declares the commit (input `history`, or `historique`), before the PR; judging itself has no git transport.
-        self.commit_corpus = options.pop("commit_corpus", None)
-        if self.commit_corpus is not None and not re.fullmatch(r"[0-9a-f]{40}", self.commit_corpus):
-            raise Erreur("commit_corpus : un commit complet (40 chiffres hexadécimaux)")
+        self.identical = options.pop("compressed_output", "identical") == "identical"
+        # A commit of the base whose rle.c joins the corpus, read from its git objects: the judge's --history-only step
+        # fetches them when the project declares the commit (its history), before the PR; judging itself has no git transport.
+        self.corpus_commit = options.pop("corpus_commit", None)
+        if self.corpus_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", self.corpus_commit):
+            raise JudgeError("corpus_commit: a full commit (40 hexadecimal digits)")
         if options:
-            raise Erreur("options inconnues : " + ", ".join(sorted(options)))
-        self.VERIFICATION = {"sortie_compressee": "identique" if self.identique else "peut_changer"}
+            raise JudgeError("unknown options: " + ", ".join(sorted(options)))
+        self.VERIFICATION = {"compressed_output": "identical" if self.identical else "may_change"}
 
-    # -------------------------------------------------------------- entrées
+    # -------------------------------------------------------------- inputs
 
-    def corpus(self, outillage):
-        """Corpus fixe, décrit ici (un vrai projet le lit dans bee/corpus/ de la base)."""
-        texte = ("le juge commun lit les sorties sans les croire ; " * 40).encode()
-        fichiers = [texte, bytes(range(256)) * 16, b"\x00" * 5000 + b"\x01" * 3, b"ab" * 3000, bytes(300) + texte]
-        fichiers += [bytes((i * 7) % 251 for i in range(n)) for n in (1, 2, 127, 128, 129, 130, 131, 4096)]
-        if self.commit_corpus:
-            fichiers.append(self.objet_git(outillage, f"{self.commit_corpus}:rle.c"))
-        return [(f"k{i:03d}", d) for i, d in enumerate(fichiers)]
+    def corpus(self, tooling):
+        """A fixed corpus, written here (a real project reads it in the base's bee/corpus/)."""
+        text = ("the common judge reads the outputs without believing them; " * 40).encode()
+        files = [text, bytes(range(256)) * 16, b"\x00" * 5000 + b"\x01" * 3, b"ab" * 3000, bytes(300) + text]
+        files += [bytes((i * 7) % 251 for i in range(n)) for n in (1, 2, 127, 128, 129, 130, 131, 4096)]
+        if self.corpus_commit:
+            files.append(self.git_object(tooling, f"{self.corpus_commit}:rle.c"))
+        return [(f"k{i:03d}", d) for i, d in enumerate(files)]
 
-    def objet_git(self, outillage, objet):
-        """A git object of the base, read on the host (never fetched here): absent, a clean environment error."""
-        r = subprocess.run(["git", "-C", outillage, "cat-file", "blob", objet], capture_output=True, timeout=60)
+    def git_object(self, tooling, name):
+        """A git object of the base, read on the host (never fetched here): missing, a clean environment error."""
+        r = subprocess.run(["git", "-C", tooling, "cat-file", "blob", name], capture_output=True, timeout=60)
         if r.returncode != 0:
-            raise Erreur(f"corpus : objet git {objet} absent de la base ; déclarez son commit dans l'entrée "
-                         "« historique » de judge.yml")
-        self.VERIFICATION["historique"] = f"{objet} ({len(r.stdout)} octets)"
+            raise JudgeError(f"corpus: git object {name} missing from the base; declare its commit in the history the judge "
+                             "fetches (judge.py --history-only --history)")
+        self.VERIFICATION["history"] = f"{name} ({len(r.stdout)} bytes)"
         return r.stdout
 
-    def aleatoires(self, rng):
+    def random_inputs(self, rng):
         e = [b"", rng.randbytes(1), rng.randbytes(rng.randint(2, 300))]
         for _ in range(3):
-            bloc = bytearray()
-            while len(bloc) < rng.randint(1000, 60000):
-                bloc += bytes([rng.randrange(4)]) * rng.choice([1, 2, 3, 129, 130, 131, rng.randint(1, 400)])
-            e.append(bytes(bloc))
+            block = bytearray()
+            while len(block) < rng.randint(1000, 60000):
+                block += bytes([rng.randrange(4)]) * rng.choice([1, 2, 3, 129, 130, 131, rng.randint(1, 400)])
+            e.append(bytes(block))
         e.append(rng.randbytes(rng.randint(10000, 50000)))
         return [(f"a{i:03d}", d) for i, d in enumerate(e)]
 
-    def flux(self, rng, originaux):
-        """Flux produits ICI par le codec de référence, valides et invalides : (nom, flux, tampon, original ou None)."""
-        resultat = [(f"z{i:03d}", compresser(d), len(d), d) for i, (_, d) in enumerate(originaux)]
-        valides = [r for r in resultat if r[2] > 0]
-        for k in range(min(10, len(valides))):
-            _, z, taille, _ = valides[(k * 3) % len(valides)]
-            genre, nom = k % 5, f"y{k:03d}"
-            if genre == 0:
-                resultat.append((nom, z[:rng.randrange(1, len(z))], taille, None))
-            elif genre == 1:
+    def streams(self, rng, originals):
+        """Streams made HERE by the reference codec, valid and invalid: (name, stream, buffer, original or None)."""
+        result = [(f"z{i:03d}", compress(d), len(d), d) for i, (_, d) in enumerate(originals)]
+        valid = [r for r in result if r[2] > 0]
+        for k in range(min(10, len(valid))):
+            _, z, size, _ = valid[(k * 3) % len(valid)]
+            kind, name = k % 5, f"y{k:03d}"
+            if kind == 0:
+                result.append((name, z[:rng.randrange(1, len(z))], size, None))
+            elif kind == 1:
                 b = bytearray(z)
                 b[rng.randrange(4, len(z))] ^= 1 << rng.randrange(8)
-                resultat.append((nom, bytes(b), taille, None))
-            elif genre == 2:
-                resultat.append((nom, z, taille - 1, None))
-            elif genre == 3:
-                resultat.append((nom, z + rng.randbytes(3), taille, None))
+                result.append((name, bytes(b), size, None))
+            elif kind == 2:
+                result.append((name, z, size - 1, None))
+            elif kind == 3:
+                result.append((name, z + rng.randbytes(3), size, None))
             else:
-                resultat.append((nom, rng.randbytes(rng.randint(8, 500)), 1000, None))
-        return resultat
+                result.append((name, rng.randbytes(rng.randint(8, 500)), 1000, None))
+        return result
 
-    def entrees(self, fichiers, flux):
-        return [Entree("f", nom, d, len(d), d) for nom, d in fichiers] + \
-               [Entree("z", nom, z, taille, original) for nom, z, taille, original in flux]
+    def make_inputs(self, files, streams):
+        return [Input("f", name, d, len(d), d) for name, d in files] + \
+               [Input("z", name, z, size, original) for name, z, size, original in streams]
 
     def verification(self, rng, corpus):
-        fichiers = corpus + self.aleatoires(rng)
-        return self.entrees(fichiers, self.flux(rng, fichiers))
+        files = corpus + self.random_inputs(rng)
+        return self.make_inputs(files, self.streams(rng, files))
 
     def repetition(self, rng, corpus):
-        perturbes = perturber(rng, corpus)
-        return self.entrees(perturbes, [(nom, compresser(d), len(d), d) for nom, d in perturbes])
+        perturbed = perturb(rng, corpus)
+        return self.make_inputs(perturbed, [(name, compress(d), len(d), d) for name, d in perturbed])
 
-    def instructions(self, rng, corpus, prefixe):
-        return self.repetition(rng, [(nom, d[:prefixe]) for nom, d in corpus])
+    def instructions(self, rng, corpus, prefix):
+        return self.repetition(rng, [(name, d[:prefix]) for name, d in corpus])
 
-    # -------------------------------------------------------------- vérification
+    # -------------------------------------------------------------- verification
 
-    def compressee(self, a, b, relatif, original):
-        sortie_b = b.exiger("f", relatif)
-        if self.identique:
-            if sortie_b != a.exiger("f", relatif):
-                raise Refus(f"sortie compressée différente de la base : {relatif}")
-        elif decompresser(sortie_b) != original:
-            raise Refus(f"la sortie compressée ne redonne pas l'original : {relatif}")
-        return len(sortie_b)
+    def compressed(self, a, b, relative, original):
+        output_b = b.require("f", relative)
+        if self.identical:
+            if output_b != a.require("f", relative):
+                raise Refusal(f"compressed output differs from the base: {relative}")
+        elif decompress(output_b) != original:
+            raise Refusal(f"the compressed output does not give back the original: {relative}")
+        return len(output_b)
 
-    def juste(self, a, b, e, racine=""):
-        """Règle de justesse d'une entrée, la même quel que soit le mode où elle passe (vérification ou mesure :
-        le juge commun mêle des entrées de vérification aux entrées mesurées). Renvoie les octets traités."""
-        if e.cote == "f":
-            self.compressee(a, b, f"{racine}c/{e.nom}", e.donnees)
-            return len(e.donnees)
-        code_a, _ = a.statut("z", f"{racine}e/{e.nom}")
-        code_b, _ = b.statut("z", f"{racine}e/{e.nom}")
+    def correct(self, a, b, e, root=""):
+        """An input's rule of correctness, the same whatever the mode it passes in (verification or measurement: the
+        common judge mixes verification inputs into the measured ones). Returns the bytes handled."""
+        if e.side == "f":
+            self.compressed(a, b, f"{root}c/{e.name}", e.data)
+            return len(e.data)
+        code_a, _ = a.status("z", f"{root}e/{e.name}")
+        code_b, _ = b.status("z", f"{root}e/{e.name}")
         if code_a != code_b:
-            raise Refus(f"décompression de {e.nom} : code {code_b}, la base donne {code_a}")
-        sa, sb = a.exiger("z", f"{racine}d/{e.nom}"), b.exiger("z", f"{racine}d/{e.nom}")
+            raise Refusal(f"decompression of {e.name}: code {code_b}, the base gives {code_a}")
+        sa, sb = a.require("z", f"{root}d/{e.name}"), b.require("z", f"{root}d/{e.name}")
         if code_a == RLE_OK:
             if sa != sb:
-                raise Refus(f"décompression de {e.nom} différente de la base")
-            if e.attendu is not None and sa != e.attendu:
-                raise Erreur(f"la base ne redonne pas l'original de {e.nom} : juge mal monté")
+                raise Refusal(f"decompression of {e.name} differs from the base")
+            if e.expected is not None and sa != e.expected:
+                raise JudgeError(f"the base does not give back the original of {e.name}: judge badly set up")
         elif sa[:min(len(sa), len(sb))] != sb[:min(len(sa), len(sb))]:
-            raise Refus(f"décompression de {e.nom} en erreur : octets produits différents de la base")
+            raise Refusal(f"decompression of {e.name} in error: bytes produced differ from the base")
         return len(sa)
 
-    def verify(self, a, b, entrees):
-        for e in entrees:
-            if e.cote == "f" and a.exiger("f", f"c/{e.nom}") != compresser(e.donnees):
-                raise Erreur(f"la base ne donne pas la sortie de référence pour {e.nom} : juge mal monté")
-            self.juste(a, b, e)
-        return len(entrees)
+    def verify(self, a, b, inputs):
+        for e in inputs:
+            if e.side == "f" and a.require("f", f"c/{e.name}") != compress(e.data):
+                raise JudgeError(f"the base does not give the reference output for {e.name}: judge badly set up")
+            self.correct(a, b, e)
+        return len(inputs)
 
-    def fixed(self, sorties, corpus):
+    def fixed(self, outputs, corpus):
         total = sum(len(d) for _, d in corpus)
-        compresse = sum(len(sorties.exiger("f", f"c/{nom}")) for nom, _ in corpus)
-        return {"ratio": total / compresse if compresse else None}
+        compressed = sum(len(outputs.require("f", f"c/{name}")) for name, _ in corpus)
+        return {"ratio": total / compressed if compressed else None}
 
-    def scenario(self, s, a, b, entrees, mesure):
-        """Chaque sortie du scénario est vérifiée par la règle de justesse, quelle que soit son entrée ; le ratio est
-        relu sur les sorties chronométrées (il remplace celui de fixes, lu sur la vérification)."""
-        cpu = mesure["utilisateur_s"] + mesure["systeme_s"]
-        traites = [self.juste(a, b, e, f"{s}/") for e in entrees if e.cote == self.SCENARIOS[s]]
-        valeurs = {f"debit_{s}": sum(traites) / 1e6 / cpu if cpu > 0 else None}
+    def scenario(self, s, a, b, inputs, measurement):
+        """Each output of the scenario is checked by the rule of correctness, whatever its input; the ratio is read
+        again on the timed outputs (it replaces fixed()'s, read on verification)."""
+        cpu = measurement["user_s"] + measurement["system_s"]
+        handled = [self.correct(a, b, e, f"{s}/") for e in inputs if e.side == self.SCENARIOS[s]]
+        values = {f"{s}_throughput": sum(handled) / 1e6 / cpu if cpu > 0 else None}
         if s == "compression":
-            compresse = sum(len(b.exiger("f", f"compression/c/{e.nom}")) for e in entrees if e.cote == "f")
-            valeurs.update(memoire_max_ko=mesure["maxrss_ko"], ratio=sum(traites) / compresse if compresse else None)
-        return valeurs, len(traites)
+            compressed = sum(len(b.require("f", f"compression/c/{e.name}")) for e in inputs if e.side == "f")
+            values.update(max_memory_kb=measurement["maxrss_kb"], ratio=sum(handled) / compressed if compressed else None)
+        return values, len(handled)

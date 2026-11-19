@@ -5,7 +5,7 @@
 # containers of this image, without network, read-only, without privilege (tools/judge/judge.py).
 #
 # tools/judge/container.py adds to this file a RUN line with the project's own packages (the plugin's
-# PAQUETS), then the unprivileged user. The image's label is the fingerprint of the whole.
+# PACKAGES), then the unprivileged user. The image's label is the fingerprint of the whole.
 #
 # Base image pinned by fingerprint (multi-architecture index: x86-64 and ARM64), pulled from the mirror
 # of Docker Hub that Google keeps (no anonymous rate limit on shared CI machines).
@@ -19,4 +19,4 @@ RUN apt-get update -q \
  && rm -rf /var/lib/apt/lists/*
 
 # Link to the root: each folder of the judge is mounted there at its own depth, at the same rank everywhere (container.LINK).
-RUN ln -s / /.racine
+RUN ln -s / /.root

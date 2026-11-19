@@ -3610,8 +3610,8 @@ def judge_of(registry_root, settings, workdir):
 
 # The kinds of suspect the common judge counts (tools/judge/judge.py: SEVERITY, its own words; a test holds the two
 # lists equal). The hive reads no other key of that count.
-SUSPECT_KINDS = ("analyse_incomplete", "architecture", "appel_interdit", "symbole_interdit", "instruction", "octets", "section",
-                 "symbole", "symbole_defini", "appel_externe", "source")
+SUSPECT_KINDS = ("incomplete_analysis", "architecture", "forbidden_call", "forbidden_symbol", "instruction", "bytes", "section",
+                 "symbol", "defined_symbol", "external_call", "source")
 
 
 def judge_figures(published, report_path):

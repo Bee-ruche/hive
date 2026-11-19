@@ -26,8 +26,8 @@
      « <timeout in seconds> <valgrind: 0 or 1> », then the plan: one command per line, fields separated by
      tabs: label (letters, digits, « _ » and « - »), parameters, program, arguments.
    Output: one JSON line per command, in the plan's order:
-     {"jeton": "...", "etiquette": "...", "code": 0, "signal": 0, "utilisateur_s": 0.0, "systeme_s": 0.0,
-      "mur_s": 0.0, "maxrss_ko": 0, "instructions": null}
+     {"token": "...", "label": "...", "code": 0, "signal": 0, "user_s": 0.0, "system_s": 0.0,
+      "wall_s": 0.0, "maxrss_kb": 0, "instructions": null}
    Exit code: 0 if the plan was read and all the commands launched (whatever their code), 2 otherwise. */
 
 #define _GNU_SOURCE
@@ -46,33 +46,33 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CHAMPS_MAX 32
-#define LIGNE_MAX 4096
-#define QUEUE_MAX 65536
-#define PARAMETRES 256 /* the child's parameters: a record of fixed size, whatever the mode */
+#define FIELDS_MAX 32
+#define LINE_MAX_BYTES 4096
+#define TAIL_MAX 65536
+#define PARAMETERS 256 /* the child's parameters: a record of fixed size, whatever the mode */
 
-static char *const ENVIRONNEMENT[] = {"HOME=/tmp", "LC_ALL=C", "PATH=/usr/bin:/bin", NULL}; /* the same for each child */
-static volatile pid_t fils_courant = 0;
+static char *const ENVIRONMENT[] = {"HOME=/tmp", "LC_ALL=C", "PATH=/usr/bin:/bin", NULL}; /* the same for each child */
+static volatile pid_t current_child = 0;
 
-static void sur_alarme(int signal_recu)
+static void on_alarm(int received_signal)
 {
-    (void)signal_recu;
-    if (fils_courant > 0)
-        kill(fils_courant, SIGKILL);
+    (void)received_signal;
+    if (current_child > 0)
+        kill(current_child, SIGKILL);
 }
 
-static void mourir(const char *message)
+static void die(const char *message)
 {
     fprintf(stderr, "chrono: %s\n", message);
     exit(2);
 }
 
-static double secondes(struct timeval t)
+static double seconds(struct timeval t)
 {
     return (double)t.tv_sec + (double)t.tv_usec * 1e-6;
 }
 
-static double maintenant(void)
+static double now(void)
 {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -81,35 +81,35 @@ static double maintenant(void)
 
 /* Last non-empty line of the error output: « ==PID== I refs: 1,234,567 » (Cachegrind's summary).
    Returns the number, or -1 if the last line is not a well-formed summary. */
-static long long releve_instructions(const char *texte, size_t n)
+static long long instructions_read(const char *text, size_t n)
 {
-    size_t fin = n, debut;
+    size_t end = n, start;
     const char *p;
     long long total = 0;
-    int chiffres = 0;
-    while (fin > 0 && (texte[fin - 1] == '\n' || texte[fin - 1] == '\r' || texte[fin - 1] == ' '))
-        fin--;
-    debut = fin;
-    while (debut > 0 && texte[debut - 1] != '\n')
-        debut--;
-    p = strstr(texte + debut, "I refs:");
-    if (!p || p >= texte + fin)
+    int digits = 0;
+    while (end > 0 && (text[end - 1] == '\n' || text[end - 1] == '\r' || text[end - 1] == ' '))
+        end--;
+    start = end;
+    while (start > 0 && text[start - 1] != '\n')
+        start--;
+    p = strstr(text + start, "I refs:");
+    if (!p || p >= text + end)
         return -1;
-    for (p += 7; p < texte + fin; p++)
+    for (p += 7; p < text + end; p++)
     {
-        if (*p == ' ' && !chiffres)
+        if (*p == ' ' && !digits)
             continue;
         if (*p == ',')
             continue;
         if (*p < '0' || *p > '9' || total > 100000000000000000LL)
             return -1;
         total = total * 10 + (*p - '0');
-        chiffres++;
+        digits++;
     }
-    return chiffres ? total : -1;
+    return digits ? total : -1;
 }
 
-static int etiquette_valide(const char *e)
+static int valid_label(const char *e)
 {
     if (!*e || strlen(e) > 64)
         return 0;
@@ -121,155 +121,155 @@ static int etiquette_valide(const char *e)
 
 int main(int argc, char **argv)
 {
-    char jeton[80], ligne[LIGNE_MAX];
-    unsigned delai = 0;
+    char token[80], line[LINE_MAX_BYTES];
+    unsigned timeout = 0;
     int valgrind = 0;
-    static char queue[QUEUE_MAX + 1];
-    char (*lignes)[LIGNE_MAX] = NULL;
-    size_t nombre = 0, capacite = 0, i, n;
-    int nul;
+    static char tail[TAIL_MAX + 1];
+    char (*lines)[LINE_MAX_BYTES] = NULL;
+    size_t count = 0, capacity = 0, i, n;
+    int null_fd;
     struct sigaction action;
 
     umask(0); /* inherited by the child: the host must be able to erase what it writes (another user) */
     /* First: nobody (same uid) opens /proc/<this process>/fd or /mem any more. */
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0)
-        mourir("prctl(PR_SET_DUMPABLE) failed");
+        die("prctl(PR_SET_DUMPABLE) failed");
 
     (void)argv;
     if (argc != 1 || chdir("/") != 0)
-        mourir("usage: chrono, without argument (token, options and plan on standard input)");
+        die("usage: chrono, without argument (token, options and plan on standard input)");
 
-    if (!fgets(jeton, sizeof(jeton), stdin))
-        mourir("token missing on standard input");
-    jeton[strcspn(jeton, "\r\n")] = 0;
-    n = strlen(jeton);
-    if (n < 16 || n > 64 || strspn(jeton, "0123456789abcdef") != n)
-        mourir("invalid token");
-    if (!fgets(ligne, sizeof(ligne), stdin) || sscanf(ligne, "%u %d", &delai, &valgrind) != 2)
-        mourir("options missing (timeout, valgrind)");
+    if (!fgets(token, sizeof(token), stdin))
+        die("token missing on standard input");
+    token[strcspn(token, "\r\n")] = 0;
+    n = strlen(token);
+    if (n < 16 || n > 64 || strspn(token, "0123456789abcdef") != n)
+        die("invalid token");
+    if (!fgets(line, sizeof(line), stdin) || sscanf(line, "%u %d", &timeout, &valgrind) != 2)
+        die("options missing (timeout, valgrind)");
 
-    while (fgets(ligne, sizeof(ligne), stdin))
+    while (fgets(line, sizeof(line), stdin))
     {
-        ligne[strcspn(ligne, "\r\n")] = 0;
-        if (!ligne[0])
+        line[strcspn(line, "\r\n")] = 0;
+        if (!line[0])
             continue;
-        if (nombre == capacite)
+        if (count == capacity)
         {
-            capacite = capacite ? 2 * capacite : 16;
-            lignes = realloc(lignes, capacite * sizeof(*lignes));
-            if (!lignes)
-                mourir("out of memory");
+            capacity = capacity ? 2 * capacity : 16;
+            lines = realloc(lines, capacity * sizeof(*lines));
+            if (!lines)
+                die("out of memory");
         }
-        memcpy(lignes[nombre++], ligne, LIGNE_MAX);
+        memcpy(lines[count++], line, LINE_MAX_BYTES);
     }
 
-    nul = open("/dev/null", O_RDWR | O_CLOEXEC);
-    if (nul < 0)
-        mourir("/dev/null not found");
+    null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (null_fd < 0)
+        die("/dev/null not found");
     /* Standard input (the pipe that carried the token) closes here: the child does not inherit it. */
-    if (dup2(nul, 0) < 0)
-        mourir("dup2 failed");
+    if (dup2(null_fd, 0) < 0)
+        die("dup2 failed");
 
     memset(&action, 0, sizeof(action));
-    action.sa_handler = sur_alarme;
+    action.sa_handler = on_alarm;
     sigaction(SIGALRM, &action, NULL);
 
-    for (i = 0; i < nombre; i++)
+    for (i = 0; i < count; i++)
     {
-        char *champs[CHAMPS_MAX + 1], *sauvegarde = NULL, *morceau, parametres[PARAMETRES];
-        int nchamps = 0, statut = 0, tube[2] = {-1, -1}, entree[2] = {-1, -1};
-        size_t remplissage = 0;
+        char *fields[FIELDS_MAX + 1], *saved = NULL, *piece, parameters[PARAMETERS];
+        int nfields = 0, wait_status = 0, err_pipe[2] = {-1, -1}, in_pipe[2] = {-1, -1};
+        size_t filled = 0;
         long long instructions = -1;
         struct rusage ru;
-        double debut, fin;
+        double start, end;
         pid_t pid;
 
-        for (morceau = strtok_r(lignes[i], "\t", &sauvegarde); morceau && nchamps < CHAMPS_MAX;
-             morceau = strtok_r(NULL, "\t", &sauvegarde))
-            champs[nchamps++] = morceau;
-        champs[nchamps] = NULL;
-        if (nchamps < 3 || !etiquette_valide(champs[0]))
-            mourir("invalid plan line");
+        for (piece = strtok_r(lines[i], "\t", &saved); piece && nfields < FIELDS_MAX;
+             piece = strtok_r(NULL, "\t", &saved))
+            fields[nfields++] = piece;
+        fields[nfields] = NULL;
+        if (nfields < 3 || !valid_label(fields[0]))
+            die("invalid plan line");
 
-        /* The parameters (the mode included): PARAMETRES bytes, the line padded with spaces and ended by a line
+        /* The parameters (the mode included): PARAMETERS bytes, the line padded with spaces and ended by a line
            feed, in a pipe the child reads, then closes. */
-        n = strlen(champs[1]);
-        if (n >= PARAMETRES)
-            mourir("parameters too long");
-        memset(parametres, ' ', PARAMETRES - 1);
-        memcpy(parametres, champs[1], n);
-        parametres[PARAMETRES - 1] = '\n';
-        if (pipe2(tube, O_CLOEXEC) != 0 || pipe2(entree, O_CLOEXEC) != 0 || write(entree[1], parametres, PARAMETRES) != PARAMETRES
-            || close(entree[1]) != 0)
-            mourir("pipes failed");
+        n = strlen(fields[1]);
+        if (n >= PARAMETERS)
+            die("parameters too long");
+        memset(parameters, ' ', PARAMETERS - 1);
+        memcpy(parameters, fields[1], n);
+        parameters[PARAMETERS - 1] = '\n';
+        if (pipe2(err_pipe, O_CLOEXEC) != 0 || pipe2(in_pipe, O_CLOEXEC) != 0 || write(in_pipe[1], parameters, PARAMETERS) != PARAMETERS
+            || close(in_pipe[1]) != 0)
+            die("pipes failed");
         fflush(stdout);
-        debut = maintenant();
+        start = now();
         pid = fork();
         if (pid < 0)
-            mourir("fork failed");
+            die("fork failed");
         if (pid == 0)
         {
-            if (dup2(entree[0], 0) < 0 || dup2(nul, 1) < 0 || dup2(tube[1], 2) < 0)
+            if (dup2(in_pipe[0], 0) < 0 || dup2(null_fd, 1) < 0 || dup2(err_pipe[1], 2) < 0)
                 _exit(126);
-            execve(champs[2], champs + 2, ENVIRONNEMENT);
+            execve(fields[2], fields + 2, ENVIRONMENT);
             _exit(127);
         }
-        fils_courant = pid;
-        close(entree[0]);
-        if (delai)
-            alarm(delai);
+        current_child = pid;
+        close(in_pipe[0]);
+        if (timeout)
+            alarm(timeout);
         {
             /* Reads everything the child writes on its error output; keeps only the end. */
-            char morceau_lu[8192];
-            close(tube[1]);
+            char chunk[8192];
+            close(err_pipe[1]);
             for (;;)
             {
-                ssize_t lu = read(tube[0], morceau_lu, sizeof(morceau_lu));
-                if (lu < 0 && errno == EINTR)
+                ssize_t got = read(err_pipe[0], chunk, sizeof(chunk));
+                if (got < 0 && errno == EINTR)
                     continue;
-                if (lu <= 0)
+                if (got <= 0)
                     break;
-                if ((size_t)lu >= QUEUE_MAX)
+                if ((size_t)got >= TAIL_MAX)
                 {
-                    memcpy(queue, morceau_lu + lu - QUEUE_MAX, QUEUE_MAX);
-                    remplissage = QUEUE_MAX;
+                    memcpy(tail, chunk + got - TAIL_MAX, TAIL_MAX);
+                    filled = TAIL_MAX;
                 }
                 else
                 {
-                    if (remplissage + (size_t)lu > QUEUE_MAX)
+                    if (filled + (size_t)got > TAIL_MAX)
                     {
-                        size_t garder = QUEUE_MAX - (size_t)lu;
-                        memmove(queue, queue + remplissage - garder, garder);
-                        remplissage = garder;
+                        size_t keep = TAIL_MAX - (size_t)got;
+                        memmove(tail, tail + filled - keep, keep);
+                        filled = keep;
                     }
-                    memcpy(queue + remplissage, morceau_lu, (size_t)lu);
-                    remplissage += (size_t)lu;
+                    memcpy(tail + filled, chunk, (size_t)got);
+                    filled += (size_t)got;
                 }
             }
-            close(tube[0]);
-            queue[remplissage] = 0;
+            close(err_pipe[0]);
+            tail[filled] = 0;
             if (valgrind)
-                instructions = releve_instructions(queue, remplissage);
-            fwrite(queue, 1, remplissage, stderr); /* the child's log, for the host */
+                instructions = instructions_read(tail, filled);
+            fwrite(tail, 1, filled, stderr); /* the child's log, for the host */
         }
-        while (wait4(pid, &statut, 0, &ru) < 0)
+        while (wait4(pid, &wait_status, 0, &ru) < 0)
             if (errno != EINTR)
-                mourir("wait4 failed");
+                die("wait4 failed");
         alarm(0);
-        fils_courant = 0;
-        fin = maintenant();
+        current_child = 0;
+        end = now();
 
-        printf("{\"jeton\": \"%s\", \"etiquette\": \"%s\", \"code\": %d, \"signal\": %d, \"utilisateur_s\": %.6f, "
-               "\"systeme_s\": %.6f, \"mur_s\": %.6f, \"maxrss_ko\": %ld, \"instructions\": ",
-               jeton, champs[0], WIFEXITED(statut) ? WEXITSTATUS(statut) : -1,
-               WIFSIGNALED(statut) ? WTERMSIG(statut) : 0, secondes(ru.ru_utime), secondes(ru.ru_stime),
-               fin - debut, ru.ru_maxrss);
+        printf("{\"token\": \"%s\", \"label\": \"%s\", \"code\": %d, \"signal\": %d, \"user_s\": %.6f, "
+               "\"system_s\": %.6f, \"wall_s\": %.6f, \"maxrss_kb\": %ld, \"instructions\": ",
+               token, fields[0], WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : -1,
+               WIFSIGNALED(wait_status) ? WTERMSIG(wait_status) : 0, seconds(ru.ru_utime), seconds(ru.ru_stime),
+               end - start, ru.ru_maxrss);
         if (instructions >= 0)
             printf("%lld}\n", instructions);
         else
             printf("null}\n");
         fflush(stdout);
     }
-    free(lignes);
+    free(lines);
     return 0;
 }

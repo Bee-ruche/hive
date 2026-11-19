@@ -7,5 +7,3 @@ The files under `workflows/` are copied unchanged from `Bee-ruche/registre` at c
   cjson), as `Bee-ruche/registre` runs them. They are kept here as the reference the hive's tests read (each job's
   `timeout-minutes`, and the paths each step is given: `tools/hive/test_hive.py`) until the protocol's own reusable
   workflow replaces them.
-- `workflows/judge.yml`: the reusable workflow through which a fork's own CI calls the common judge
-  (`docs/common-judge.md`). The judge's tests read it here (`TestJudgeWorkflow` in `tools/judge/test_judge.py`).

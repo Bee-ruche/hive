@@ -28,17 +28,17 @@ def one_sided_p(n, k):
 
 
 def sign_test(values_a, values_b, direction):
-    """Standard sign test on the pairs (A_i, B_i).
+    """Standard sign test on the pairs (A_i, B_i); direction: « higher » or « lower » (which is better).
 
     Ties are set aside; the threshold k and the p-values are computed on the N' remaining pairs.
     If every pair is a tie (N' = 0), there is neither gain nor degradation."""
     pairs = [(a, b) for a, b in zip(values_a, values_b) if a is not None and b is not None]
-    best_one = (lambda a, b: b > a) if direction == "plus_haut" else (lambda a, b: b < a)
+    best_one = (lambda a, b: b > a) if direction == "higher" else (lambda a, b: b < a)
     b_wins = sum(1 for a, b in pairs if best_one(a, b))
     a_wins = sum(1 for a, b in pairs if best_one(b, a))
     n_useful = a_wins + b_wins
     k = sign_threshold(n_useful) if n_useful else None
-    return {  # keys in English from judge-v4 on (ruche-0148), as bee record-measurement reads an ab.py report
+    return {  # English keys (ruche-0148), as bee record-measurement reads an ab.py report
         "pairs": len(pairs), "useful_pairs": n_useful,
         "b_wins": b_wins, "a_wins": a_wins, "ties": len(pairs) - n_useful,
         "threshold_k": k,
@@ -59,7 +59,7 @@ def summary(values_of):
 def relative_gain(a, b, direction):
     if a in (None, 0) or b is None:
         return None
-    return (b / a - 1.0) if direction == "plus_haut" else (1.0 - b / a)
+    return (b / a - 1.0) if direction == "higher" else (1.0 - b / a)
 
 
 def description_machine():

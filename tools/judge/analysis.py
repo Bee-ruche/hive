@@ -9,7 +9,7 @@ the clock, constructors run before the harness, symbols that replace the harness
 parsing, encoding); they show in the compiled objects. This module compares the surveys of the PR (B)
 with those of the base (A), produced in the container by the plugin's build script (nm, objdump),
 and lists what B adds. The plugin gives the project's namespace (PREFIXES) and the external
-functions it may call besides the common list (PERMIS).
+functions it may call besides the common list (ALLOWED).
 
 A suspicious construct is not a fault: it only withdraws the trust in the measurements, and
 the registry then requires a guardian's review (R3). This module reads only text and bytes; it executes nothing.
@@ -21,7 +21,7 @@ from collections import Counter
 
 # Functions that serve to deceive the measurement (clock, processes, environment, signals, system calls), not to
 # compress or to parse: never allowed, and flagged by their exact name BEFORE any exemption by the project's
-# namespace or by the plugin's PERMIS list (adversarial review no. 2 of 28 October: a prefix « ge » covered getenv).
+# namespace or by the plugin's ALLOWED list (adversarial review no. 2 of 28 October: a prefix « ge » covered getenv).
 NEVER_ALLOWED = frozenset({
     "syscall", "clock_gettime", "clock_getres", "gettimeofday", "time", "times", "getrusage", "fork", "vfork",
     "clone", "execve", "execv", "execvp", "execl", "execlp", "system", "popen", "posix_spawn", "dlopen", "dlsym",
@@ -52,17 +52,17 @@ SUSPICIOUS_MNEMONICS = {
     "xgetbv": "reading the processor's state",
     "(bad)": "bytes the disassembler cannot decode",
     ".byte": "bytes the disassembler cannot decode",
-    "preambule_valgrind": "Valgrind client request preamble (suspends the instruction count)",
+    "valgrind_preamble": "Valgrind client request preamble (suspends the instruction count)",
     "segment_wx": "memory both writable and executable in the linked program",
-    "pile_executable": "executable stack in the linked program",
+    "executable_stack": "executable stack in the linked program",
 }
 # Preamble of Valgrind's client requests on x86-64: rol $3, $13, $61, $51 on %rdi.
 VALGRIND_PREAMBLE = re.compile(r"\brol\s+\$0x(?:3|d|3d|33),%rdi\b")
-SEQUENCES = {nom: re.compile(b"(?=(" + reason + b"))") for nom, reason in (
+SEQUENCES = {name: re.compile(b"(?=(" + reason + b"))") for name, reason in (
     ("syscall", rb"\x0f\x05"), ("sysenter", rb"\x0f\x34"), ("int", rb"\xcd\x80"), ("rdtsc", rb"\x0f\x31"),
     ("rdtscp", rb"\x0f\x01\xf9"), ("rdpmc", rb"\x0f\x33"), ("cpuid", rb"\x0f\xa2"), ("xgetbv", rb"\x0f\x01\xd0"),
     ("rdrand", rb"\x0f\xc7[\xf0-\xf7]"), ("rdseed", rb"\x0f\xc7[\xf8-\xff]"), ("rdpid", rb"\xf3[\x40-\x4f]?\x0f\xc7[\xf8-\xff]"),
-    ("preambule_valgrind", rb"\x48\xc1\xc7\x03\x48\xc1\xc7\x0d\x48\xc1\xc7\x3d\x48\xc1\xc7\x33"))}
+    ("valgrind_preamble", rb"\x48\xc1\xc7\x03\x48\xc1\xc7\x0d\x48\xc1\xc7\x3d\x48\xc1\xc7\x33"))}
 
 DETAIL_MAX = 300  # characters of a detail: names, paths and extracts come from the judged code (ruche-0117)
 ALLOWED_SECTIONS = re.compile(
@@ -100,9 +100,9 @@ def symbols(text):
         chunks = rest_of.split()
         if len(chunks) < 2:
             continue
-        nom, type_ = chunks[0], chunks[1]
+        name, type_ = chunks[0], chunks[1]
         file = file.rsplit("/", 1)[-1]
-        result.setdefault((nom, type_), file)
+        result.setdefault((name, type_), file)
     return result
 
 
@@ -117,7 +117,7 @@ def sections(text):
 
 
 def mnemonics_found(text):
-    """objdump -d --no-show-raw-insn : suspicious mnemonics among the words of each instruction, « (bad) », Valgrind preamble."""
+    """objdump -d --no-show-raw-insn: suspicious mnemonics among the words of each instruction, « (bad) », Valgrind preamble."""
     accounts = {}
     for line_text in text.splitlines():
         if "\t" not in line_text:
@@ -129,7 +129,7 @@ def mnemonics_found(text):
             if word in SUSPICIOUS_MNEMONICS:
                 accounts[word] = accounts.get(word, 0) + 1
         if VALGRIND_PREAMBLE.search(instruction):
-            accounts["preambule_valgrind"] = accounts.get("preambule_valgrind", 0) + 1
+            accounts["valgrind_preamble"] = accounts.get("valgrind_preamble", 0) + 1
     return accounts
 
 
@@ -152,8 +152,8 @@ def executable_bytes(data):
             raise ValueError("unreadable section table")
         names = struct.unpack_from("<IIQQQQ", slice_of(sh + sh_names * sh_size, 64))[4]
         for i in range(sh_count):
-            nom, kind_of, attributes, _, beginning, size = struct.unpack_from("<IIQQQQ", slice_of(sh + i * sh_size, 64))
-            if kind_of != 8 and (attributes & 4 or data[names + nom:names + nom + 5] == b".text"):
+            name, kind_of, attributes, _, beginning, size = struct.unpack_from("<IIQQQQ", slice_of(sh + i * sh_size, 64))
+            if kind_of != 8 and (attributes & 4 or data[names + name:names + name + 5] == b".text"):
                 if attributes & 0x800:
                     raise ValueError("compressed executable section")
                 chunks.append(slice_of(beginning, size))
@@ -168,28 +168,28 @@ def executable_bytes(data):
                 flag_bits += ["segment_wx"] if attributes & 2 else []
             stack_of = attributes if kind_of == 0x6474E551 else stack_of
         if stack_of is None or stack_of & 1:
-            flag_bits.append("pile_executable")
+            flag_bits.append("executable_stack")
     return chunks, flag_bits
 
 
 def occurrences(files):
     """Hits of SEQUENCES and memory flags in [(name, ELF bytes)], keyed by (file, name, bytes around); unreadable files."""
     accounts, unreadables = Counter(), []
-    for nom, data in files:
+    for name, data in files:
         try:
             chunks, flag_bits = executable_bytes(data)
         except (ValueError, struct.error) as e:
-            unreadables.append(f"{nom}: executable bytes unreadable ({e}): analysis incomplete")
+            unreadables.append(f"{name}: executable bytes unreadable ({e}): analysis incomplete")
             continue
-        accounts.update((nom, d, b"") for d in flag_bits)
+        accounts.update((name, d, b"") for d in flag_bits)
         for word, reason in SEQUENCES.items():
-            accounts.update((nom, word, m[max(0, t.start() - 6):t.end(1) + 6]) for m in chunks for t in reason.finditer(m))
+            accounts.update((name, word, m[max(0, t.start() - 6):t.end(1) + 6]) for m in chunks for t in reason.finditer(m))
     return accounts, unreadables
 
 
 def analyse(surveys_a, surveys_b, texts_a, texts_b, prefixes=(), allowed_set=()):
-    """surveys_*: {"symboles": nm text, "sections": objdump -h text, "desassemblage": objdump -d text}.
-    Also "objets" and "programme": [(name, ELF bytes)]; texts_*: the judged files of A and B, {path: text}.
+    """surveys_*: {"symbols": nm text, "sections": objdump -h text, "disassembly": objdump -d text}.
+    Also "objects" and "program": [(name, ELF bytes)]; texts_*: the judged files of A and B, {path: text}.
 
     prefixes:    the project's namespace (names it defines and calls between its files);
     allowed_set: external functions allowed besides UNDEFINED_ALLOWED.
@@ -197,38 +197,38 @@ def analyse(surveys_a, surveys_b, texts_a, texts_b, prefixes=(), allowed_set=())
     prefixes = tuple(prefixes)
     all_allowed = UNDEFINED_ALLOWED | frozenset(allowed_set)
     suspects = []
-    sym_a, sym_b = symbols(surveys_a["symboles"]), symbols(surveys_b["symboles"])
-    defined_a = {nom for (nom, t) in sym_a if t not in "Uuvw" and t.isupper()}
-    undefined_a = {nom for (nom, t) in sym_a if t in ("U", "w", "v")}
-    for (nom, t), file in sorted(sym_b.items()):
-        if nom in NEVER_ALLOWED and (nom, t) not in sym_a:
-            suspects.append({"type": "appel_interdit" if t in ("U", "w", "v") else "symbole_interdit",
-                             "detail": f"{nom} ({file}): a function that serves to deceive the measurement (never allowed)"})
-        elif t in ("i", "u") and (nom, t) not in sym_a:
-            suspects.append({"type": "symbole", "detail": f"{nom} ({file}): indirect function or unique symbol (type {t})"})
+    sym_a, sym_b = symbols(surveys_a["symbols"]), symbols(surveys_b["symbols"])
+    defined_a = {name for (name, t) in sym_a if t not in "Uuvw" and t.isupper()}
+    undefined_a = {name for (name, t) in sym_a if t in ("U", "w", "v")}
+    for (name, t), file in sorted(sym_b.items()):
+        if name in NEVER_ALLOWED and (name, t) not in sym_a:
+            suspects.append({"type": "forbidden_call" if t in ("U", "w", "v") else "forbidden_symbol",
+                             "detail": f"{name} ({file}): a function that serves to deceive the measurement (never allowed)"})
+        elif t in ("i", "u") and (name, t) not in sym_a:
+            suspects.append({"type": "symbol", "detail": f"{name} ({file}): indirect function or unique symbol (type {t})"})
         elif t in ("U", "w", "v"):
-            if nom not in all_allowed and nom not in undefined_a and not (prefixes and nom.startswith(prefixes)):
-                suspects.append({"type": "appel_externe", "detail": f"{nom} ({file}): external function outside the allowed list"})
-        elif t.isupper() and nom not in defined_a and not (prefixes and nom.startswith(prefixes)):
-            suspects.append({"type": "symbole_defini", "detail": f"{nom} ({file}): global symbol outside the project's namespace "
+            if name not in all_allowed and name not in undefined_a and not (prefixes and name.startswith(prefixes)):
+                suspects.append({"type": "external_call", "detail": f"{name} ({file}): external function outside the allowed list"})
+        elif t.isupper() and name not in defined_a and not (prefixes and name.startswith(prefixes)):
+            suspects.append({"type": "defined_symbol", "detail": f"{name} ({file}): global symbol outside the project's namespace "
                                                                  "(it could replace a function of the harness or of the libc)"})
     sec_a, sec_b = sections(surveys_a["sections"]), sections(surveys_b["sections"])
-    for nom in sorted(sec_b - sec_a):
-        if FORBIDDEN_SECTIONS.match(nom) or not ALLOWED_SECTIONS.match(nom):
-            suspects.append({"type": "section", "detail": f"{nom}: section run before the program, or unusual"})
-    mn_a, mn_b = mnemonics_found(surveys_a["desassemblage"]), mnemonics_found(surveys_b["desassemblage"])
+    for name in sorted(sec_b - sec_a):
+        if FORBIDDEN_SECTIONS.match(name) or not ALLOWED_SECTIONS.match(name):
+            suspects.append({"type": "section", "detail": f"{name}: section run before the program, or unusual"})
+    mn_a, mn_b = mnemonics_found(surveys_a["disassembly"]), mnemonics_found(surveys_b["disassembly"])
     for word, n in sorted(mn_b.items()):
         if n > mn_a.get(word, 0):
-            cause = "Valgrind client request preamble (suspends the instruction count)" if word == "preambule_valgrind" \
+            cause = "Valgrind client request preamble (suspends the instruction count)" if word == "valgrind_preamble" \
                 else SUSPICIOUS_MNEMONICS[word]
             suspects.append({"type": "instruction", "detail": f"{word}: {n} occurrence(s) against {mn_a.get(word, 0)} in the base ({cause})"})
-    for survey, or_else in (("objets", "the objects' executable sections"), ("programme", "the linked program's executable segments")):
+    for survey, or_else in (("objects", "the objects' executable sections"), ("program", "the linked program's executable segments")):
         (oc_a, unreadable_a), (oc_b, unreadable_b) = occurrences(surveys_a[survey]), occurrences(surveys_b[survey])
-        suspects += [{"type": "analyse_incomplete", "detail": d} for d in unreadable_a + unreadable_b]
-        for (nom, word, around), n in sorted(oc_b.items()):
-            if n > oc_a[(nom, word, around)]:
-                suspects.append({"type": "octets", "detail": f"{word}: {n} occurrence(s) at {around.hex()} in {nom} ({or_else}), "
-                                                             f"against {oc_a[(nom, word, around)]} in the base ({SUSPICIOUS_MNEMONICS[word]})"})
+        suspects += [{"type": "incomplete_analysis", "detail": d} for d in unreadable_a + unreadable_b]
+        for (name, word, around), n in sorted(oc_b.items()):
+            if n > oc_a[(name, word, around)]:
+                suspects.append({"type": "bytes", "detail": f"{word}: {n} occurrence(s) at {around.hex()} in {name} ({or_else}), "
+                                                             f"against {oc_a[(name, word, around)]} in the base ({SUSPICIOUS_MNEMONICS[word]})"})
     seen_a = text_constructs(texts_a)
     for (path, cause, extract), n in sorted(text_constructs(texts_b).items()):
         if n > seen_a[(path, cause, extract)]:
@@ -237,7 +237,7 @@ def analyse(surveys_a, surveys_b, texts_a, texts_b, prefixes=(), allowed_set=())
 
 
 def text_constructs(texts_of):
-    """{(file, reason, extract): n} for MOTS_SOURCE over whole files {path: text}, line splices joined as the preprocessor
+    """{(file, reason, extract): n} for SOURCE_WORDS over whole files {path: text}, line splices joined as the preprocessor
     does, across line breaks; the extract is the text of the lines a match spans, whitespace collapsed."""
     accounts = Counter()
     for path, text in texts_of.items():

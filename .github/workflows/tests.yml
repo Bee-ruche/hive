@@ -48,9 +48,9 @@ jobs:
           persist-credentials: false
       - name: The common judge, its unit tests and meta-tests
         env:
-          BEE_JUGE_INTEGRATION: "1"
+          BEE_JUDGE_INTEGRATION: "1"
         run: python3 tools/judge/test_judge.py
       - name: The second kind (reference), its unit tests and meta-tests on its own toy project
         env:
-          BEE_JUGE_INTEGRATION: "1"
+          BEE_JUDGE_INTEGRATION: "1"
         run: python3 tools/judge/test_reference.py
