@@ -83,7 +83,7 @@ def description_machine():
 
 def show_table(report):
     lines = [f"{'metric':26s} {'median A':>12s} {'median B':>12s} {'gain':>8s}  {'B wins':>8s}  verdict"]
-    for nom, m in report["metrics"].items():
+    for name, m in report["metrics"].items():
         a, b = m["A"], m["B"]
         if a["median"] is None:
             continue
@@ -95,14 +95,14 @@ def show_table(report):
             verdict = "DEGRADATION beyond the noise"
         else:
             verdict = "within the noise"
-        lines.append(f"{nom:26s} {a['median']:12.3f} {b['median']:12.3f} {gain:>8s}  "
+        lines.append(f"{name:26s} {a['median']:12.3f} {b['median']:12.3f} {gain:>8s}  "
                       f"{s['b_wins']:>3d}/{s['useful_pairs']:<4d}  {verdict}"
                       + (f" ({s['ties']} ties set aside)" if s["ties"] else ""))
-    for nom, m in (report.get("instructions") or {}).items():
+    for name, m in (report.get("instructions") or {}).items():
         gain = "-" if m["gain"] is None else f"{100 * m['gain']:+.3f}%"
         if not m["beyond_noise"]:
             verdict = "within the noise"
         else:
             verdict = "fewer instructions" if m["gain"] > 0 else "MORE instructions"
-        lines.append(f"{nom:26s} {m['A']:12d} {m['B']:12d} {gain:>8s}  {'':>8s}  {verdict}")
+        lines.append(f"{name:26s} {m['A']:12d} {m['B']:12d} {gain:>8s}  {'':>8s}  {verdict}")
     print("\n".join(lines), file=sys.stderr)
