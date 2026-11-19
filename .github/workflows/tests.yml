@@ -1,9 +1,10 @@
-# Tests of the hive's tooling. First the hive protocol's (docs/protocol.md): tools/hive/test_hive.py, test_schedule.py,
-# test_page.py and test_artifact.py, on local git repositories and archives the tests make, without network. Then the
-# judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project and its malicious
-# variants (test_judge.py), and the judge's second kind on its own toy project, alone and through the hive's own judging
-# (test_reference.py). The variants' code runs only in the judge's containers (without network, read-only).
-# Read-only: no secret, no write, nothing of a pull request runs with more than a read token.
+# Tests of the hive's tooling, in two jobs on two machines: the judges' meta-tests build images and run containers,
+# and need a machine's disk of their own. First the hive protocol's (docs/protocol.md): tools/hive/test_hive.py,
+# test_schedule.py, test_page.py and test_artifact.py, on local git repositories and archives the tests make, without
+# network. Then the judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project
+# and its malicious variants (test_judge.py), and the judge's second kind on its own toy project, alone and through the
+# hive's own judging (test_reference.py). The variants' code runs only in the judge's containers (without network,
+# read-only). Read-only: no secret, no write, nothing of a pull request runs with more than a read token.
 name: Tests
 
 on:
@@ -20,10 +21,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tests:
-    name: Tests
+  hive:
+    name: The hive's tool
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -36,6 +37,15 @@ jobs:
         run: python3 tools/hive/test_page.py
       - name: What a job takes from an earlier job's archive
         run: python3 tools/hive/test_artifact.py
+
+  judges:
+    name: The judges
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: The common judge, its unit tests and meta-tests
         env:
           BEE_JUGE_INTEGRATION: "1"
