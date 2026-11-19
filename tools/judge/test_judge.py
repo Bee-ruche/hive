@@ -1418,6 +1418,31 @@ class TestReport(unittest.TestCase):
         os.symlink(self.dir, self.path)
         self.assertEqual((published("1"), published("0")), ("1", "2"))
 
+    def test_a_code_0_or_2_is_published_only_as_its_report_says(self):
+        """ruche-0117, ruche-0136: a code 0 is published as 0 only with its report, whole, checked and stating code 0; any other
+        report (none, empty, cut short, unreadable, stating another code) publishes 2. A code 2 stays 2 whatever its report says;
+        and a code 1 whose report states a success or no refusal publishes 2."""
+        def published(code, content):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(self.path)
+            if content is not None:
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            with contextlib.redirect_stderr(io.StringIO()):
+                return report.publish(self.path, code)
+        good = json.dumps(REPORT, indent=2)
+        refusal, fault = (json.dumps({"judge": dict(REPORT["judge"], code=c, outcome=o, reason="m")})
+                          for c, o in ((1, "refusal"), (2, "environment_error")))
+        fake = json.dumps({"judge": dict(REPORT["judge"], code=1, outcome="correct")})
+        for code, content, expected in (("0", good, "0"), ("0", None, "2"), ("0", "", "2"), ("0", "{}", "2"), ("0", good[:-1], "2"),
+                                        ("0", fault, "2"), ("0", refusal, "2"), ("2", None, "2"), ("2", fault, "2"), ("2", refusal, "2"),
+                                        ("2", good, "2"), ("1", fake, "2"), ("1", good, "2"), ("3", good, "2"), ("", None, "2")):
+            with self.subTest(code=code, content=content and content[:40]):
+                figures = published(code, content)
+                self.assertEqual(figures["code"], expected)
+                self.assertEqual(figures["fingerprint"] != "", expected == "0")
+                self.assertEqual(set(figures), {"code", *report.FORMATS})
+
     def test_reading_bounded(self):
         self.assertIsNone(report.read(self.path))
         with contextlib.redirect_stdout(io.StringIO()) as output_text:

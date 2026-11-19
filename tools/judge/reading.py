@@ -34,7 +34,7 @@ def log(message):
 def clean(data, maximum=1500):
     """Text from the container, safe to show: truncated, control characters removed."""
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
-    text = re.sub("[^\x20-\x7e\n\xa0-퟿-￿]", "?", text[-maximum:])  # nor a lone surrogate
+    text = re.sub("[^\x20-\x7e\n\xa0-\ud7ff\ue000-\uffff]", "?", text[-maximum:])  # nor a lone surrogate
     return text.replace("::", ": :")  # no GitHub workflow command
 
 

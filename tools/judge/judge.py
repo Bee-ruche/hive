@@ -716,7 +716,7 @@ def main(argv=None):
 
 def write_report(path, report):
     """judge.json, whole or not at all (a temporary file renamed onto it); its text, every lone surrogate replaced."""
-    text = re.sub("[\ud800-\udfff]", "�", json.dumps(report, ensure_ascii=False, indent=2))
+    text = re.sub("[\ud800-\udfff]", "\ufffd", json.dumps(report, ensure_ascii=False, indent=2))
     if path:
         folder = os.path.dirname(os.path.abspath(path))
         os.makedirs(folder, exist_ok=True)
