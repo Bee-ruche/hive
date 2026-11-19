@@ -1404,7 +1404,7 @@ class TestOrderAndFingerprints(unittest.TestCase):
 
 # ------------------------------------------------------------------ judge.yml (ruche-0024): read and run its scripts
 
-JUDGE_YML = os.path.join(os.path.dirname(os.path.dirname(HERE)), ".github", "workflows", "judge.yml")
+JUDGE_YML = os.path.join(os.path.dirname(os.path.dirname(HERE)), "examples", "workflows", "judge.yml")
 try:
     import yaml
 except ImportError:  # the registry's CI (validation.yml) installs PyYAML; the Docker meta-test job may not have it

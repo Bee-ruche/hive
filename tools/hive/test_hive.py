@@ -7640,12 +7640,12 @@ class TestVolunteerSide(Volunteer):
 
 class TestTheStepsAsTheWorkflowRunsThem(Base):
     """The hourly workflow runs each step from one folder and names every file and folder by a path relative to it
-    (.github/workflows/hive.yml): `--repo project --out plan.json --bundle candidates.bundle`, and so on. The tool runs
+    (examples/workflows/hive.yml): `--repo project --out plan.json --bundle candidates.bundle`, and so on. The tool runs
     git inside the project's clone, and git reads a relative path from the folder it runs in: so every path a step is
     given is made whole once, when the step starts, and no program reads it from another folder than that one."""
 
     def test_a_run_with_a_candidate_goes_through_the_four_steps_with_the_workflows_relative_paths(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/hive.yml").read_text()
+        workflow = (Path(__file__).resolve().parents[2] / "examples/workflows/hive.yml").read_text()
         for words in ("--repo project --out plan.json --bundle candidates.bundle", "--plan taken/plan/plan.json",
                       "--bundle taken/candidates/candidates.bundle --workdir work", "--judge-workdir judge-work --out verdicts.json",
                       "--verdicts taken/verdicts/verdicts.json", "mkdir -p work judge-work"):
@@ -11810,7 +11810,7 @@ class TestTheSettingsList(unittest.TestCase):
         """The minutes each workflow of a hive's run gives one of its jobs (timeout-minutes), as the workflows say."""
         minutes = {}
         for name in ("hive.yml", "hive-cjson.yml"):
-            text = (self.registry / ".github/workflows" / name).read_text(encoding="utf-8")
+            text = (self.registry / "examples/workflows" / name).read_text(encoding="utf-8")
             found = re.search(rf"(?ms)^  {job}:\n.*?^    timeout-minutes: ([0-9]+)", text)
             self.assertIsNotNone(found, f"{name}: the job {job} and its timeout-minutes")
             minutes[name] = int(found.group(1))
