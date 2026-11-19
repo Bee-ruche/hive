@@ -162,17 +162,19 @@ jobs:
           path: taken/candidates
       - name: The judge's image (with network; the kind the project's settings name, built from the project's own tree; no candidate's code runs here)
         env:
+          PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
           REPOSITORY: ${{ github.repository }}
         run: |
           python3 protocol/tools/hive/hive.py image --registry protocol --project "$REPOSITORY" --repo project \
-            --plan taken/plan/plan.json
+            --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256"
       - name: Judge the plan's candidates (their code runs only in containers without network)
         env:
+          PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
           REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p work judge-work
           python3 protocol/tools/hive/hive.py judge --registry protocol --project "$REPOSITORY" --repo project --state state \
-            --plan taken/plan/plan.json --bundle taken/candidates/candidates.bundle --workdir work \
+            --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256" --bundle taken/candidates/candidates.bundle --workdir work \
             --judge-workdir judge-work --out verdicts.json
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -554,6 +554,11 @@ def config_of(raw, path, repository=None):
         raise HiveError(f"{path}: published: the branch people take the project from, which the hive never writes")
     if config["branch"].casefold() == published.casefold():
         raise HiveError(f"{path}: branch: the hive writes a branch of its own, never the one the project publishes ({published})")
+    # The state's branch holds the state and nothing else: a run that took it for the published branch would read its
+    # tip as the project's, and one that took it for its own would push judged commits onto the state.
+    for key in ("branch", "published"):
+        if config[key].casefold() == STATE_BRANCH.casefold():
+            raise HiveError(f"{path}: {key}: never the branch that holds the hive's state ({STATE_BRANCH})")
     if config.get("tasks") != TASKS_FILE:  # one place, beside the settings, on the same commit
         raise HiveError(f"{path}: tasks: the project's own tasks file ({TASKS_FILE})")
     if not isinstance(config.get("check", ""), str):
@@ -807,10 +812,13 @@ def settings_from(settings, listed, repository):
 def default_branch(listed):
     """(branch, commit) from what `git ls-remote --symref <address> HEAD` printed: the branch a repository names as
     its default one (its HEAD), and the commit that branch is at, each said once, the branch a plain branch's name
-    (plain_branch). None for anything else: a repository that names no default branch says nothing here."""
+    (plain_branch). None for anything else: a repository that names no default branch says nothing here. git lists
+    the references whose names end in HEAD as well (a branch named refs/heads/HEAD, or feature/HEAD): only the lines
+    of the reference named HEAD itself are read, and a repository that holds such a branch is read all the same."""
     named, tips = [], []
     for line in listed.splitlines():
-        (named if line.startswith("ref: ") else tips).append(line)
+        if line.rpartition("\t")[2] == "HEAD":
+            (named if line.startswith("ref: ") else tips).append(line)
     if len(named) != 1 or len(tips) != 1:
         return None
     reference, _, said = named[0][len("ref: "):].partition("\t")
@@ -3873,13 +3881,30 @@ def cmd_record(args):
     print(f"{len(made['deals'])} deal(s) recorded, {len(made['expiries'])} closed for lack of a candidate")
 
 
+def judging_plan(args):
+    """The plan, for the judging job's two steps (image, judge): published (its SHA-256 held against the job output
+    before anything of it is read) and naming the commit of the project's settings, the commit this job's clone of the
+    project must be at (its HEAD: the published branch's tip when the job cloned it). The image is made from that
+    clone's work tree and the settings are read at that commit: a clone at any other commit means the published branch
+    moved since the plan, and nothing is judged; the next run judges, on the settings as they are then. Returns
+    (the plan, the commit)."""
+    made = published_plan(args)
+    commit = planned_settings(made)
+    head = git(args.repo, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False).stdout.strip()
+    if head != commit:
+        raise HiveError("the project's published branch moved since the plan (this job's clone of the project is at another commit): "
+                        "nothing is judged, the next run judges")
+    return made, commit
+
+
 def cmd_judge(args):
     """Step 3, no secret: judges the plan's candidates and writes the judge's answers by judged commit id. The
     project's settings and tasks are read at the commit the plan names, as the steps that write read them: the two
-    derive the same commits."""
+    derive the same commits. Nothing is done unless the plan is the one step 1 published and this job's clone is at
+    that commit (judging_plan)."""
     repository = repository_of(args)
-    made = read_json(args.plan)
-    config, tasks = settings_at(args.repo, planned_settings(made), repository)
+    made, commit = judging_plan(args)
+    config, tasks = settings_at(args.repo, commit, repository)
     if paused(config) or made.get("paused"):
         write_json(args.out, {"answers": {}, "started": []})
         return
@@ -3898,10 +3923,10 @@ def cmd_judge(args):
 def cmd_image(args):
     """The judging job's step with network, before any candidate's code is on the machine: makes the image of the
     kind of judge the project's settings name, at the commit the plan names, from the project's own tree (the clone's
-    work tree). A project that is paused, or a plan that says so, makes none."""
+    work tree, at that very commit: judging_plan). A project that is paused, or a plan that says so, makes none."""
     repository = repository_of(args)
-    made = read_json(args.plan)
-    config, _ = settings_at(args.repo, planned_settings(made), repository)
+    made, commit = judging_plan(args)
+    config, _ = settings_at(args.repo, commit, repository)
     if paused(config) or made.get("paused"):
         return
     made_it = subprocess.run(judge_image(args.registry, config["judge"]["kind"], args.repo), stdin=subprocess.DEVNULL)
@@ -5562,7 +5587,9 @@ def cmd_next(args):
                        that ended without an accepted candidate; a project whose trusted base has the members it
                        covers, for an account that is not one of them (base_full); an ask the hive has not
                        answered yet; a candidate pushed and not answered yet; a task the project's tasks do not list
-                       as open; too little left of the deal to start."""
+                       as open; too little left of the deal to start.
+    A feed that names another repository than the project's is another project's state: the command ends in one line
+    that says to clone this project's own, and believes nothing of it."""
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
@@ -5580,6 +5607,11 @@ def cmd_next(args):
     if status != "ok" or not isinstance(feed, dict) or type(feed.get("protocol")) is not int or feed["protocol"] != PROTOCOL:
         print("WAIT: the hive's feed is not one this tool reads: update your copy of the hive's tool (Bee-ruche/hive)")
         return
+    # The feed says whose it is: a folder that holds another project's state (a worker that changed project, a clone
+    # made from another address) is believed for nothing, not even a pause. Its own word is compared, never printed.
+    if not (isinstance(feed.get("repo"), str) and feed["repo"].casefold() == config["repo"].casefold()):
+        raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: clone the state of this project "
+                        f"(the branch hive-state of https://github.com/{config['repo']}) into a folder of its own, and give that folder")
     if feed.get("paused") is True:
         print(paused_now)
         return
@@ -6364,6 +6396,7 @@ def main(argv=None):
     p = sub.add_parser("judge", help="step 3: judge the plan's candidates (no secret)")
     hive_side(p)
     p.add_argument("--plan", required=True)
+    p.add_argument("--plan-sha256", required=True, help="what step 1 published as its job's output")
     p.add_argument("--bundle", required=True)
     p.add_argument("--workdir", required=True)
     p.add_argument("--judge-workdir")
@@ -6375,6 +6408,7 @@ def main(argv=None):
     p.add_argument("--project", required=True, help="the project's repository (owner/name): the one this run is for")
     p.add_argument("--repo", required=True, help="a clone of the project: its work tree is what the image is made from")
     p.add_argument("--plan", required=True)
+    p.add_argument("--plan-sha256", required=True, help="what step 1 published as its job's output")
     p.set_defaults(run=cmd_image)
     p = sub.add_parser("apply", help="step 4: push and record (the only step that can write to the project; nobody's code, no fork)")
     hive_side(p)
