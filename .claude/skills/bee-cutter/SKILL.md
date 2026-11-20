@@ -90,7 +90,8 @@ checks no piece left to do): publish nothing that does not change, and say in yo
 judge's author must add.
 
 A task the tally shows refused again and again is not stuck until three members accepted elsewhere failed on it (a
-project with fewer members who ever had a candidate accepted never has a stuck task): report it to the architect, and do not close it yourself.
+project with fewer members who ever had a candidate accepted never has a stuck task): report it to the
+architect, and do not close it yourself.
 
 The settings you write within, from `hive/project.json`, and their values when it says nothing: `cutter.changes`
 10, `cutter.open` 10, `cutter.context_chars` 2000, `cutter.floors` none (the charter may then name the least a goal
