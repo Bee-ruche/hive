@@ -7,8 +7,8 @@ map, closes the tasks that do not move and cuts them again, and publishes the ne
 project's trusted base, like its guardians; what volunteers push never steers it except through the judge's
 numbers.
 
-**Status (20 November 2026): the tally and the gate are built; the cutter itself is next.** Each part says what
-it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
+**Status (20 November 2026): the tally, the gate, the deterministic cutter, the outline and the AI cutter's guide are
+built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
 20 November 2026; the research behind the design is summed up in "Grounds".
 
 ## Grounds
@@ -55,8 +55,8 @@ What those who split work for others have learnt, for people and for AI agents, 
 | --- | --- | --- | --- |
 | The architect | Writes the project's charter: its goal, what counts as progress, its directions and priorities, the lowest goal a task may set (the floor), and what it asks of volunteers | the project's lead | exists; tooling planned |
 | The tally | Counts, from the ledger and the tasks alone: deals, expiries, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
-| The deterministic cutter | Applies the rules: closes a stuck task and cuts it into smaller ones where the structure is known, publishes a task once its prerequisites are done, keeps the number of open tasks at the project's target | code of the hive | planned (step 4) |
-| The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new goals | the architect's own agent, trusted | planned (step 4); it proposes, the gate decides |
+| The deterministic cutter | Applies the rules: closes a stuck task and cuts it again with a lower goal where the project's floors allow, publishes the architect's planned tasks once their prerequisites are done, up to the project's target of open tasks, and says what it could not do | code of the hive | built (`hive.py cut`) |
+| The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new tasks and goals | the architect's own agent, trusted | its guide is built (`.claude/skills/bee-cutter/`); it proposes, the gate decides |
 | The gate (`cut-check`) | Passes or refuses every proposed change of the tasks, the AI's included; nothing overrides it | code of the hive | built (`hive.py cut-check`) |
 | The judge author | Writes and hardens the judge of a new kind of project: the bottleneck of every new kind | trusted; later, tasks for volunteers judged by seeded mutants | with each new kind |
 | The judge | Accepts or refuses a candidate | machine | exists |
@@ -82,19 +82,54 @@ The rules that keep the ledger's history true:
   once what it needs is done.
 - The project's page draws the map from these links: the tree of cuts, what can be dealt now, what is done.
 
+## The backlog and the charter
+
+Two files of the project's repository, under `hive/` on the branch it publishes, which no run reads and no
+contribution may change (every file under `hive/` is protected):
+
+- `hive/charter.md`: **the architect's charter**, in the architect's own words: the project's goal, what counts as
+  progress, its directions and priorities, what it asks of volunteers, and what the cutter must never propose. The
+  AI cutter reads it at each cycle; it is the only text it takes directions from, beside its guide.
+- `hive/backlog.jsonl`: **the tasks the architect plans**, one per line, as lines of `hive/tasks.jsonl`, with their
+  `needs`. The deterministic cutter publishes them in the file's order, each once what it needs is done, while fewer
+  than `cutter.open` tasks are left to do. A line stays in the backlog once published, and is skipped: the backlog
+  is the plan, the tasks file what is offered now. The AI cutter writes there what it plans beyond this cycle.
+
+## The deterministic cutter
+
+`hive.py cut --out <file>` reads the settings, the tasks and the backlog on the published branch, the ledger through
+the tally, and the files of the project's tip (the branch the hive writes, where a volunteer's work starts), and
+writes the task file its rules propose, once the gate passes it (`cut` in `tools/hive/hive.py`). In this order, and
+within `cutter.changes` lines added or closed:
+
+1. **A stuck task is closed**, unless it is dealt now, **and cut again with a lower goal** when its goal is on
+   figures the project floors (`cutter.floors`): each such condition asks half as much, never less than its floor;
+   the proof it holds stays, so that a candidate that changes nothing still meets none of it. The new task names
+   the old one as its `parent`, and its context says what was lowered, after the architect's own words.
+   A task whose goal is « correct », or already at its floor, is closed and left to the AI cutter (`for_the_cutter`).
+   A judge that measures the whole program is not split by function: a smaller part of a file is not a smaller
+   task when the figure is the program's. Asking less of the same part is.
+2. **The backlog's tasks are published** as said above, each once its parent is closed or done, its files are on the
+   tip and none is protected, and, for a goal « correct », once a run of the judge showed it to fail at the tip
+   (`--failing`).
+3. **It says what is left to do** against `cutter.open` (`left`, `short`), whether the project **starves** (nothing
+   left to do), and what it left undone and why, as codes: the AI cutter's work, or the architect's.
+
+It prints ids, codes and numbers, and the proposal's SHA-256; a proposal the gate refuses is not written.
+
 ## The loop
 
 Once a day, by the architect's agent; a whole cycle (cut, publish, deal, judge, read) takes a day or more, since
 GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitHub starts it when it can").
 
 1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
-2. **The deterministic cutter** applies its rules.
+2. **The deterministic cutter** applies its rules ("The deterministic cutter", above).
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
      account that never had an acceptance never counts, so throwaway accounts cannot make a task stuck, and a
      `not_proven` refusal (the judge's stopwatch could not give a proof) is not a failure.
-   - The project is **starving** when no open task can be dealt. That is an alarm for the architect: otherwise
-     volunteers ask, are dealt nothing, and nobody notices.
+   - The project is **starving** when nothing is left to do, open or dealt. That is an alarm for the architect:
+     otherwise volunteers ask, are dealt nothing, and nobody notices.
 3. **The AI cutter** completes the proposal, from the architect's charter, the tally, and the project's code as a
    mechanical projection shows it (below).
 4. **The gate** checks the proposal against the published tasks (below). Nothing it refuses is published.
@@ -109,14 +144,19 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
 
 - It reads the project's settings and tasks, the ledger through the tally (numbers and codes, which hold no text a
   fork wrote: [protocol.md](protocol.md), "The ledger and the feed"), and the architect's charter.
-- It reads the project's code only through a **mechanical projection**: the files, the functions, their sizes,
-  computed in the judge's container, **with comments and strings removed**. The project's code includes accepted
-  work from volunteers; a sentence in it is data, and a projection that keeps no sentence keeps the cutter from
-  reading one.
+- It reads the project's code only through a **mechanical projection**, `hive.py outline`: the files, the
+  functions, where each starts and how long it is, **with comments, strings and preprocessor lines removed**, read
+  from git at the project's tip as text (nothing of the project is built or run, no link is followed). The
+  project's code includes accepted work from volunteers; a sentence in it is data, and a projection that keeps no
+  sentence keeps the cutter from reading one. A name is still a word a volunteer may have chosen: it is data too,
+  and the outline keeps none longer than an identifier.
+- Figures measured on the project's code (a profile of its hot spots, the reference's cases that fail) come from a
+  run of the project's own tools in its sandbox, without network: numbers and the names of functions, nothing
+  else.
 - It **never** reads a candidate, refused or accepted, nor a fork, a commit message or anything a volunteer wrote,
   beyond that projection.
 - The model a volunteer declares is counted, never used to decide.
-- Project code runs only in the judge's container, never where the cutter runs.
+- Project code runs only in the judge's container or the project's sandbox, never where the cutter runs.
 
 ## The gate
 
@@ -134,7 +174,7 @@ prints every reason it finds to refuse it, and passes it only if there is none (
   infinity) is refused;
 - a new task is open and says nothing but what a task says (`id`, `title`, `files`, `size`, `tier`, `goal`,
   `options`, `context`, `parent`, `needs`, `kind`), within bounds: an id of the project's own
-  (`<project>-<four digits>`), a title of printable characters, files of the published tip that are not protected, a
+  (`<project>-<four digits>`), a title of printable characters, files of the project's tip that are not protected, a
   context within `cutter.context_chars`, and options only under names the project's judge or its published tasks
   already use, each a short plain value;
 - every condition of a new task's goal on a figure the project floors (`cutter.floors`, for figures where more is
@@ -142,7 +182,7 @@ prints every reason it finds to refuse it, and passes it only if there is none (
 - what a new task needs is done; a new task that names a parent leaves no copy of it open: the parent is closed in
   the same cut, or done;
 - **no task is empty**: a goal on a figure holds a proof, which a candidate that changes nothing never gives; a new
-  task whose goal is « correct » is named among those that a run of the judge at the published tip showed to fail
+  task whose goal is « correct » is named among those that a run of the judge at the project's tip showed to fail
   (`--failing <id>`), in the judge's container. That one is the cutter's word: the gate prints it and cannot check
   it yet.
 
@@ -183,12 +223,12 @@ subscription, like a volunteer's worker ([join.md](join.md)), with a guide of it
 `.claude/skills/bee-cutter/`. The hive holds no key and no secret for it, and pays for nothing. It publishes with
 the architect's account, which may change the published branch: the project's trusted base decides alone, and the
 gate, the bound on each cycle and one commit to go back are what hold if it errs. A project that wants a person to
-read each cut before it lands says so in its settings.
+read each cut before it lands says so in its charter: the cutter then opens a pull request instead of publishing.
 
 ## Not yet
 
 - The gate running the judge itself on a new task whose goal is « correct », in its container, rather than taking
-  the cutter's word that it fails at the published tip.
+  the cutter's word that it fails at the project's tip.
 - A deal weighted by the cutter (recruitment in proportion to what an area yields, a share of scouts, scores that
   evaporate, a quorum before committing): a change of the protocol.
 - A way for a volunteer's agent to say "this task is impossible as stated", with its evidence, at no cost.
@@ -206,7 +246,7 @@ read each cut before it lands says so in its settings.
 3. The fields `parent`, `needs` and `kind`, checked wherever a run reads the tasks; the gate (`hive.py cut-check`);
    and the cutter's settings in the project's file (`cutter`: `floors`, `changes`, `open`, `context_chars`),
    described in `hive/settings.json` with their bounds, and read by no run. **Done.** (The page's tree of cuts: later.)
-4. The deterministic cutter (`hive.py cut`), the AI cutter's guide, and a trial of two or three cycles on miniz and
-   cjson. First, since both test projects starve: every one of their tasks is done or closed (their tallies of
-   20 November 2026).
+4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
+   (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way. First,
+   since both test projects starve: every one of their tasks is done or closed (their tallies of 20 November 2026).
 5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`.

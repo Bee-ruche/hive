@@ -750,7 +750,12 @@ hour and the fork's own number, which adding forks to the list does not shift.
   that make the project's map: `parent` (the task it was cut from), `needs` (the tasks to be done before it) and
   `kind` (`work`, `probe` or `hunt`), which name other tasks of the file and go round in no cycle, or the file is
   not run ([cutter.md](cutter.md), "The map: links between tasks"). Tasks are
-  written by the project's maintainers or, once it is built, by its cutter ([cutter.md](cutter.md)); they are trusted data.
+  written by the project's maintainers or by its cutter ([cutter.md](cutter.md)); they are trusted data.
+- Two more files under `hive/`, which no run reads, for the project's cutter: `hive/charter.md`, the architect's
+  charter (the project's goal, what counts as progress, its directions), and `hive/backlog.jsonl`, the tasks the
+  architect plans, as lines of the tasks file, which the cutter publishes once what they need is done
+  ([cutter.md](cutter.md), "The backlog and the charter"). Like every file under `hive/`, no contribution may change
+  them.
 
 ## What this version does not do yet
 

@@ -27,9 +27,11 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
           what it started on, nothing else, pushes the
           judged commits (never anything but a descendant of the judged tip) and records.
 
-Three more commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
-project's first run), tally (what the ledger says of each task, in numbers alone, for the project's cutter:
-docs/cutter.md) and cut-check (the cutter's gate, which holds a proposed task file to its rules).
+More commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
+project's first run); and, for the project's cutter (docs/cutter.md), tally (what the ledger says of each task, in
+numbers alone), cut-check (the cutter's gate, which holds a proposed task file to its rules), cut (the cutter's own
+rules, which write the task file they propose once the gate passes it) and outline (the project's code as the cutter
+may read it: files, functions and sizes, with no comment and no string).
 
 Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each is told the
 project by its repository (--project owner/name, as the user's prompt names it) and reads the project's settings and
@@ -4279,15 +4281,16 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
 
     `published` and `proposal` are {id: task} as tasks_of reads them; the caller has held the proposal to what a run
     holds a task file to (check_goals, check_links). `live`: the tasks dealt now; `done`: those with an accepted
-    candidate; `paths`: the files of the published tip. `failing`: the new tasks whose goal is « correct » that the
-    cutter says a run of the judge at the published tip showed to fail, in its container (a task the project's code
-    passes already would be accepted for nothing): a claim the gate takes and prints, and cannot check itself. A goal
-    on a figure needs no such run: it holds a proof (check_goals), which a candidate that changes nothing never gives.
+    candidate; `paths`: the files of the project's tip (work_tip: the branch the hive writes, where a volunteer's
+    work starts). `failing`: the new tasks whose goal is « correct » that the cutter says a run of the judge at the
+    project's tip showed to fail, in its container (a task the project's code passes already would be accepted for
+    nothing): a claim the gate takes and prints, and cannot check itself. A goal on a figure needs no such run: it
+    holds a proof (check_goals), which a candidate that changes nothing never gives.
 
     The rules: no published task is removed; a published line changes in one way only, by gaining « closed »: true,
     compared as JSON (task_json), and never while its task is dealt; a cut adds and closes at most cutter.changes
     lines. A new task is open and says nothing but what a task says (NEW_TASK_KEYS), within bounds: the project's id,
-    a title of printable characters, files of the published tip that a contribution may change (none protected), a
+    a title of printable characters, files of the project's tip that a contribution may change (none protected), a
     context within cutter.context_chars, options only under names the project's judge or its published tasks already
     use, each a short plain value; every condition of its goal on a figure the project floors asks at least that floor
     with a « min » (cutter.floors: figures where more is better); what it needs is done; and, when it names a parent,
@@ -4330,7 +4333,7 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
             if protected(path.rstrip("/"), config["protected"]):
                 refusals.append(f"{task_id}: {path}: a protected path, which no contribution may change")
             elif not (any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths):
-                refusals.append(f"{task_id}: {path}: not a file of the published tip")
+                refusals.append(f"{task_id}: {path}: not a file of the project's tip")
         if not (isinstance(task.get("context", ""), str) and len(task.get("context", "")) <= cutter["context_chars"]):
             refusals.append(f"{task_id}: context: {cutter['context_chars']} characters at most (cutter.context_chars)")
         options = task.get("options", {})
@@ -4344,7 +4347,7 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
             if floor is not None and not ("min" in condition and "max" not in condition and condition["min"] >= floor):
                 refusals.append(f"{task_id}: goal: at least {floor} on {condition['name']}, with « min » (cutter.floors)")
         if goal.get("kind") != "metric" and task_id not in failing:
-            refusals.append(f"{task_id}: goal « correct »: name it among the tasks shown to fail at the published tip (--failing), once a "
+            refusals.append(f"{task_id}: goal « correct »: name it among the tasks shown to fail at the project's tip (--failing), once a "
                             "run of the judge there shows it")
         for other in task.get("needs") or []:
             if other not in done:
@@ -4355,10 +4358,60 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
     return refusals
 
 
+def backlog_check(config, published_backlog, backlog, proposal):
+    """The gate's rules for the backlog a cut proposes (BACKLOG_FILE) beside its task file: every reason to refuse it,
+    as sentences. The backlog is the architect's plan: a line of the published one is never removed or changed. A line
+    the cut adds says nothing but what a task says, open, under an id of the project's own that the tasks file does not
+    use. (The caller has read it as a task file is read, its goals checked, and its links checked with the tasks.)
+    When it is published, a planned task is held to the gate's rules for a new task, as any other is (cut)."""
+    refusals = []
+    for task_id in sorted(set(published_backlog) - set(backlog)):
+        refusals.append(f"{task_id}: a line of the backlog is never removed")
+    for task_id, task in backlog.items():
+        if task_json(task) is None:
+            refusals.append(f"{task_id}: a number that is no number (NaN, an infinity)")
+        elif task_id in published_backlog:
+            if task_json(task) != task_json(published_backlog[task_id]):
+                refusals.append(f"{task_id}: a line of the backlog does not change")
+        else:
+            extra = sorted(set(task) - set(NEW_TASK_KEYS))
+            if extra:
+                refusals.append(f"{task_id}: {safe_text(extra[0], 40)}: not something a task says ({', '.join(NEW_TASK_KEYS)})")
+            if task_id.rpartition("-")[0] != config["project"]:
+                refusals.append(f"{task_id}: a new task's id is the project's own: {config['project']}-<four digits>")
+            if task_id in proposal:
+                refusals.append(f"{task_id}: an id the tasks file uses: a planned task takes an id of its own")
+    return refusals
+
+
+def backlog_held(args, config, commit, proposal):
+    """(bytes, refusals): the backlog a cut proposes (--backlog), read as a task file is read, against the one the
+    project publishes at `commit`. A published backlog that cannot be read is the architect's to mend: the cut proposes
+    none until then."""
+    raw = blob_at(args.repo, commit, BACKLOG_FILE)
+    try:
+        published_backlog = tasks_of(raw.decode("utf-8").split("\n"), BACKLOG_FILE) if raw is not None else {}
+    except (HiveError, ValueError, TypeError, RecursionError):
+        return b"", [f"{BACKLOG_FILE}: the published backlog cannot be read: the architect mends it before a cut proposes another"]
+    try:
+        with open(args.backlog, "rb") as f:
+            data = f.read(SETTINGS_BYTES + 1)
+        if len(data) > SETTINGS_BYTES:
+            raise HiveError(f"the backlog is larger than {SETTINGS_BYTES} bytes")
+        backlog = tasks_of(data.decode("utf-8").split("\n"), "the backlog")
+        check_goals(config, backlog)
+        check_links({**backlog, **proposal})
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        raise HiveError(f"the backlog cannot be read ({type(error).__name__}): publish nothing of it") from None
+    return data, backlog_check(config, published_backlog, backlog, proposal)
+
+
 def cmd_cut_check(args):
-    """Holds a proposed task file to the cutter's gate (cut_check) against the one the project publishes: prints each
-    refusal (REFUSED, then a sentence of this tool's), or PASSED with how many tasks it adds and closes. The settings
-    and the published tasks are read where a run reads them, the deals in the state. It writes nothing."""
+    """Holds a proposed task file to the cutter's gate (cut_check) against the one the project publishes, and the
+    backlog proposed with it if there is one (--backlog: backlog_check): prints each refusal (REFUSED, then a sentence
+    of this tool's), or PASSED with how many tasks it adds and closes, then what it checked (CHECKED: the files'
+    SHA-256 and the published commit). The settings, the published tasks and the backlog are read where a run reads
+    the settings, the deals in the state. It writes nothing."""
     repository = repository_of(args)
     branch, commit = published_tip(args.repo, "origin")
     config, published = settings_on(args.repo, commit, branch, repository)
@@ -4372,14 +4425,13 @@ def cmd_cut_check(args):
         check_links(proposal)
     except (OSError, ValueError, TypeError, RecursionError) as error:
         raise HiveError(f"the proposal cannot be read ({type(error).__name__}): publish nothing of it") from None
+    held = backlog_held(args, config, commit, proposal) if args.backlog else None
     ledger = Ledger(Path(args.state))
     live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
-    listed = git_raw(args.repo, "ls-tree", "-r", "-z", "--name-only", need_sha(commit))
-    if listed.returncode != 0:
-        raise HiveError("the files of the published tip cannot be listed")
-    paths = {name.decode("utf-8", errors="surrogateescape") for name in listed.stdout.split(b"\0") if name}
+    paths = tip_paths(args.repo, work_tip(args.repo, config))
     failing = set(args.failing or ())
     refusals = cut_check(config, published, proposal, live, ledger.done(), paths, failing)
+    refusals += held[1] if held else []
     for refusal in refusals:
         print(f"REFUSED {safe_text(refusal, 300)}")
     if refusals:
@@ -4390,8 +4442,314 @@ def cmd_cut_check(args):
           f"{aim} open (cutter.open)")
     # What was checked, so that what is published can be held to it: the file's own SHA-256, the published commit it was
     # held against, and the cutter's word on the tasks whose goal is « correct » (a claim, which the gate cannot check).
-    print(f"CHECKED {hashlib.sha256(data).hexdigest()} against {commit}" + (f"; shown to fail at the tip, by the cutter's word: "
+    print(f"CHECKED {hashlib.sha256(data).hexdigest()} against {commit}" + (f"; backlog {hashlib.sha256(held[0]).hexdigest()}" if held else "")
+          + (f"; shown to fail at the tip, by the cutter's word: "
           f"{', '.join(sorted(t for t in failing if t in proposal))}" if failing else ""))
+
+
+BACKLOG_FILE = "hive/backlog.jsonl"  # the tasks the project's architect plans, which its cutter publishes once what they need is done
+CUT_FIGURES = 6  # how many decimals a goal cut again keeps (a half of 0.02 is 0.01, not 0.010000000000000002)
+
+
+def blob_at(repo, commit, path, most=SETTINGS_BYTES):
+    """The bytes of one plain file of a commit of the clone, as git stores it there, or None when the commit holds
+    nothing of that name. A link, a folder, or a file larger than `most`, is an error: the hive's own files are plain."""
+    listed = git_raw(repo, "--literal-pathspecs", "ls-tree", "-z", need_sha(commit), "--", path)
+    if listed.returncode != 0:
+        raise HiveError(f"the project's commit {commit} cannot be read")
+    if not listed.stdout:
+        return None
+    entry = re.fullmatch(rb"(?:100644|100755) blob ([0-9a-f]{40})\t" + re.escape(path.encode()) + rb"\0", listed.stdout)
+    if entry is None:
+        raise HiveError(f"{path}: not a plain file of the project's commit {commit}")
+    data = git_capped(repo, "cat-file", "blob", entry.group(1).decode(), limit=most)
+    if data is None:
+        raise HiveError(f"{path}: larger than {most} bytes: not read")
+    return data
+
+
+def work_tip(repo, config, allow_local=False):
+    """The commit the branch the hive writes is at (« branch »: where contributions land, and where a volunteer's work
+    starts), as the project's repository says now, fetched into the clone if the clone lacks it. The files a task
+    names are the files of that commit, and the cutter reads the project's code there (outline)."""
+    branch = config["branch"]
+    listed = git(repo, "ls-remote", "origin", f"refs/heads/{branch}", timeout=60, env=transport(allow_local))
+    tips = [line.split("\t")[0] for line in listed.stdout.splitlines() if line.split("\t")[1:] == [f"refs/heads/{branch}"]]
+    if len(tips) != 1 or not is_sha(tips[0]):
+        raise HiveError("the project's repository does not list the branch the hive writes: nothing is done")
+    if git(repo, "cat-file", "-e", f"{tips[0]}^{{commit}}", check=False).returncode != 0:
+        git(repo, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin", f"refs/heads/{branch}", timeout=600,
+            env=transport(allow_local))
+        if git(repo, "cat-file", "-e", f"{tips[0]}^{{commit}}", check=False).returncode != 0:
+            raise HiveError("the commit the branch the hive writes is at could not be fetched: nothing is done")
+    return tips[0]
+
+
+def tip_paths(repo, commit):
+    """The paths of the files of one commit of the clone."""
+    listed = git_raw(repo, "ls-tree", "-r", "-z", "--name-only", need_sha(commit))
+    if listed.returncode != 0:
+        raise HiveError("the files of the project's tip cannot be listed")
+    return {name.decode("utf-8", errors="surrogateescape") for name in listed.stdout.split(b"\0") if name}
+
+
+def on_the_tip(path, paths):
+    """True if a task's entry names files of the tip: the file itself, or a folder (« dir/ ») that holds one."""
+    return any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths
+
+
+def easier(config, task):
+    """The deterministic cutter's one way of cutting a stuck task again (docs/cutter.md, "The loop"): the same task
+    with a lower goal. Each condition of its goal on a figure the project floors (cutter.floors) with a « min » above
+    the floor asks half as much, and never less than the floor; the proofs it holds stay as they are, so that a
+    candidate that changes nothing still meets none of it. Its context says so, after the architect's own words.
+    Returns (task, [(figure, what it asked, what it asks)]) without an id or a parent, or (None, why): « no_rule » for
+    a goal « correct », whose cut is the AI cutter's, « at_the_floor » when no condition can go lower, « under_the_floor »
+    when a condition on a floored figure asks less than its floor already, or with a « max »."""
+    goal = task.get("goal") or {"kind": "correct"}
+    if goal.get("kind") != "metric":
+        return None, "no_rule"
+    goal = json.loads(json.dumps(goal))  # a copy: nothing shared with the published line
+    floors, lowered = config["cutter"]["floors"], []
+    for condition in [goal, *goal.get("and", [])]:
+        floor, bound = floors.get(condition.get("name")), condition.get("min")
+        if floor is None:
+            continue
+        if "max" in condition or not number(bound) or bound < floor:
+            return None, "under_the_floor"  # (a goal published before its floor: the gate takes no part of it)
+        if max(floor, round(bound / 2, CUT_FIGURES)) < bound:
+            condition["min"] = max(floor, round(bound / 2, CUT_FIGURES))
+            lowered.append((condition["name"], bound, condition["min"]))
+    if not lowered:
+        return None, "at_the_floor"
+    child = {key: task[key] for key in NEW_TASK_KEYS if key in task and key not in ("id", "parent", "context")}
+    words = "; ".join(f"{name} at least {now} (it asked {was})" for name, was, now in lowered)
+    context = task["context"] + " " if isinstance(task.get("context"), str) and task["context"] else ""
+    return {**child, "goal": goal, "context": f"{context}Cut again with a lower goal, since members failed at the first one: {words}. "
+                                              "The goal decides."}, lowered
+
+
+def cut(config, published, backlog, counted, live, done, paths, failing=()):
+    """The deterministic cutter (docs/cutter.md, "The loop"): the proposal its rules make of the project's task file,
+    and what it did and left undone, in ids, codes and numbers. `published`: the project's tasks; `backlog`: the tasks
+    its architect plans (BACKLOG_FILE), in their order; `counted`: the tally of the published tasks; `live`: the tasks
+    dealt now; `done`: those with an accepted candidate; `paths`: the files of the project's tip; `failing`: the tasks
+    of the backlog whose goal is « correct » that a run of the judge at that tip showed to fail.
+
+    In this order, and within cutter.changes lines added or closed:
+      1. each stuck task (tally) is closed, unless it is dealt now; and cut again with a lower goal (easier) when its
+         goal is on figures the project floors, above their floors;
+      2. the backlog's tasks that are not published yet are published in its order while fewer than cutter.open tasks
+         are left to do, each once what it needs is done, its parent closed or done, its files on the tip and none
+         protected, and, for a goal « correct », once it is shown to fail.
+    It says what is left to do against that aim, whether the project still starves, and the stuck tasks it could not
+    cut again (for_the_cutter: the AI cutter's, or the architect's). What it proposes is held to the gate (cut_check),
+    as any proposal is: a line of the backlog the gate refuses is the architect's to mend."""
+    cutter, rows = config["cutter"], counted["tasks"]
+    proposal = dict(published)
+    said = {"closed": [], "added": [], "waiting": [], "for_the_cutter": []}
+    numbers = [int(task_id.rpartition("-")[2]) for task_id in [*published, *backlog] if task_id.rpartition("-")[0] == config["project"]]
+    following, used = max(numbers, default=0) + 1, 0
+    for task_id in counted["stuck"]:
+        if task_id in live or used >= cutter["changes"]:
+            said["waiting"].append({"id": task_id, "because": "dealt" if task_id in live else "changes"})
+            continue
+        proposal[task_id], used = {**published[task_id], "closed": True}, used + 1
+        said["closed"].append({"id": task_id, "because": "stuck", "failures": rows[task_id]["established_failures"]})
+        child, lowered = easier(config, published[task_id])
+        if child is None:
+            said["for_the_cutter"].append({"id": task_id, "because": lowered})
+        elif len(child["context"]) > cutter["context_chars"]:
+            said["for_the_cutter"].append({"id": task_id, "because": "context_too_long"})
+        elif any(other not in done for other in child.get("needs") or []):
+            said["for_the_cutter"].append({"id": task_id, "because": "needs"})
+        elif any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in child["files"]):
+            said["for_the_cutter"].append({"id": task_id, "because": "files"})
+        elif used >= cutter["changes"] or following > 9999:
+            said["for_the_cutter"].append({"id": task_id, "because": "changes"})
+        else:
+            new_id = f"{config['project']}-{following:04d}"
+            proposal[new_id] = {"id": new_id, **child, "parent": task_id}
+            following, used = following + 1, used + 1
+            said["added"].append({"id": new_id, "from": "easier", "parent": task_id, "lowered": [list(change) for change in lowered]})
+    left = sum(1 for task_id, task in proposal.items() if task_id not in done and task.get("closed") is not True)
+    for task_id, task in backlog.items():
+        if task_id in published:
+            continue  # published already
+        parent, goal = task.get("parent"), task.get("goal") or {"kind": "correct"}
+        why = ("enough_open" if left >= cutter["open"] else
+               "changes" if used >= cutter["changes"] else
+               "needs" if any(other not in done for other in task.get("needs") or []) else
+               "parent" if parent is not None and parent not in done and (proposal.get(parent) or {}).get("closed") is not True else
+               "files" if any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"]) else
+               "not_shown_failing" if goal.get("kind") != "metric" and task_id not in failing else None)
+        if why:
+            said["waiting"].append({"id": task_id, "because": why})
+            continue
+        proposal[task_id], used, left = dict(task), used + 1, left + 1
+        said["added"].append({"id": task_id, "from": "backlog"})
+    said.update({"changes": used, "left": left, "aim": cutter["open"], "short": max(0, cutter["open"] - left), "starving": not left})
+    return proposal, said
+
+
+def cmd_cut(args):
+    """The deterministic cutter (cut). Reads the project's settings, tasks and backlog where a run reads its settings
+    (on its published branch, at its tip), the ledger in the state, and the files of the tip of the branch the hive
+    writes. Holds what it proposes to the gate (cut_check), then writes it to --out (each published line as it is, a
+    closed one with « closed »: true, the new ones after them) and prints what it did as JSON: ids, codes and numbers,
+    and the proposal's SHA-256. A proposal the gate refuses is not written. It changes nothing of the project."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, published = settings_on(args.repo, commit, branch, repository)
+    listed, raw, backlog, unread = blob_at(args.repo, commit, TASKS_FILE), blob_at(args.repo, commit, BACKLOG_FILE), {}, None
+    if raw is not None:
+        try:
+            backlog = tasks_of(raw.decode("utf-8").split("\n"), BACKLOG_FILE)
+            check_goals(config, backlog)
+            check_links({**backlog, **published})
+        except HiveError as error:
+            backlog, unread = {}, safe_text(error, 300)
+        except (ValueError, TypeError, RecursionError) as error:
+            backlog, unread = {}, f"{BACKLOG_FILE}: not the JSON lines of tasks ({type(error).__name__})"
+    ledger, instant = Ledger(Path(args.state)), now()
+    lines = [line for line in map(tally_line, ledger.events) if line is not None]
+    live, done = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}, ledger.done()
+    tip = work_tip(args.repo, config)
+    paths, failing = tip_paths(args.repo, tip), set(args.failing or ())
+    proposal, said = cut(config, published, backlog, tally(published, lines, instant), live, done, paths, failing)
+    check_goals(config, proposal)
+    check_links(proposal)
+    refusals = cut_check(config, published, proposal, live, done, paths, failing)
+    for refusal in refusals:
+        print(f"REFUSED {safe_text(refusal, 300)}")
+    if refusals:
+        raise HiveError(f"the gate refuses what the cutter proposes ({len(refusals)}): nothing is written. Each refusal names its line; "
+                        f"a line of {BACKLOG_FILE} is the architect's to mend")
+    out = []
+    for line in listed.decode("utf-8").split("\n"):
+        if line.strip():
+            task_id = json.loads(line)["id"]
+            out.append(line if proposal[task_id] is published[task_id] else json.dumps(proposal[task_id], ensure_ascii=False))
+    out += [json.dumps(task, ensure_ascii=False) for task_id, task in proposal.items() if task_id not in published]
+    data = ("\n".join(out) + "\n").encode("utf-8")
+    with open(args.out, "wb") as f:
+        f.write(data)
+    print(json.dumps({"project": config["project"], "published": commit, "tip": tip, "backlog": len(backlog), "backlog_unread": unread,
+                      **said, "proposal": hashlib.sha256(data).hexdigest()}, sort_keys=True, indent=1, ensure_ascii=True))
+
+
+OUTLINE_SUFFIXES = (".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".rs", ".go")  # the files whose functions the outline finds
+OUTLINE_FILE_BYTES = 4 << 20  # a file larger than this is listed with its size alone
+OUTLINE_BYTES = 64 << 20  # what the outline reads of the tip in all
+OUTLINE_FUNCTIONS = 5000  # the most functions it lists of one file
+OUTLINE_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+/-]{0,199}\Z")  # a path it names; another is only counted
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+# What the outline blanks before it reads a file: comments, strings, characters (scanned from the left, so that a
+# « /* » in a string or a quote in a comment is what it is), then preprocessor lines and Rust's attributes.
+NEUTRAL = re.compile(r"/\*.*?(?:\*/|\Z)|//(?:\\\n|[^\n])*|(?<![A-Za-z0-9_])b?r(#*)\"(?:.|\n)*?\"\1|\"(?:\\.|[^\"\\])*\""
+                     r"|'(?:\\.[^'\n]{0,9}|[^'\\\n])'", re.S)
+DIRECTIVE = re.compile(r"^[ \t]*#(?:\\\n|[^\n])*", re.M)
+C_KEYWORDS = frozenset(("if", "for", "while", "switch", "return", "sizeof", "catch", "do", "else", "case", "defined", "alignof", "decltype",
+                        "typeof", "__attribute__", "__declspec", "_Static_assert", "static_assert"))
+C_TAIL = re.compile(r"\)(?:\s*(?:const|noexcept|override|final))*\s*\Z")
+C_NAME = re.compile(r"(~?[A-Za-z_][A-Za-z0-9_]*)\s*\Z")
+C_TRANSPARENT = re.compile(r"\s*(?:extern\s*|namespace(?:\s+[A-Za-z_][A-Za-z0-9_:]*)?\s*)\Z")  # extern "C" { and namespace x {
+RUST_FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+GO_FUNC = re.compile(r"\bfunc\s*(?:\([^()]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*[\[(]")
+
+
+def blanked(match):
+    return re.sub(r"[^\n]", " ", match.group(0))
+
+
+def c_function(header):
+    """The name of the C or C++ function a block's header defines (« static int f(int a) »), and where it stands in
+    the header, or None: a header that ends with the closing parenthesis of a list after a name that is no keyword."""
+    tail = C_TAIL.search(header)
+    if not tail:
+        return None
+    depth, at = 0, tail.start()
+    while at >= 0:
+        depth += {")": 1, "(": -1}.get(header[at], 0)
+        if depth == 0:
+            break
+        at -= 1
+    name = C_NAME.search(header[:at]) if at > 0 else None
+    if not name or name.group(1).lstrip("~") in C_KEYWORDS or "=" in header[:name.start()]:
+        return None
+    return name.group(1).lstrip("~"), name.start()
+
+
+def outline_text(text, suffix):
+    """The functions of one file of code as the cutter may read them, [name, first line, lines] in the order of the
+    file: from its text with every comment, string and character blanked first, and every preprocessor line, so that
+    no sentence of the file reaches the cutter and no brace in a comment or a string moves where a function ends. It
+    reads C and C++ (a function defined at the top level, or in extern "C" or a namespace), Rust (« fn », at any
+    depth) and Go (« func »); a name is an identifier of 64 characters at most, another is left out. A guide, not a
+    proof: two branches of an « #if » that each open a block make the rest of the file read wrong."""
+    neutral = DIRECTIVE.sub(blanked, NEUTRAL.sub(blanked, text))
+    rust, go = suffix == ".rs", suffix == ".go"
+    found, opened, line, start = [], [], 1, 0  # opened: a stack of (name or None, its first line, a C block that hides no function)
+    for at, char in enumerate(neutral):
+        if char == "\n":
+            line += 1
+        elif char == ";":
+            start = at + 1
+        elif char == "{":
+            header, named = neutral[start:at], None
+            if rust or go:
+                named = (RUST_FN if rust else GO_FUNC).search(header)
+                named = named and (named.group(1), named.start(1))
+            elif all(transparent for _, _, transparent in opened):
+                named = c_function(header)
+            name, first = (named[0], line - header[named[1]:].count("\n")) if named and IDENTIFIER.match(named[0]) else (None, line)
+            opened.append((name, first, not rust and not go and name is None and bool(C_TRANSPARENT.fullmatch(header))))
+            start = at + 1
+        elif char == "}":
+            if opened:
+                name, first, _ = opened.pop()
+                if name:
+                    found.append([name, first, line - first + 1])
+            start = at + 1
+    return sorted(found, key=lambda function: function[1])[:OUTLINE_FUNCTIONS]
+
+
+def cmd_outline(args):
+    """Prints the project's code as its cutter may read it (docs/cutter.md, "What the cutter reads"), as JSON lines:
+    first the project and the commit read, then, for each file of the tip of the branch the hive writes whose name
+    ends in a suffix the outline reads (or that a --path names), its path, its size, its lines, whether it is
+    protected, and its functions (outline_text). The files are read as git stores them at that commit, as text:
+    nothing of the project is built or run, and no link is followed."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, _ = settings_on(args.repo, commit, branch, repository)
+    tip = work_tip(args.repo, config)
+    listed = git_raw(args.repo, "ls-tree", "-r", "-z", "-l", need_sha(tip))
+    if listed.returncode != 0:
+        raise HiveError("the files of the project's tip cannot be listed")
+    files, unnamed, total = [], 0, 0
+    for entry in listed.stdout.split(b"\0"):
+        meta, _, raw_path = entry.partition(b"\t")
+        fields, path = meta.split(), raw_path.decode("utf-8", errors="surrogateescape")
+        if len(fields) != 4 or fields[0] not in (b"100644", b"100755") or fields[1] != b"blob":
+            continue
+        if not (matches(path, args.path) if args.path else path.lower().endswith(OUTLINE_SUFFIXES)):
+            continue
+        if not OUTLINE_PATH.match(path) or ".." in path.split("/"):
+            unnamed += 1
+            continue
+        size, suffix = int(fields[3]), os.path.splitext(path)[1].lower()
+        row = {"path": path, "bytes": size, "protected": protected(path, config["protected"])}
+        if size <= OUTLINE_FILE_BYTES and total + size <= OUTLINE_BYTES:
+            data, total = git_capped(args.repo, "cat-file", "blob", fields[2].decode(), limit=OUTLINE_FILE_BYTES), total + size
+            text = (data or b"").decode("utf-8", errors="replace")
+            row["lines"] = text.count("\n") + (bool(text) and not text.endswith("\n"))
+            if suffix in OUTLINE_SUFFIXES:
+                row["functions"] = outline_text(text, suffix)
+        files.append(row)
+    print(json.dumps({"project": config["project"], "tip": tip, "files": len(files), "unnamed": unnamed}, sort_keys=True, ensure_ascii=True))
+    for row in files:
+        print(json.dumps(row, sort_keys=True, ensure_ascii=True))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -6800,9 +7158,23 @@ def main(argv=None):
     p = sub.add_parser("cut-check", help="hold a proposed task file to the cutter's gate, against the published one (docs/cutter.md)")
     hive_side(p)
     p.add_argument("--proposal", required=True, help="the proposed hive/tasks.jsonl, a file of this machine")
-    p.add_argument("--failing", action="append", help="a new task whose goal is « correct » that a run of the judge at the published tip "
+    p.add_argument("--failing", action="append", help="a new task whose goal is « correct » that a run of the judge at the project's tip "
                                                      "showed to fail (once for each)")
+    p.add_argument("--backlog", help="the proposed hive/backlog.jsonl, when the cut changes it (a file of this machine)")
     p.set_defaults(run=cmd_cut_check)
+    p = sub.add_parser("cut", help="the deterministic cutter: write the task file its rules propose, held to the gate (docs/cutter.md)")
+    hive_side(p)
+    p.add_argument("--out", required=True, help="where to write the proposed hive/tasks.jsonl, a file of this machine")
+    p.add_argument("--failing", action="append", help="a task of the backlog whose goal is « correct » that a run of the judge at the "
+                                                     "project's tip showed to fail (once for each)")
+    p.set_defaults(run=cmd_cut)
+    p = sub.add_parser("outline", help="the project's code as its cutter may read it: files, functions and sizes, no comment and no "
+                                       "string (docs/cutter.md)")
+    p.add_argument("--project", required=True, help="the project's repository (owner/name)")
+    p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin")
+    p.add_argument("--path", action="append", help="a file or a pattern of files to read (once for each; by default every file whose "
+                                                   "name ends in a suffix the outline reads)")
+    p.set_defaults(run=cmd_outline)
 
     def worker_side(p, pushes=False):
         p.set_defaults(volunteer=True)
