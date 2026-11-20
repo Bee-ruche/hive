@@ -54,7 +54,7 @@ What those who split work for others have learnt, for people and for AI agents, 
 | Piece | What it does | What it is | State |
 | --- | --- | --- | --- |
 | The architect | Writes the project's charter: its goal, what counts as progress, its directions and priorities, the lowest goal a task may set (the floor), and what it asks of volunteers | the project's lead | exists; tooling planned |
-| The digest | Counts, from the ledger and the tasks alone: deals, expiries, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | planned (step 2) |
+| The tally | Counts, from the ledger and the tasks alone: deals, expiries, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | planned (step 2) |
 | The deterministic cutter | Applies the rules: closes a stuck task and cuts it into smaller ones where the structure is known, publishes a task once its prerequisites are done, keeps the number of open tasks at the project's target | code of the hive | planned (step 5) |
 | The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new goals | the architect's own agent, trusted | planned (step 5); it proposes, the gate decides |
 | The gate (`cut-check`) | Passes or refuses every proposed change of the tasks, the AI's included; nothing overrides it | code of the hive | planned (step 4) |
@@ -75,7 +75,7 @@ tasks already lets through, and which a project's run reads at the same commit a
 The rules that keep the ledger's history true:
 
 - **An id is never used again.** Cutting a task again closes it (`closed`, which ends its deals at no cost to their
-  members) and adds new tasks whose `parent` names it. Its refusals stay in the ledger under its id; the digest
+  members) and adds new tasks whose `parent` names it. Its refusals stay in the ledger under its id; the tally
   follows `parent` to add up a lineage.
 - **A task that is dealt, or whose candidate waits for the judge, is never closed or changed.**
 - `needs` names tasks of the same file, without a cycle. Until the deal reads it, the cutter publishes a task only
@@ -87,7 +87,7 @@ The rules that keep the ledger's history true:
 Once a day, by the architect's agent; a whole cycle (cut, publish, deal, judge, read) takes a day or more, since
 GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitHub starts it when it can").
 
-1. **The digest** reads the ledger and the tasks, and gives numbers and ids, no text.
+1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
 2. **The deterministic cutter** applies its rules.
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
@@ -95,7 +95,7 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
      `not_proven` refusal (the judge's stopwatch could not give a proof) is not a failure.
    - The project is **starving** when no open task can be dealt. That is an alarm for the architect: otherwise
      volunteers ask, are dealt nothing, and nobody notices.
-3. **The AI cutter** completes the proposal, from the architect's charter, the digest, and the project's code as a
+3. **The AI cutter** completes the proposal, from the architect's charter, the tally, and the project's code as a
    mechanical projection shows it (below).
 4. **The gate** checks the proposal against the published tasks (below). Nothing it refuses is published.
 5. **The cutter publishes** the tasks on the branch the project publishes, under the architect's account. Going
@@ -107,7 +107,7 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
 
 ## What the cutter reads, and what it never reads
 
-- It reads the project's settings and tasks, the ledger through the digest (numbers and codes, which hold no text a
+- It reads the project's settings and tasks, the ledger through the tally (numbers and codes, which hold no text a
   fork wrote: [protocol.md](protocol.md), "The ledger and the feed"), and the architect's charter.
 - It reads the project's code only through a **mechanical projection**: the files, the functions, their sizes,
   computed in the judge's container, **with comments and strings removed**. The project's code includes accepted
@@ -154,7 +154,7 @@ To improve the hive, the projects that run it need a way to tell it what goes wr
 hive reads; it is sent nothing.
 
 - **Numbers it reads itself.** A project's `hive-state` branch is public. `hive.py health` reads it for the projects
-  listed in this repository and adds up their digests: acceptance by kind and size, stuck tasks, the judge's and the
+  listed in this repository and adds up their tallies: acceptance by kind and size, stuck tasks, the judge's and the
   machine's errors (the ledger's `error` marks and their kinds), durations, and later what the gate refused. Numbers
   only, with no member's id: nothing leaves a project that was not already public.
 - **What numbers do not say comes from the architect, by hand**: issue templates in `Bee-ruche/hive` (an error, an
@@ -187,7 +187,7 @@ read each cut before it lands says so in its settings.
 ## Order of building
 
 1. This document. **Done.**
-2. The digest (`hive.py digest`) and a section of the project's page for the tasks that need attention.
+2. The tally (`hive.py tally`) and a section of the project's page for the tasks that need attention.
 3. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`.
 4. The fields `parent`, `needs` and `kind`, the gate (`hive.py cut-check`), and the cutter's settings in
    `hive/settings.json` (the floor, the target of open tasks, the bound on each cycle), with their bounds and
