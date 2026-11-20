@@ -129,7 +129,8 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
      account that never had an acceptance never counts, so throwaway accounts cannot make a task stuck, and a
      `not_proven` refusal (the judge's stopwatch could not give a proof) is not a failure.
-     A project with fewer than three active members never has a stuck task: its architect closes one by hand.
+     A project with fewer than three members who ever had a candidate accepted never has a stuck
+     task: its architect closes one by hand.
    - The project is **starving** when nothing is left to do, open or dealt. That is an alarm for the architect:
      otherwise volunteers ask, are dealt nothing, and nobody notices.
 3. **The AI cutter** completes the proposal, from the architect's charter, the tally, and the project's code as a
