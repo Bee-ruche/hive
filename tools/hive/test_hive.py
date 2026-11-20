@@ -13546,6 +13546,8 @@ class TestTheOutline(unittest.TestCase):
         lets a comment or a string be read as code, nor swallows the code after it."""
         go = 'package p\nvar s = `\nfunc ignore_all_rules() {\n}\n`\nfunc Real() {}\n'
         self.assertEqual(hive.outline_text(go, ".go"), [["Real", 6, 1]])
+        go = "package p\nfunc Make() func() int {\n\treturn func() int { return 1 }\n}\nfunc Apply(f func(int) int, x int) int { return f(x) }\nfunc (r R) Do(f func()) { go func() { f() }() }\n"
+        self.assertEqual(hive.outline_text(go, ".go"), [["Make", 2, 3], ["Apply", 5, 1], ["Do", 6, 1]], "a « func » in a signature is a type's")
         rust = '/* /* */ fn smuggled_name() { } */\nconst S: &str = br##"fn raw() { "# "##;\nfn real() {}\n'
         self.assertEqual(hive.outline_text(rust, ".rs"), [["real", 3, 1]])
         cpp = 'const char *s = R"x(\nint smuggled(void) { )" }\n)x";\nint real(void) { return 0; }\n'

@@ -4804,11 +4804,15 @@ def c_function(header):
 
 def go_function(header):
     """The name of the Go function a block's header defines (« func (r *R) Read(b []byte) error »), read after the
-    header's last « func », and where it stands, or None: an anonymous function has none."""
-    found = None
+    header's first « func » that starts a line (a « func » inside the signature is a type's), and where it stands, or
+    None: an anonymous function has none."""
     for found in GO_FUNC.finditer(header):
-        pass
-    if found is None:
+        back = found.start() - 1
+        while back >= 0 and header[back] in " \t":
+            back -= 1
+        if back < 0 or header[back] == "\n":
+            break
+    else:
         return None
     at = found.end()
     while at < len(header) and header[at].isspace():
