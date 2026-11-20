@@ -6,7 +6,7 @@
   "invitation": "A pilot: the accounts the lead names, the hive's ordinary pace.",
   "open": "Open to any GitHub account old enough, at the hive's ordinary pace."
  },
- "sections": ["project", "opening", "trust", "pace", "limits", "judge", "protected"],
+ "sections": ["project", "opening", "trust", "pace", "limits", "judge", "cutter", "protected"],
  "types": {
   "protocol": "the version of the hive's protocol, a whole number",
   "identifier": "lower-case letters, digits and hyphens",
@@ -30,6 +30,7 @@
   "commits": "a list of full commit ids",
   "figures": "a list of names of the judge's figures",
   "conditions": "a list of conditions on kept figures: {name, min or max, and optionally and: [conditions]}",
+  "floors": "names of the judge's kept figures, each with a number",
   "waivers": "figures, each with the most a guardian's ruling may let it reach",
   "patterns": "a list of paths or path patterns (dir/** for everything below a folder): printable, relative, with no empty or dot part"
  },
@@ -80,6 +81,11 @@
   {"key": "judge.metrics", "section": "judge", "type": "figures", "default": [], "what": "The judge's figures the hive keeps on a verdict's line. A goal, a requirement, a proof or a waiver can only name one of these."},
   {"key": "judge.confirm", "section": "judge", "type": "figures", "default": [], "what": "The judge's proofs the project takes: kept figures named sure_<measure>, those the judged program cannot bear upon. Every goal on a figure must hold one."},
   {"key": "judge.require", "section": "judge", "type": "conditions", "default": [], "what": "What the project requires of every contribution, whatever its task: conditions on kept figures. They can only refuse."},
+
+  {"key": "cutter.floors", "section": "cutter", "type": "floors", "default": {}, "what": "The least a task's goal may ask of a figure, for the figures the project names: the cutter's gate (hive.py cut-check) refuses a new task whose goal asks less. No run reads it."},
+  {"key": "cutter.changes", "section": "cutter", "type": "whole number", "default": 10, "least": 1, "most": 500, "what": "The most task lines one cut adds or closes: the cutter's gate refuses a larger cut. No run reads it."},
+  {"key": "cutter.open", "section": "cutter", "type": "whole number", "default": 10, "least": 1, "most": 1000, "what": "How many open tasks the project's cutter aims at: below it, the cutter cuts more (docs/cutter.md). No run reads it."},
+  {"key": "cutter.context_chars", "section": "cutter", "type": "whole number", "default": 2000, "least": 100, "most": 20000, "what": "The longest context a new task may carry: the cutter's gate refuses a longer one. No run reads it."},
 
   {"key": "protected", "section": "protected", "type": "patterns", "default": [],
    "always": {"at_the_root": ["hive/**"],

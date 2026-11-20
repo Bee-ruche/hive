@@ -720,8 +720,10 @@ hour and the fork's own number, which adding forks to the list does not shift.
   one of them, with a minimum of 1 or more, and a project that lists none has goals of the kind « correct » only;
   what the project requires of every candidate, `judge.require`, stays as the project wrote it), its guardians if
   it names any (`guardians`: `accounts`, their GitHub account numbers, and `waive`, the figures they may waive,
-  each with the most a ruling may let it reach; a file without it takes no ruling, and one that names a guardian it also bans by number does not load: "Guardians"), and the project's pause
-  (`"paused": true`). A run reads this file, and the tasks, at the commit of the published branch its plan names,
+  each with the most a ruling may let it reach; a file without it takes no ruling, and one that names a guardian it also bans by number does not load: "Guardians"), the project's pause
+  (`"paused": true`), and what its cutter keeps to (`cutter`: the least a goal on a figure may ask, the most task
+  lines one cut changes, how many open tasks it aims at, the longest context of a task), which no run reads
+  ([cutter.md](cutter.md), "The gate"). A run reads this file, and the tasks, at the commit of the published branch its plan names,
   and a change acts from the run that plans after it ([hosting.md](hosting.md), "What a run reads, and when").
 
   **Every setting of that file is described, one by one, in `hive/settings.json`**: its key, its type, whether the
@@ -736,7 +738,7 @@ hour and the fork's own number, which adding forks to the list does not shift.
   times `history_bytes`, a file is read whole, git is told how many commits to count, the plan's and the judging
   jobs have their own time), and `files` times `file_bytes` is 256 MiB at most: what all of a candidate's files may
   weigh together. A file that says otherwise, that names a setting the hive does not know (at its top, or under
-  `limits`, `members` or `judge`: a key mistyped would leave a setting at its default), or that gives one of these
+  `limits`, `members`, `judge` or `cutter`: a key mistyped would leave a setting at its default), or that gives one of these
   blocks as anything but settings by name, does not load; `judge.options` are the project's plug-in's own and take
   any name, and `in_service` is a mark that `Bee-ruche/registre`'s own test read, which the hive does not read. The hive's own
   constants bound what a run does besides (the branches it lists of
@@ -744,7 +746,10 @@ hour and the fork's own number, which adding forks to the list does not shift.
   what guardians may waive depends on a project's judge, and `members.per_guardian` has recommendations of its own
   for a project that names them.
 - `hive/tasks.jsonl`, beside it, read at the same commit: one task per line: `id`, `title`, `files` (exact paths, or a
-  folder ending with `/`), and optionally `size`, `tier`, `goal`, `options`, `context`, `closed`. Tasks are
+  folder ending with `/`), and optionally `size`, `tier`, `goal`, `options`, `context`, `closed`, and the links
+  that make the project's map: `parent` (the task it was cut from), `needs` (the tasks to be done before it) and
+  `kind` (`work`, `probe` or `hunt`), which name other tasks of the file and go round in no cycle, or the file is
+  not run ([cutter.md](cutter.md), "The map: links between tasks"). Tasks are
   written by the project's maintainers or, once it is built, by its cutter ([cutter.md](cutter.md)); they are trusted data.
 
 ## What this version does not do yet

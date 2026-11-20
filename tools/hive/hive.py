@@ -27,9 +27,9 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
           what it started on, nothing else, pushes the
           judged commits (never anything but a descendant of the judged tip) and records.
 
-Two more commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
-project's first run) and tally (what the ledger says of each task, in numbers alone, for the project's cutter:
-docs/cutter.md).
+Three more commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
+project's first run), tally (what the ledger says of each task, in numbers alone, for the project's cutter:
+docs/cutter.md) and cut-check (the cutter's gate, which holds a proposed task file to its rules).
 
 Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each is told the
 project by its repository (--project owner/name, as the user's prompt names it) and reads the project's settings and
@@ -133,6 +133,7 @@ VOID_MEMORY_DAYS = 7  # how long a promised push the hive gave up on is still lo
 UNREAD_HOURS = 24  # a deal whose member's fork could not be read for this long after its time is closed, at no cost to the member
 BACKOFF_MAX_HOURS = 7 * 24
 ACTIVE_DAYS_MAX = 3650  # the longest a project may count a member active after a deal (members.active_days)
+CUTTER_BOUNDS = {"changes": (1, 500), "open": (1, 1000), "context_chars": (100, 20000)}  # the cutter's settings (cutter.*)
 JUDGED_REASONS = ("judge_refused", "goal_not_met", "requirement_not_met")  # the judge examined the candidate: a real attempt
 NEAR_REASONS = ("not_proven",)  # examined, correct, the task's own figure reached: only a proof is missing or short
 MEASURED_REASONS = ("goal_not_met", "requirement_not_met", "not_proven")  # the judge ran, the candidate is correct, a figure is short: the line keeps the figures
@@ -212,6 +213,10 @@ DEFAULTS = {
     # guardians: the accounts the project trusts to admit a refused commit, and the figures they may waive (guardians_of);
     # a project that names none takes no ruling
     "guardians": None,
+    # cutter: what the project's cutter keeps to (docs/cutter.md), held by its gate (cut_check) and read by no run:
+    # floors, the least a goal on a figure may ask; changes, the most task lines one cut adds or closes; open, how many
+    # open tasks it aims at; context_chars, the longest context a task may carry
+    "cutter": {"floors": {}, "changes": 10, "open": 10, "context_chars": 2000},
     "deal_hours": 3,  # how long a member has, from the moment its deal is published, to push its candidate
     "grace_hours": 1,  # how long after that the hive still waits before the deal expires
     "backoff_hours": 2,  # the wait after a deal that ended badly; doubled at each one in a row, until an acceptance
@@ -534,14 +539,14 @@ def config_of(raw, path, repository=None):
     unknown = sorted(set(raw) - known)
     if unknown:
         raise HiveError(f"{path}: {safe_text(unknown[0], 60)}: not a setting the hive knows")
-    for block, keys in (("limits", DEFAULTS["limits"]), ("members", DEFAULTS["members"]), ("judge", JUDGE_KEYS)):
+    for block, keys in (("limits", DEFAULTS["limits"]), ("members", DEFAULTS["members"]), ("judge", JUDGE_KEYS), ("cutter", DEFAULTS["cutter"])):
         if block in raw and not isinstance(raw[block], dict):
             raise HiveError(f"{path}: {block}: its settings, by name")
         unknown = sorted(set(raw.get(block) or {}) - set(keys))
         if unknown:
             raise HiveError(f"{path}: {block}.{safe_text(unknown[0], 60)}: not a setting the hive knows (its settings: {', '.join(keys)})")
     config = {**DEFAULTS, **raw}
-    for key in ("limits", "members"):
+    for key in ("limits", "members", "cutter"):
         config[key] = {**DEFAULTS[key], **(raw.get(key) or {})}
     if not (isinstance(config.get("project"), str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", config["project"])):
         raise HiveError(f"{path}: project: a lower-case identifier")
@@ -640,6 +645,17 @@ def config_of(raw, path, repository=None):
     if per_guardian is not None and config["guardians"] is None:
         raise HiveError(f"{path}: members.per_guardian: the project names no guardian (guardians.accounts): a bound for each guardian, "
                         "with no guardian, would admit no member at all")
+    # What the project's cutter keeps to (docs/cutter.md): no run reads it, the cutter's gate does (cut_check); held here
+    # all the same, so that the project's file says nothing the hive would read otherwise.
+    cutter = config["cutter"]
+    for key, (least, most) in CUTTER_BOUNDS.items():
+        if type(cutter[key]) is not int or not least <= cutter[key] <= most:
+            raise HiveError(f"{path}: cutter.{key}: a whole number, from {least} to {most}")
+    if not (isinstance(cutter["floors"], dict) and all(name in judge["metrics"] and not name.startswith(PROOF) and number(value)
+                                                       for name, value in cutter["floors"].items())):
+        raise HiveError(f"{path}: cutter.floors: figures listed in judge.metrics, none of them a proof ({PROOF}<measure>), each with the "
+                        "least a task's goal may ask of it")
+    cutter["floors"] = dict(cutter["floors"])  # (its own: never the defaults' object)
     return config
 
 
@@ -769,6 +785,8 @@ def check_goals(config, tasks):
     confirm = config["judge"]["confirm"]
     for task in tasks.values():
         goal = task.get("goal") or {"kind": "correct"}
+        if not isinstance(goal, dict):
+            raise HiveError(f"task {task['id']}: goal: « correct », or « metric » on a figure listed in the project's judge.metrics")
         if goal.get("kind") == "correct":
             continue
         if goal.get("kind") != "metric" or not condition_ok(goal, config["judge"]["metrics"]):
@@ -776,6 +794,47 @@ def check_goals(config, tasks):
         if not any(c.get("name") in confirm and c.get("min", 0) >= 1 for c in [goal, *goal.get("and", [])]):
             raise HiveError(f"task {task['id']}: goal: it must hold one of the judge's proofs the project takes (judge.confirm), with a "
                             "minimum of 1 or more; a project that lists none takes goals of the kind « correct » only")
+
+
+def check_links(tasks):
+    """The links between the project's tasks, which make its map (docs/cutter.md, "The map: links between tasks"): a
+    task's `parent`, the task it was cut from, and its `needs`, the tasks to be done before it, name other tasks of
+    the file; neither the parents nor the needs go round in a cycle; a task's `kind` is one the hive knows (TASK_KINDS:
+    work, the default, probe or hunt). And what the hive counts by needs to be a count: a tier is a whole number from
+    1 to 3, a size a short word. A file that says otherwise is a mistake to fix, not to run."""
+    for task in tasks.values():
+        parent, needs, kind = task.get("parent"), task.get("needs"), task.get("kind", "work")
+        needs = [] if needs is None else needs
+        if "tier" in task and not (type(task["tier"]) is int and 1 <= task["tier"] <= 3):
+            raise HiveError(f"task {task['id']}: tier: a whole number, from 1 to 3")
+        if "size" in task and plain_word(task["size"]) is None:
+            raise HiveError(f"task {task['id']}: size: a short word (S, M, L)")
+        if parent is not None and not (isinstance(parent, str) and parent in tasks and parent != task["id"]):
+            raise HiveError(f"task {task['id']}: parent: the id of another task of the file, the one it was cut from")
+        if not (isinstance(needs, list) and len(set(map(str, needs))) == len(needs)
+                and all(isinstance(other, str) and other in tasks and other != task["id"] for other in needs)):
+            raise HiveError(f"task {task['id']}: needs: a list of the ids of other tasks of the file, each once")
+        if not (isinstance(kind, str) and kind in TASK_KINDS):
+            raise HiveError(f"task {task['id']}: kind: one of {', '.join(TASK_KINDS)}")
+    for links in ("parent", "needs"):
+        done = set()
+        for start in tasks:
+            path, todo = set(), [(start, False)]
+            while todo:
+                current, leaving = todo.pop()
+                if leaving:
+                    path.discard(current)
+                    done.add(current)
+                    continue
+                if current in done:
+                    continue
+                if current in path:
+                    raise HiveError(f"task {current}: {links}: the tasks go round in a cycle")
+                path.add(current)
+                todo.append((current, True))
+                named = tasks[current].get(links) or None
+                following = ([named] if named else []) if links == "parent" else (named or [])
+                todo.extend((other, False) for other in following)
 
 
 def load_tasks(path):
@@ -805,11 +864,13 @@ def tasks_of(lines, path):
 def settings_from(settings, listed, repository):
     """(configuration, tasks) of a project from the bytes of its two files, hive/project.json and hive/tasks.jsonl, as
     one commit of its repository holds them (settings_at for a run, settings_in for a worker), with each goal checked
-    against its judge's figures. repository: the repository they were read from, which the file must name. Raises
-    HiveError, or ValueError, TypeError or RecursionError for bytes that are not the JSON this reads."""
+    against its judge's figures and the links between the tasks checked (check_links). repository: the repository they
+    were read from, which the file must name. Raises HiveError, or ValueError, TypeError or RecursionError for bytes
+    that are not the JSON this reads."""
     config = config_of(json.loads(settings.decode("utf-8")), PROJECT_FILE, repository)
     tasks = tasks_of(listed.decode("utf-8").split("\n"), TASKS_FILE)
     check_goals(config, tasks)
+    check_links(tasks)
     return config, tasks
 
 
@@ -4195,6 +4256,144 @@ def cmd_tally(args):
     print(json.dumps({"project": config["project"], "published": commit, **result}, sort_keys=True, indent=1, ensure_ascii=True))
 
 
+TITLE_CHARS = 200  # the longest title a new task may carry
+NEW_TASK_KEYS = ("id", "title", "files", "size", "tier", "goal", "options", "context", "parent", "needs", "kind")
+OPTION_CHARS = 200  # the longest value an option of a new task may give
+LINE_SLACK = 8192  # what a new task's line may weigh beyond its context
+
+
+def task_json(task):
+    """A task's line as the gate compares it: its JSON with sorted keys, every number finite (None for a line that
+    holds a number that is none). Python takes 1, 1.0 and true for one value; a project's other readers do not."""
+    try:
+        return json.dumps(task, sort_keys=True, ensure_ascii=True, allow_nan=False)
+    except ValueError:
+        return None
+
+
+def cut_check(config, published, proposal, live, done, paths, failing=()):
+    """The gate of the project's cutter (docs/cutter.md, "The gate"): every reason to refuse a proposed task file
+    against the one the project publishes, each as a sentence. None: the proposal may be published. Nothing
+    overrides it, whoever proposed it, an AI or a person. It is there for the cutter's errors, and for what a cutter
+    misled by text it read could try to publish.
+
+    `published` and `proposal` are {id: task} as tasks_of reads them; the caller has held the proposal to what a run
+    holds a task file to (check_goals, check_links). `live`: the tasks dealt now; `done`: those with an accepted
+    candidate; `paths`: the files of the published tip. `failing`: the new tasks whose goal is « correct » that the
+    cutter says a run of the judge at the published tip showed to fail, in its container (a task the project's code
+    passes already would be accepted for nothing): a claim the gate takes and prints, and cannot check itself. A goal
+    on a figure needs no such run: it holds a proof (check_goals), which a candidate that changes nothing never gives.
+
+    The rules: no published task is removed; a published line changes in one way only, by gaining « closed »: true,
+    compared as JSON (task_json), and never while its task is dealt; a cut adds and closes at most cutter.changes
+    lines. A new task is open and says nothing but what a task says (NEW_TASK_KEYS), within bounds: the project's id,
+    a title of printable characters, files of the published tip that a contribution may change (none protected), a
+    context within cutter.context_chars, options only under names the project's judge or its published tasks already
+    use, each a short plain value; every condition of its goal on a figure the project floors asks at least that floor
+    with a « min » (cutter.floors: figures where more is better); what it needs is done; and, when it names a parent,
+    that parent is closed in the same cut or done: a task cut again leaves no copy of itself open beside its parts."""
+    cutter, refusals, added, closed = config["cutter"], [], [], []
+    known_options = set(config["judge"].get("options") or {}) | {name for task in published.values() if isinstance(task.get("options"), dict)
+                                                                 for name in task["options"]}
+    for task_id in sorted(set(published) - set(proposal)):
+        refusals.append(f"{task_id}: a published task is never removed: close it (« closed »: true)")
+    for task_id, task in proposal.items():
+        old = published.get(task_id)
+        if task_json(task) is None:
+            refusals.append(f"{task_id}: a number that is no number (NaN, an infinity)")
+        elif old is None:
+            added.append(task_id)
+        elif task_json(task) != task_json(old):
+            if task_json(task) == task_json({**old, "closed": True}) and old.get("closed") is not True:
+                if task_id in live:
+                    refusals.append(f"{task_id}: it is dealt now: a task is never closed under its holder")
+                closed.append(task_id)
+            else:
+                refusals.append(f"{task_id}: a published task changes in one way only, by gaining « closed »: true")
+    if len(added) + len(closed) > cutter["changes"]:
+        refusals.append(f"{len(added) + len(closed)} lines are added or closed: {cutter['changes']} at most in one cut (cutter.changes)")
+    for task_id in added:
+        task, goal = proposal[task_id], proposal[task_id].get("goal") or {"kind": "correct"}
+        extra = sorted(set(task) - set(NEW_TASK_KEYS))
+        if extra:
+            refusals.append(f"{task_id}: {safe_text(extra[0], 40)}: not something a task says ({', '.join(NEW_TASK_KEYS)})")
+        if len(task_json(task)) > cutter["context_chars"] + LINE_SLACK:
+            refusals.append(f"{task_id}: its line is longer than its context and {LINE_SLACK} characters")
+        if task_id.rpartition("-")[0] != config["project"]:
+            refusals.append(f"{task_id}: a new task's id is the project's own: {config['project']}-<four digits>")
+        if "closed" in task:
+            refusals.append(f"{task_id}: a new task is open")
+        title = task.get("title")
+        if not (isinstance(title, str) and title.strip() and len(title) <= TITLE_CHARS and title.isprintable()):
+            refusals.append(f"{task_id}: title: a sentence of printable characters, {TITLE_CHARS} at most")
+        for path in task["files"]:
+            if protected(path.rstrip("/"), config["protected"]):
+                refusals.append(f"{task_id}: {path}: a protected path, which no contribution may change")
+            elif not (any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths):
+                refusals.append(f"{task_id}: {path}: not a file of the published tip")
+        if not (isinstance(task.get("context", ""), str) and len(task.get("context", "")) <= cutter["context_chars"]):
+            refusals.append(f"{task_id}: context: {cutter['context_chars']} characters at most (cutter.context_chars)")
+        options = task.get("options", {})
+        if not (isinstance(options, dict) and all(name in known_options for name in options)
+                and all(isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= OPTION_CHARS and value.isprintable())
+                        for value in options.values())):
+            refusals.append(f"{task_id}: options: only under names the project's judge or its published tasks use, each a short plain value")
+        conditions = [goal, *goal.get("and", [])] if goal.get("kind") == "metric" else []
+        for condition in conditions:
+            floor = cutter["floors"].get(condition.get("name"))
+            if floor is not None and not ("min" in condition and "max" not in condition and condition["min"] >= floor):
+                refusals.append(f"{task_id}: goal: at least {floor} on {condition['name']}, with « min » (cutter.floors)")
+        if goal.get("kind") != "metric" and task_id not in failing:
+            refusals.append(f"{task_id}: goal « correct »: name it among the tasks shown to fail at the published tip (--failing), once a "
+                            "run of the judge there shows it")
+        for other in task.get("needs") or []:
+            if other not in done:
+                refusals.append(f"{task_id}: it needs {other}, which is not done: publish it once it is")
+        parent = task.get("parent")
+        if parent is not None and parent not in done and proposal[parent].get("closed") is not True:
+            refusals.append(f"{task_id}: parent {parent} stays open: close it in the same cut")
+    return refusals
+
+
+def cmd_cut_check(args):
+    """Holds a proposed task file to the cutter's gate (cut_check) against the one the project publishes: prints each
+    refusal (REFUSED, then a sentence of this tool's), or PASSED with how many tasks it adds and closes. The settings
+    and the published tasks are read where a run reads them, the deals in the state. It writes nothing."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, published = settings_on(args.repo, commit, branch, repository)
+    try:
+        with open(args.proposal, "rb") as f:
+            data = f.read(SETTINGS_BYTES + 1)
+        if len(data) > SETTINGS_BYTES:
+            raise HiveError(f"the proposal is larger than {SETTINGS_BYTES} bytes")
+        proposal = tasks_of(data.decode("utf-8").split("\n"), "the proposal")
+        check_goals(config, proposal)
+        check_links(proposal)
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        raise HiveError(f"the proposal cannot be read ({type(error).__name__}): publish nothing of it") from None
+    ledger = Ledger(Path(args.state))
+    live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
+    listed = git_raw(args.repo, "ls-tree", "-r", "-z", "--name-only", need_sha(commit))
+    if listed.returncode != 0:
+        raise HiveError("the files of the published tip cannot be listed")
+    paths = {name.decode("utf-8", errors="surrogateescape") for name in listed.stdout.split(b"\0") if name}
+    failing = set(args.failing or ())
+    refusals = cut_check(config, published, proposal, live, ledger.done(), paths, failing)
+    for refusal in refusals:
+        print(f"REFUSED {safe_text(refusal, 300)}")
+    if refusals:
+        raise HiveError(f"the proposal is refused ({len(refusals)}): publish nothing of it")
+    added, done = len(set(proposal) - set(published)), ledger.done()
+    still, aim = sum(1 for task_id, task in proposal.items() if not task.get("closed") and task_id not in done), config["cutter"]["open"]
+    print(f"PASSED {added} new, {sum(1 for t in published if task_json(proposal[t]) != task_json(published[t]))} closed; {still} left to do, the project aims at "
+          f"{aim} open (cutter.open)")
+    # What was checked, so that what is published can be held to it: the file's own SHA-256, the published commit it was
+    # held against, and the cutter's word on the tasks whose goal is « correct » (a claim, which the gate cannot check).
+    print(f"CHECKED {hashlib.sha256(data).hexdigest()} against {commit}" + (f"; shown to fail at the tip, by the cutter's word: "
+          f"{', '.join(sorted(t for t in failing if t in proposal))}" if failing else ""))
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Volunteer side: setup, next, start, ready, submit, at the root of the clone of the volunteer's own fork
 #
@@ -6598,6 +6797,12 @@ def main(argv=None):
     p = sub.add_parser("tally", help="print what the ledger says of each task, in numbers (for the project's cutter: docs/cutter.md)")
     hive_side(p)
     p.set_defaults(run=cmd_tally)
+    p = sub.add_parser("cut-check", help="hold a proposed task file to the cutter's gate, against the published one (docs/cutter.md)")
+    hive_side(p)
+    p.add_argument("--proposal", required=True, help="the proposed hive/tasks.jsonl, a file of this machine")
+    p.add_argument("--failing", action="append", help="a new task whose goal is « correct » that a run of the judge at the published tip "
+                                                     "showed to fail (once for each)")
+    p.set_defaults(run=cmd_cut_check)
 
     def worker_side(p, pushes=False):
         p.set_defaults(volunteer=True)

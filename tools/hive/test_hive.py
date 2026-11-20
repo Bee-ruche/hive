@@ -12691,7 +12691,7 @@ class TestTheSettingsList(unittest.TestCase):
 
     def test_the_list_is_well_formed_one_entry_for_each_key_in_a_fixed_vocabulary_of_sections_and_types(self):
         self.assertEqual(sorted(self.listed), ["about", "joint_bounds", "not_settings", "presets", "sections", "settings", "types"])
-        self.assertEqual(self.listed["sections"], ["project", "opening", "trust", "pace", "limits", "judge", "protected"])
+        self.assertEqual(self.listed["sections"], ["project", "opening", "trust", "pace", "limits", "judge", "cutter", "protected"])
         self.assertEqual(len(self.settings), len(self.listed["settings"]), "each key once")
         self.assertEqual(sorted(self.listed["presets"]), sorted(("about", *self.WAYS)))
         for text in (self.listed["about"], *self.listed["presets"].values(), *self.listed["types"].values(), *self.listed["not_settings"]):
@@ -12731,7 +12731,8 @@ class TestTheSettingsList(unittest.TestCase):
                   "limits": read(rf'config\["limits"\]\[{name}\]', rf"\blimits\[{name}\]", rf"\blimits\.get\({name}"),
                   "judge": read(rf'config\["judge"\]\[{name}\]', rf'config\["judge"\]\.get\({name}', rf"\bjudge\[{name}\]", rf"\bjudge\.setdefault\({name}",
                                 rf"\bsettings\[{name}\]", rf"\bsettings\.get\({name}"),
-                  "guardians": read(rf'\(config\.get\("guardians"\) or \{{\}}\)\.get\({name}', rf"\braw\[{name}\]")}
+                  "guardians": read(rf'\(config\.get\("guardians"\) or \{{\}}\)\.get\({name}', rf"\braw\[{name}\]"),
+                  "cutter": read(rf'config\["cutter"\]\[{name}\]', rf"\bcutter\[{name}\]")}
         self.assertLessEqual(set(blocks), top, "the blocks of a project's file are keys of it")
         self.assertTrue(all(blocks.values()))
         found = (top - set(blocks)) | {f"{block}.{key}" for block, keys in blocks.items() for key in keys} | set(hive.REGISTRY_MARKS)
@@ -12740,6 +12741,7 @@ class TestTheSettingsList(unittest.TestCase):
         self.assertLessEqual(flat, set(self.settings), "every key of what the hive takes by default is described")
         self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("members.")}, set(hive.DEFAULTS["members"]))
         self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("limits.")}, set(hive.DEFAULTS["limits"]))
+        self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("cutter.")}, set(hive.DEFAULTS["cutter"]))
         # The two keys of « guardians » are all it takes: a third does not load.
         self.assertTrue(self.loads({**self.MINIMAL, **self.GUARDED}))
         self.assertFalse(self.loads({**self.MINIMAL, **self.FIGURE, "guardians": {**self.GUARDED["guardians"], "minimum": 1}}))
@@ -12844,7 +12846,8 @@ class TestTheSettingsList(unittest.TestCase):
         self.assertEqual({key: entry["most"] for key, entry in self.settings.items() if "most" in entry and entry["section"] != "limits"},
                          {"deal_hours": hive.BACKOFF_MAX_HOURS, "grace_hours": hive.BACKOFF_MAX_HOURS, "backoff_hours": hive.BACKOFF_MAX_HOURS,
                           "members.active_days": hive.ACTIVE_DAYS_MAX, "members.min_account_age_days": hive.ACCOUNT_AGE_MOST,
-                          "judge.repetitions": hive.REPETITIONS_MOST, "judge.timeout_seconds": hive.JUDGEMENT_SECONDS_MOST})
+                          "judge.repetitions": hive.REPETITIONS_MOST, "judge.timeout_seconds": hive.JUDGEMENT_SECONDS_MOST,
+                          **{f"cutter.{key}": most for key, (_, most) in hive.CUTTER_BOUNDS.items()}})
         self.assertEqual({key: (entry.get("least"), entry.get("most")) for key, entry in self.settings.items() if entry["section"] == "limits"},
                          {f"limits.{key}": (hive.LIMITS_LEAST, most) for key, most in hive.LIMITS_MOST.items()}, "each limit has its least and its most")
         self.assertEqual(set(hive.LIMITS_MOST), set(hive.DEFAULTS["limits"]))
@@ -13238,6 +13241,137 @@ class TestTheTallyCommand(Base):
         self.assertEqual(result["published"], sh("git", "rev-parse", "stable", cwd=self.w.upstream).stdout.strip(),
                          "the tasks are read on the published branch, at its tip")
         self.assertNotIn("alice", printed, "no login")
+
+
+class TestTheMap(unittest.TestCase):
+    """The links between tasks (hive.check_links): a parent and needs that name other tasks of the file, no cycle, a
+    kind the hive knows; a run reads no task file that says otherwise."""
+
+    def links(self, *more):
+        tasks = {t["id"]: dict(t) for t in TASKS}
+        for task_id, fields in more:
+            tasks[task_id].update(fields)
+        hive.check_links(tasks)
+
+    def test_what_a_task_may_say_of_others(self):
+        self.links(("toy-0004", {"parent": "toy-0001", "needs": ["toy-0002"], "kind": "probe"}), ("toy-0005", {"kind": "hunt", "needs": None}))
+        for bad in ({"parent": "toy-0009"}, {"parent": "toy-0004"}, {"parent": 4}, {"needs": "toy-0001"}, {"needs": ["toy-0001", "toy-0001"]},
+                    {"needs": ["toy-0004"]}, {"needs": ["toy-0009"]}, {"needs": [1]}, {"kind": "chore"}, {"kind": None},
+                    {"tier": "x"}, {"tier": 4}, {"tier": True}, {"tier": 1.0}, {"size": {"a": 1}}, {"size": "a long size"}):
+            with self.subTest(bad), self.assertRaises(hive.HiveError):
+                self.links(("toy-0004", bad))
+        for cycle in ([("toy-0001", {"parent": "toy-0002"}), ("toy-0002", {"parent": "toy-0001"})],
+                      [("toy-0001", {"needs": ["toy-0002"]}), ("toy-0002", {"needs": ["toy-0004"]}), ("toy-0004", {"needs": ["toy-0001"]})]):
+            with self.subTest(cycle), self.assertRaisesRegex(hive.HiveError, "cycle"):
+                self.links(*cycle)
+
+    def test_a_run_reads_no_task_file_whose_links_are_wrong(self):
+        settings = json.dumps(CONFIG).encode()
+        lines = "\n".join(json.dumps(t) for t in [*TASKS[:3], {**TASKS[3], "parent": "toy-0042"}, TASKS[4]]).encode()
+        with self.assertRaisesRegex(hive.HiveError, "parent"):
+            hive.settings_from(settings, lines, "Bee-ruche/toy")
+        config, tasks = hive.settings_from(settings, "\n".join(json.dumps(t) for t in TASKS).encode(), "Bee-ruche/toy")
+        self.assertEqual(config["cutter"], hive.DEFAULTS["cutter"], "a file that says nothing of its cutter takes the defaults")
+
+    def test_the_cutters_settings(self):
+        load = lambda cutter: hive.config_of({**CONFIG, "cutter": cutter}, "hive/project.json")  # noqa: E731
+        self.assertEqual(load({"floors": {"gain": 0.02}, "changes": 3})["cutter"], {"floors": {"gain": 0.02}, "changes": 3, "open": 10, "context_chars": 2000})
+        self.assertIsNot(load({})["cutter"]["floors"], hive.DEFAULTS["cutter"]["floors"], "a project's floors are its own")
+        for bad in ({"floors": {"speed": 0.02}}, {"floors": {"gain": "much"}}, {"floors": ["gain"]}, {"floors": {"sure_gain": 1}}, {"changes": 0},
+                    {"open": True}, {"pace": 1}):
+            with self.subTest(bad), self.assertRaises(hive.HiveError):
+                load(bad)
+
+
+class TestTheCutGate(unittest.TestCase):
+    """The cutter's gate (hive.cut_check): what a proposed task file may change of the published one."""
+    PATHS = {"lib.c", "src/a.c", "other.c", "tests/t.c", "hive/tasks.jsonl", "README.md"}
+    NEW = {"id": "toy-0006", "title": "f0: half as many branches", "files": ["lib.c"], "goal": PROVED_GAIN, "parent": "toy-0001"}
+
+    def setUp(self):
+        self.config = hive.config_of({**CONFIG, "cutter": {"floors": {"gain": 0.02}, "changes": 3}}, "hive/project.json")
+        self.published = {t["id"]: dict(t) for t in TASKS}
+
+    def gate(self, *changes, removed=(), live=(), done=(), failing=()):
+        proposal = {task_id: dict(task) for task_id, task in self.published.items() if task_id not in removed}
+        for task in changes:
+            proposal[task["id"]] = task
+        return hive.cut_check(self.config, self.published, proposal, set(live), set(done), self.PATHS, failing)
+
+    def test_a_cut_closes_a_task_and_adds_its_parts(self):
+        self.assertEqual(self.gate(), [], "a proposal that changes nothing passes")
+        closed = {**self.published["toy-0001"], "closed": True}
+        self.assertEqual(self.gate(closed, self.NEW, {**self.NEW, "id": "toy-0007", "files": ["src/"]}), [])
+        self.assertEqual(self.gate(self.NEW, done={"toy-0001"}), [], "the part of a task done needs no closing")
+
+    def test_what_the_gate_refuses(self):
+        closed = {**self.published["toy-0001"], "closed": True}
+        cases = {
+            "never removed": self.gate(removed={"toy-0002"}),
+            "never closed under its holder": self.gate(closed, live={"toy-0001"}),
+            "changes in one way only": self.gate({**self.published["toy-0002"], "title": "Another title"}),
+            "stays open": self.gate(self.NEW),
+            "protected path": self.gate(closed, {**self.NEW, "files": ["tests/t.c"]}),
+            "not a file of the published tip": self.gate(closed, {**self.NEW, "files": ["nowhere.c"]}),
+            "at least 0.02 on gain": self.gate(closed, {**self.NEW, "goal": {**PROVED_GAIN, "min": 0.01}}),
+            "shown to fail": self.gate(closed, {**self.NEW, "goal": {"kind": "correct"}}),
+            "the project's own": self.gate(closed, {**self.NEW, "id": "other-0001"}),
+            "a new task is open": self.gate(closed, {**self.NEW, "closed": True}),
+            "title": self.gate(closed, {**self.NEW, "title": "x" * 201}),
+            "context": self.gate(closed, {**self.NEW, "context": "x" * 2001}),
+            "at most in one cut": self.gate(closed, *({**self.NEW, "id": f"toy-00{n}"} for n in (10, 11, 12))),
+        }
+        for words, refusals in cases.items():
+            with self.subTest(words):
+                self.assertTrue(any(words in refusal for refusal in refusals), refusals)
+        self.assertEqual(self.gate(closed, {**self.NEW, "goal": {"kind": "correct"}}, failing={"toy-0006"}), [],
+                         "a goal « correct » passes once a run of the judge at the tip showed it to fail")
+        self.assertEqual(self.gate(closed, {**self.NEW, "files": ["hive/tasks.jsonl"]})[0],
+                         "toy-0006: hive/tasks.jsonl: a protected path, which no contribution may change")
+
+    def test_a_new_task_says_what_a_task_says_and_nothing_else(self):
+        """What the gate holds a new task to beyond the run's own checks: no field of its own, options only under
+        names the project already uses, a printable title, every condition on a floored figure held to its floor with
+        a « min », what it needs done; and a published line is compared as JSON, not as Python sees it."""
+        closed = {**self.published["toy-0001"], "closed": True}
+        sure_alone = {"kind": "metric", "name": "sure_gain", "min": 1, "and": [{"name": "gain", "min": 0}]}
+        cases = {
+            "not something a task says": self.gate(closed, {**self.NEW, "notes": "x"}),
+            "options: only under names": self.gate(closed, {**self.NEW, "options": {"unit": "parse"}}),
+            "printable": self.gate(closed, {**self.NEW, "title": "one\ntwo"}),
+            "at least 0.02 on gain": self.gate(closed, {**self.NEW, "goal": sure_alone}),
+            "with « min »": self.gate(closed, {**self.NEW, "goal": {**PROVED_GAIN, "max": 0.5}}),
+            "which is not done": self.gate(closed, {**self.NEW, "needs": ["toy-0002"]}),
+            "changes in one way only": self.gate({**self.published["toy-0004"], "tier": 2.0}),
+            "no number": self.gate({**self.published["toy-0004"], "tier": float("nan")}),
+            "longer than its context": self.gate(closed, {**self.NEW, "goal": {**PROVED_GAIN, "and": [*PROVED_GAIN["and"]] * 2000}}),
+        }
+        for words, refusals in cases.items():
+            with self.subTest(words):
+                self.assertTrue(any(words in refusal for refusal in refusals), refusals)
+        self.assertEqual(self.gate(closed, {**self.NEW, "needs": ["toy-0002"]}, done={"toy-0002"}), [], "what it needs is done")
+        self.config["judge"]["options"] = {"unit": "all"}
+        self.assertEqual(self.gate(closed, {**self.NEW, "options": {"unit": "parse"}}), [], "a name the project's judge uses")
+
+
+class TestTheCutCheckCommand(Base):
+    def test_the_gate_reads_the_published_tasks_and_the_deals(self):
+        proposal = Path(self.tmp.name) / "proposal.jsonl"
+        published = [json.loads(line) for line in (self.w.published / "hive/tasks.jsonl").read_text().splitlines() if line.strip()]
+        lines = [{**task, "closed": True} if task["id"] == "toy-0001" else task for task in published]
+        lines.append({"id": "toy-0006", "title": "f0: half as many branches", "files": ["lib.c"], "goal": PROVED_GAIN, "parent": "toy-0001"})
+        proposal.write_text("\n".join(json.dumps(task) for task in lines) + "\n")
+        printed, _ = self.step(self.job("cut-check"), "cut-check", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state",
+                               "--proposal", str(proposal))
+        self.assertRegex(printed, r"\APASSED 1 new, 1 closed; [0-9]+ left to do, the project aims at 10 open \(cutter.open\)\n"
+                                  r"CHECKED [0-9a-f]{64} against [0-9a-f]{40}\n\Z")
+        self.assertIn(hashlib.sha256(proposal.read_bytes()).hexdigest(), printed, "what was checked is named by its bytes")
+        lines.append({"id": "toy-0007", "title": "Elsewhere", "files": ["nowhere.c"], "goal": PROVED_GAIN})
+        proposal.write_text("\n".join(json.dumps(task) for task in lines) + "\n")
+        with self.assertRaises(SystemExit) as stopped:
+            self.step(self.job("cut-check-2"), "cut-check", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state",
+                      "--proposal", str(proposal))
+        self.assertEqual(stopped.exception.code, 2)
 
 
 if __name__ == "__main__":
