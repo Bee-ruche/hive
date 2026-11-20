@@ -27,6 +27,10 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
           what it started on, nothing else, pushes the
           judged commits (never anything but a descendant of the judged tip) and records.
 
+Two more commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
+project's first run) and tally (what the ledger says of each task, in numbers alone, for the project's cutter:
+docs/cutter.md).
+
 Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each is told the
 project by its repository (--project owner/name, as the user's prompt names it) and reads the project's settings and
 tasks from the project's own address, on its default branch (hive_project). Each first checks that the clone's own git
@@ -3558,6 +3562,163 @@ def build_stats(ledger):
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# The tally: what the ledger says of each task, for the project's cutter (docs/cutter.md)
+
+STUCK_MEMBERS = 3  # a task is stuck once this many distinct members, each with an acceptance on the project, failed on it
+FAILING_REASONS = ("judge_refused", "goal_not_met", "requirement_not_met")  # the judge examined the candidate and refused it
+ERROR_KINDS = ("judge", "push", "hive", "none")  # the kinds of an « error » line (a mark): no kind is the judge's
+FIGURE_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+TASK_KINDS = ("work", "probe", "hunt")  # what a task asks: a goal the judge decides, evidence about something unknown, a divergence
+WORD = re.compile(r"[A-Za-z0-9]{1,8}\Z")
+
+
+def plain_word(value):
+    """A short word of the tasks file (a size: S, M, L), or None for anything else."""
+    return value if isinstance(value, str) and WORD.match(value) else None
+
+
+def instant_text(value):
+    """An instant as the ledger writes it (2026-11-12T12:00:00Z), in a year a ledger can hold, or None for anything else."""
+    try:
+        instant = parse_iso(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return iso(instant) if instant is not None and 2000 <= instant.year <= 2999 else None
+
+
+def tally_line(entry):
+    """What the tally reads of one ledger line, every field checked again, or None for a line it does not count. It
+    keeps the line's type, a task id, an account number, instants, a result, a reason code, yes-or-no fields and the
+    judge's numbers: never a login, a commit id or any text, so that nothing a volunteer wrote reaches the cutter by
+    it. The project's page reads its ledger through the same function (tools/hive/page.py)."""
+    if not isinstance(entry, dict) or entry.get("type") not in ("deal", "expired", "verdict", "error"):
+        return None
+    task, member_id, at = entry.get("task"), entry.get("member_id"), instant_text(entry.get("at"))
+    if not (isinstance(task, str) and TASK_ID.match(task)) or type(member_id) is not int or at is None:
+        return None
+    line = {"type": entry["type"], "task": task, "member_id": member_id, "at": at}
+    if entry["type"] == "deal":
+        return line
+    line["deal"] = instant_text(entry.get("deal"))
+    if entry["type"] == "expired":
+        line["fault"] = entry.get("fault") is True  # the hive's or the project's doing: at no cost to the member
+    elif entry["type"] == "error":
+        kind = entry.get("kind", "judge")
+        line["kind"] = kind if isinstance(kind, str) and kind in ERROR_KINDS else None
+    else:
+        if entry.get("result") not in ("accepted", "refused"):
+            return None
+        report = entry.get("report") if isinstance(entry.get("report"), dict) else {}
+        line.update(result=entry["result"], judged=entry.get("judged") is True, ruling=is_sha(entry.get("ruling")),
+                    reason=entry.get("reason") if isinstance(entry.get("reason"), str) and entry["reason"] in REASONS else None,
+                    report={name: value for name, value in report.items() if isinstance(name, str) and FIGURE_NAME.match(name) and number(value)})
+    return line
+
+
+def tally(tasks, lines, instant, active=None):
+    """What the ledger says of each of the project's tasks, in numbers and ids alone (docs/cutter.md, "The loop"): the
+    cutter's reading of the judge's answers, and the project page's section on the tasks that need attention. `lines`
+    are tally_line()'s, in the ledger's order; a line dated after `instant` says nothing yet. `active` is how many
+    members are active (active_members), given by a caller that read the project's file.
+
+    For each task: its status as the feed gives it; how many deals it had and how many members held it; how many of
+    those deals ran out at their member's cost (`expired`) and at nobody's (`expired_free`); its acceptances; its
+    refusals by reason; the runs spent on its candidates without an answer (`errors`, by kind); how many members failed
+    on it among those the judge accepted something from (`established_failures`); the best value its candidates reached
+    of the figure its goal is on, beside the goal's own bound (`best`); and the hours from the deal to its acceptance.
+
+    A task is STUCK when STUCK_MEMBERS distinct members, each with a candidate accepted on the project, failed on it:
+    the judge examined their candidate and refused it (FAILING_REASONS), or their deal on it ran out at their cost.
+    Only members the judge has accepted something from are counted, as for the feed's hint, and a failure counts only
+    when it came after its member's first acceptance: an account that never had an acceptance makes no task stuck,
+    however often it fails or lets a deal run out, nor does one that failed first and earned an acceptance later, so
+    that accounts made for the purpose cannot choose what the cutter cuts again. A refusal for a missing proof (not_proven) is no failure: the candidate reached
+    the figure, and the stopwatch could not say more. A refusal before the judge (a path outside the task, too many
+    lines) is counted by its reason and makes no task stuck: it says more of the candidate than of the task.
+
+    The project STARVES when none of its tasks is left to do, open or dealt: volunteers then ask and are dealt
+    nothing, and nobody would notice. `dealable` counts the open tasks a member could be dealt now (no task that
+    shares a file with one is dealt), and `areas` the separate areas of the project: sets of tasks left to do, none of
+    which shares a file with a task of another set (rivals_of). At least that many tasks can be held at once, one in
+    each area; an area may hold more, when its tasks share files only through a third (a folder and two of its files)."""
+    until = iso(instant)
+    lines = [line for line in lines if line["at"] <= until]
+    first = {}  # each member's first acceptance on the project: a failure counts only after it
+    for line in lines:
+        if line["type"] == "verdict" and line["result"] == "accepted" and line["member_id"] not in first:
+            first[line["member_id"]] = line["at"]
+    rows, failed, holders, latest = {}, {}, {}, {}
+    for task_id, task in tasks.items():
+        goal = task.get("goal") if isinstance(task.get("goal"), dict) else {}
+        figure = goal.get("name") if goal.get("kind") == "metric" and isinstance(goal.get("name"), str) else None
+        bound = "min" if number(goal.get("min")) else "max" if number(goal.get("max")) else None
+        rows[task_id] = {"tier": max(1, int(task.get("tier", 1))), "size": plain_word(task.get("size", "S")),
+                         "kind": task.get("kind", "work") if task.get("kind", "work") in TASK_KINDS else None,
+                         "parent": task["parent"] if isinstance(task.get("parent"), str) and TASK_ID.match(task["parent"]) else None,
+                         "deals": 0, "members": 0,
+                         "expired": 0, "expired_free": 0, "accepted": 0, "refused": {}, "errors": {},
+                         "established_failures": 0, "hours_to_accept": None,
+                         "best": {"figure": figure, "value": None, bound: goal[bound]} if figure and bound else None}
+        failed[task_id], holders[task_id] = {}, set()
+    for line in lines:
+        row = rows.get(line["task"])
+        if row is None:
+            continue  # a task the project's file no longer lists
+        if line["type"] == "deal":
+            row["deals"] += 1
+            holders[line["task"]].add(line["member_id"])
+            latest[line["task"]] = {"member_id": line["member_id"], "at": line["at"], "live": True}
+            continue
+        deal = latest.get(line["task"])
+        if line["type"] in ("expired", "verdict") and deal and deal["member_id"] == line["member_id"] and deal["at"] == line["deal"]:
+            deal["live"] = False  # as Ledger.deals: an expiry or a verdict on its candidate closes a deal
+        if line["type"] == "expired":
+            row["expired_free" if line["fault"] else "expired"] += 1
+            if not line["fault"]:
+                failed[line["task"]][line["member_id"]] = line["at"]
+        elif line["type"] == "error":
+            kind = line["kind"] or "unknown"
+            row["errors"][kind] = row["errors"].get(kind, 0) + 1
+        else:
+            if line["result"] == "accepted":
+                row["accepted"] += 1
+                if row["hours_to_accept"] is None and not line["ruling"] and line["deal"] and line["deal"] <= line["at"]:
+                    row["hours_to_accept"] = round((parse_iso(line["at"]) - parse_iso(line["deal"])).total_seconds() / 3600, 1)
+            else:
+                reason = line["reason"] or "unknown"
+                row["refused"][reason] = row["refused"].get(reason, 0) + 1
+                if line["judged"] and line["reason"] in FAILING_REASONS:
+                    failed[line["task"]][line["member_id"]] = line["at"]
+            best = row["best"]
+            if best and number(line["report"].get(best["figure"])):
+                value = line["report"][best["figure"]]
+                if best["value"] is None or (value > best["value"] if "min" in best else value < best["value"]):
+                    best["value"] = value
+    for task_id, row in rows.items():
+        live = latest.get(task_id, {}).get("live", False)
+        row["status"] = "done" if row["accepted"] else "closed" if tasks[task_id].get("closed") else "dealt" if live else "open"
+        row["members"], row["established_failures"] = len(holders[task_id]), sum(member in first and first[member] < at for member, at in failed[task_id].items())
+    left = {task_id for task_id, row in rows.items() if row["status"] in ("open", "dealt")}
+    rivals = rivals_of(tasks)
+    dealable = [task_id for task_id in left if rows[task_id]["status"] == "open"
+                and all(rows[other]["status"] != "dealt" for other in rivals[task_id])]
+    areas, seen = 0, set()
+    for task_id in sorted(left):
+        if task_id in seen:
+            continue
+        areas, todo = areas + 1, [task_id]
+        while todo:
+            current = todo.pop()
+            if current not in seen:
+                seen.add(current)
+                todo.extend(other for other in rivals[current] if other in left)
+    stuck = sorted(task_id for task_id in left if rows[task_id]["established_failures"] >= STUCK_MEMBERS)
+    return {"as_of": until, "stuck_members": STUCK_MEMBERS, "tasks": rows, "stuck": stuck, "left": len(left),
+            "open": sum(rows[task_id]["status"] == "open" for task_id in left), "dealable": len(dealable), "areas": areas,
+            "starving": not left, "active_members": active}
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # The judge the workflow uses: the registry's common judge
 
 
@@ -4019,6 +4180,19 @@ def cmd_feed(args):
     ledger = Ledger(state)
     write_state(state, "feed.json", build_feed(config, tasks, ledger, args.tip or ""))
     write_state(state, "stats.json", build_stats(ledger))
+
+
+def cmd_tally(args):
+    """Prints the tally of the project's tasks (tally), as JSON: for its cutter (docs/cutter.md). The settings and the
+    tasks are read where a run reads them, on the project's published branch at its tip; the ledger is the state's.
+    It writes nothing."""
+    repository = repository_of(args)
+    branch, commit = published_tip(args.repo, "origin")
+    config, tasks = settings_on(args.repo, commit, branch, repository)
+    ledger, instant = Ledger(Path(args.state)), now()
+    lines = [line for line in map(tally_line, ledger.events) if line is not None]
+    result = tally(tasks, lines, instant, active=len(active_members(ledger, instant, config)))
+    print(json.dumps({"project": config["project"], "published": commit, **result}, sort_keys=True, indent=1, ensure_ascii=True))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -6421,6 +6595,9 @@ def main(argv=None):
     hive_side(p)
     p.add_argument("--tip")
     p.set_defaults(run=cmd_feed)
+    p = sub.add_parser("tally", help="print what the ledger says of each task, in numbers (for the project's cutter: docs/cutter.md)")
+    hive_side(p)
+    p.set_defaults(run=cmd_tally)
 
     def worker_side(p, pushes=False):
         p.set_defaults(volunteer=True)

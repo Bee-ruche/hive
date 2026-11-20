@@ -12,7 +12,8 @@ show. The hive deals each open task to one member at a time; the page shows how 
 accepted, and how many dealt candidates wait for the judge (from the feed's deals):
 
   index.html              one page: what this is, the latest accepted contribution and how to take part; then
-                          progress, this week, the recent integrations, the members, the models, what was refused
+                          progress, the tasks that need attention (with --tasks: the hive's tally), this week, the
+                          recent integrations, the members, the models, what was refused
                           (and, for the candidates refused for a figure, what the judge measured), the parts of the
                           project that asks preferred and what the hive did, three measures
   wins/<commit>.svg       a card for every integration, named by the integrated commit's 40-hex id: the task, the
@@ -368,6 +369,37 @@ def read_tasks(path):
     return goals, asked
 
 
+def listed_tasks(path):
+    """The project's tasks as the hive reads them (hive.load_tasks), for its tally (attention), or None when the file
+    is not one the hive would read: the page then says nothing of the tasks that need attention, and shows the rest."""
+    try:
+        with plain_file(path) as f:  # (as every file the page reads: a plain file under that name, no larger than the hive reads)
+            data = f.read(hive.SETTINGS_BYTES + 1)
+        if len(data) > hive.SETTINGS_BYTES:
+            return None
+        return hive.tasks_of(data.decode("utf-8").split("\n"), str(path))
+    except (hive.HiveError, OSError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def attention(listed, lines, now, titles):
+    """What the page says of the tasks that need attention, from the hive's tally (hive.tally, docs/cutter.md), or None
+    when the tasks hold a value the tally cannot count (a tier that is no number): the page goes on without it. The
+    tasks that are stuck, each with how many members accepted elsewhere failed on it, its refusals by reason and the
+    deals on it that ran out at their member's cost; how many tasks are left to do, open, dealable now, and in how many
+    separate areas; and whether the project starves (nothing left to do). Numbers and task ids, with the feed's
+    titles: no member is named."""
+    try:
+        tallied = hive.tally(listed, lines, now)
+    except (ValueError, TypeError, KeyError, AttributeError, ArithmeticError):
+        return None
+    stuck = [{"task": task_id, "title": titles.get(task_id, ""), "failures": row["established_failures"],
+              "refused": [{"reason": reason, "count": count} for reason, count in sorted(row["refused"].items())],
+              "expired": row["expired"]} for task_id, row in ((t, tallied["tasks"][t]) for t in tallied["stuck"])]
+    return {"stuck": stuck, "stuck_members": tallied["stuck_members"], "left": tallied["left"], "open": tallied["open"],
+            "dealable": tallied["dealable"], "areas": tallied["areas"], "starving": tallied["starving"]}
+
+
 PROJECT_BYTES = 1 << 20  # what the page reads of a project's file, at most
 
 
@@ -457,10 +489,11 @@ def read_json(folder, name):
         return None
 
 
-def read_ledger(folder, goals=None, proofs=None):
+def read_ledger(folder, goals=None, proofs=None, tallied=None):
     """(the ledger's lines as the page uses them, in order (clean_event); how many lines the ledger holds; how many
-    of them are not JSON objects). Unlike the hive, the page goes on when a line is broken: it shows what it can
-    read, and says how many lines it could not. Each line is cleaned as it is read, and only what the page uses of it
+    of them are not JSON objects). `tallied`, a list, receives what the hive's tally reads of each line (hive.tally_line),
+    from the same reading. Unlike the hive, the page goes on when a line is broken: it shows what it can read, and says
+    how many lines it could not. Each line is cleaned as it is read, and only what the page uses of it
     is kept: what the reading costs follows the number of lines, not what a line was filled with. The ledger is read
     only if it is a plain file under its own name (plain_file). `goals`, `proofs`: see clean_event."""
     events, lines, skipped = [], 0, 0
@@ -480,6 +513,9 @@ def read_ledger(folder, goals=None, proofs=None):
                 event = clean_event(value, goals, proofs)
                 if event is not None:
                     events.append(event)
+                counted = hive.tally_line(value) if tallied is not None else None
+                if counted is not None:
+                    tallied.append(counted)
     except FileNotFoundError:
         return [], 0, 0
     except OSError:
@@ -665,7 +701,8 @@ def collect(state, now, tasks=None, project=None):
     contributions and nothing else: what was refused is counted for the project and for a model (model_rows), and
     added up for no person, here or in any file (the public ledger still names the member of every answer)."""
     goals, asked = read_tasks(tasks) if tasks is not None else ({}, {})
-    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None)
+    listed, tallied = listed_tasks(tasks) if tasks is not None else None, []
+    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tallied)
     # A line dated after `now` says nothing yet: the page is made for that instant, and its latest contribution is never
     # one from the future. Then each answer is read once (once()). Both are said on the standard error and in the files.
     dated = [event for event in usable if event["at"] <= now]
@@ -802,6 +839,7 @@ def collect(state, now, tasks=None, project=None):
                    "lines_after_now": after, "repeated_lines": repeated},
     }
     data["trusted_base"] = read_base(state)
+    data["attention"] = attention(listed, tallied, now, titles) if listed is not None else None
     data["stats_json"] = compare_stats(read_json(state, "stats.json"), models)
     data["_wins"] = wins  # for the cards; not part of summary.json
     return data
@@ -1104,6 +1142,30 @@ MODELS_NOTE = (f"How many candidates of a model were judged, and its rate, are s
                "behind them: with fewer, they would be figures about those members.")
 
 
+def attention_block(attention):
+    """The section on the tasks that need attention (attention()): the starving alarm first, then four counters, then
+    the stuck tasks, and the rule that makes a task stuck."""
+    block = []
+    if attention["starving"]:
+        block.append(el("p", el("strong", "Nothing is left to do: every task is done or closed. Volunteers who ask are dealt nothing "
+                                          "until the project publishes new tasks.")))
+    block.append(el("div", [tile("Left to do", attention["left"], "open or dealt"),
+                            tile("Open", attention["open"]),
+                            tile("Dealable now", attention["dealable"], "no task sharing a file is dealt"),
+                            tile("Separate areas", attention["areas"], "at least this many tasks can be held at once")], class_="tiles"))
+    if attention["stuck"]:
+        rows = [[task_cell(item), item["failures"],
+                 [[el("code", r["reason"]), f" ({r['count']})", "" if r is item["refused"][-1] else ", "] for r in item["refused"]] or "none",
+                 item["expired"]] for item in attention["stuck"]]
+        block.append(table([("Task", False), ("Members who failed", True), ("Refusals by reason", False), ("Deals that ran out", True)], rows))
+    else:
+        block.append(el("p", "No task is stuck.", class_="soft"))
+    block.append(el("p", f"A task is stuck when {attention['stuck_members']} different members, each with a contribution accepted on "
+                         "the project, failed on it: the judge examined their candidate and refused it, or their deal ran out. "
+                         "Such a task is to be cut again into smaller ones. No member is named.", class_="note"))
+    return block
+
+
 def render_html(data, title, repo_url, join):
     """index.html: what this is, the latest accepted contribution, how to take part; then the counters and the tables."""
     project = data["project"] or "A hive project"
@@ -1126,6 +1188,8 @@ def render_html(data, title, repo_url, join):
                                       + ("A new member is dealt a task now." if base["takes_new"] else "A new member is dealt a task once there is room."),
                                  class_="note")]
     sections.append(el("section", el("h2", "Progress"), progress))
+    if data.get("attention") is not None:
+        sections.append(el("section", el("h2", "Tasks that need attention"), attention_block(data["attention"])))
 
     sections.append(el("section", el("h2", "This week"), el("div", [
         tile("Integrations", week["integrations"], "in the last 7 days"),

@@ -2159,8 +2159,9 @@ class TestFirstScreen(Case):
         self.assertEqual(seen.hrefs[:3], ["https://github.com/bob", f"wins/{sha(5002)}.html", "#join"])
         self.assertNotIn("carol", opening, "a refusal is not what the page opens on")
         # After it, the counters and the tables, in this order; the block on how to take part closes the page.
-        self.assertEqual(seen.heads, ["toy", "Progress", "This week", "Recent integrations", "Members", "Models", "What was refused, and why",
-                                      "Three measures", "How to take part"])
+        self.assertEqual(seen.heads, ["toy", "Progress", "Tasks that need attention", "This week", "Recent integrations", "Members", "Models",
+                                      "What was refused, and why", "Three measures", "How to take part"],
+                         "(the tasks that need attention come with the task file, after the progress)")
         self.assertTrue(seen.said.endswith("How to take part" + page.JOIN_WORDS + "How to joinMade from the project's public ledger, as of "
                                            f"{NOW}. No script, no tracker, nothing loaded from elsewhere."), seen.said)
         self.assertEqual(seen.ids.count("join"), 1)
@@ -2602,6 +2603,61 @@ class TestPatterns(unittest.TestCase):
             self.assertTrue(page.PART.match(part) and hive.prefer_ok({"file": part, "kept": True}), part)
         for part in ("", " a", "a ", "x" * 201, "a\nb", "\u00e9"):
             self.assertFalse(page.PART.match(part) or hive.prefer_ok({"file": part, "kept": True}), part)
+
+
+class TestAttention(Case):
+    """The tasks that need attention, from the hive's tally (hive.tally): shown when the page is given the project's
+    task file, and only then; numbers and task ids, no member."""
+    TASKS = [{"id": "toy-0001", "title": "Make f0 faster", "files": ["lib.c"]}, {"id": "toy-0002", "title": "Work in src", "files": ["src/"]},
+             {"id": "toy-0003", "title": "Another", "files": ["other.c"]}, {"id": "toy-0004", "title": "A fourth", "files": ["four.c"]},
+             {"id": "toy-0005", "title": "A fifth", "files": ["five.c"]}]
+
+    def lines(self):
+        lines = []
+        for n, (member, task) in enumerate(((1, "toy-0003"), (2, "toy-0004"), (3, "toy-0005"))):  # each member accepted once
+            dealt, answered = f"2026-11-12T0{n}:00:00Z", f"2026-11-12T0{n}:30:00Z"
+            lines += [{"type": "deal", "at": dealt, "until": dealt, "task": task, "member": f"login{member}", "member_id": member, "repo_id": member + 1000, "run": f"r{n}"},
+                      {"type": "verdict", "at": answered, "task": task, "deal": dealt, "member": f"login{member}", "member_id": member,
+                       "repo_id": member + 1000, "sha": f"{n}" * 40, "commit": f"{n + 3}" * 40, "result": "accepted", "judged": True, "model": None}]
+        for n, member in enumerate((1, 2, 3)):  # then each failed on toy-0001
+            dealt, answered = f"2026-11-12T0{n + 6}:00:00Z", f"2026-11-12T0{n + 6}:30:00Z"
+            lines += [{"type": "deal", "at": dealt, "until": dealt, "task": "toy-0001", "member": f"login{member}", "member_id": member, "repo_id": member + 1000, "run": f"s{n}"},
+                      {"type": "verdict", "at": answered, "task": "toy-0001", "deal": dealt, "member_id": member, "repo_id": member + 1000,
+                       "sha": f"{n + 6}" * 40, "result": "refused", "reason": "judge_refused", "judged": True, "model": None, "detail": {}}]
+        return lines
+
+    def test_the_stuck_tasks_and_what_is_left(self):
+        self.ledger(self.lines())
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        seen = self.harmless(files)
+        attention = self.summary(files)["attention"]
+        self.assertEqual(attention["stuck"], [{"task": "toy-0001", "title": "Make f0 faster", "failures": 3,
+                                               "refused": [{"reason": "judge_refused", "count": 3}], "expired": 0}])
+        self.assertEqual((attention["left"], attention["open"], attention["dealable"], attention["areas"], attention["starving"]), (2, 2, 2, 2, False))
+        self.assertIn("Tasks that need attention", seen.said)
+        self.assertIn("Members who failed", seen.said)
+        self.assertNotIn("login", json.dumps(attention), "no member is named")
+
+    def test_nothing_left_to_do_is_said_first(self):
+        self.ledger(self.lines()[:6])
+        self.put("feed.json", {"project": "toy", "tasks": []})
+        files = self.make("--tasks", self.tasks(self.TASKS[2:]))
+        self.assertTrue(self.summary(files)["attention"]["starving"])
+        self.assertIn("Nothing is left to do", self.harmless(files).said)
+
+    def test_without_the_task_file_the_page_says_nothing_of_it(self):
+        self.ledger(self.lines())
+        files = self.make()
+        self.assertIsNone(self.summary(files)["attention"])
+        self.assertNotIn("Tasks that need attention", self.harmless(files).said)
+        files = self.make("--tasks", self.tasks(["not a task", {"id": "toy-0001"}]))  # a file the hive would not read
+        self.assertIsNone(self.summary(files)["attention"])
+        for tier in ('"hard"', "Infinity", "1e999"):  # a tier that is no number, or no number int() takes
+            line = json.dumps({**self.TASKS[0], "tier": 0}).replace('"tier": 0', f'"tier": {tier}')
+            files = self.make("--tasks", self.tasks([line, *self.TASKS[1:]]))
+            self.assertIsNone(self.summary(files)["attention"], "the page goes on, without the section")
+            self.assertIn("Progress", self.harmless(files).said)
 
 
 if __name__ == "__main__":
