@@ -4273,6 +4273,51 @@ def task_json(task):
         return None
 
 
+def options_known(config, published):
+    """The names of options a new task may give: those the project's judge or its published tasks use."""
+    return set(config["judge"].get("options") or {}) | {name for task in published.values() if isinstance(task.get("options"), dict)
+                                                        for name in task["options"]}
+
+
+def on_the_tip(path, paths):
+    """True if a task's entry names files of the tip: the file itself, or a folder (« dir/ ») that holds one."""
+    return any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths
+
+
+def new_task_refusals(config, task_id, task, known_options):
+    """What the gate holds a new task's own line to, wherever it stands (the task file a cut proposes, the backlog):
+    it says nothing but what a task says (NEW_TASK_KEYS), within bounds; it is open, under an id of the project's own;
+    its title is printable, its context within cutter.context_chars, its options under known names, each a short plain
+    value; and every condition of its goal on a figure the project floors asks at least that floor, with a « min »."""
+    cutter, refusals, goal = config["cutter"], [], task.get("goal") or {"kind": "correct"}
+    extra = sorted(set(task) - set(NEW_TASK_KEYS))
+    if extra:
+        refusals.append(f"{task_id}: {safe_text(extra[0], 40)}: not something a task says ({', '.join(NEW_TASK_KEYS)})")
+    if task_json(task) is None:
+        return refusals + [f"{task_id}: a number that is no number (NaN, an infinity)"]
+    if len(task_json(task)) > cutter["context_chars"] + LINE_SLACK:
+        refusals.append(f"{task_id}: its line is longer than its context and {LINE_SLACK} characters")
+    if task_id.rpartition("-")[0] != config["project"]:
+        refusals.append(f"{task_id}: a new task's id is the project's own: {config['project']}-<four digits>")
+    if "closed" in task:
+        refusals.append(f"{task_id}: a new task is open")
+    title = task.get("title")
+    if not (isinstance(title, str) and title.strip() and len(title) <= TITLE_CHARS and title.isprintable()):
+        refusals.append(f"{task_id}: title: a sentence of printable characters, {TITLE_CHARS} at most")
+    if not (isinstance(task.get("context", ""), str) and len(task.get("context", "")) <= cutter["context_chars"]):
+        refusals.append(f"{task_id}: context: {cutter['context_chars']} characters at most (cutter.context_chars)")
+    options = task.get("options", {})
+    if not (isinstance(options, dict) and all(name in known_options for name in options)
+            and all(isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= OPTION_CHARS and value.isprintable())
+                    for value in options.values())):
+        refusals.append(f"{task_id}: options: only under names the project's judge or its published tasks use, each a short plain value")
+    for condition in [goal, *goal.get("and", [])] if goal.get("kind") == "metric" else []:
+        floor = cutter["floors"].get(condition.get("name"))
+        if floor is not None and not ("min" in condition and "max" not in condition and condition["min"] >= floor):
+            refusals.append(f"{task_id}: goal: at least {floor} on {condition['name']}, with « min » (cutter.floors)")
+    return refusals
+
+
 def cut_check(config, published, proposal, live, done, paths, failing=()):
     """The gate of the project's cutter (docs/cutter.md, "The gate"): every reason to refuse a proposed task file
     against the one the project publishes, each as a sentence. None: the proposal may be published. Nothing
@@ -4296,8 +4341,7 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
     with a « min » (cutter.floors: figures where more is better); what it needs is done; and, when it names a parent,
     that parent is closed in the same cut or done: a task cut again leaves no copy of itself open beside its parts."""
     cutter, refusals, added, closed = config["cutter"], [], [], []
-    known_options = set(config["judge"].get("options") or {}) | {name for task in published.values() if isinstance(task.get("options"), dict)
-                                                                 for name in task["options"]}
+    known_options = options_known(config, published)
     for task_id in sorted(set(published) - set(proposal)):
         refusals.append(f"{task_id}: a published task is never removed: close it (« closed »: true)")
     for task_id, task in proposal.items():
@@ -4317,35 +4361,12 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
         refusals.append(f"{len(added) + len(closed)} lines are added or closed: {cutter['changes']} at most in one cut (cutter.changes)")
     for task_id in added:
         task, goal = proposal[task_id], proposal[task_id].get("goal") or {"kind": "correct"}
-        extra = sorted(set(task) - set(NEW_TASK_KEYS))
-        if extra:
-            refusals.append(f"{task_id}: {safe_text(extra[0], 40)}: not something a task says ({', '.join(NEW_TASK_KEYS)})")
-        if len(task_json(task)) > cutter["context_chars"] + LINE_SLACK:
-            refusals.append(f"{task_id}: its line is longer than its context and {LINE_SLACK} characters")
-        if task_id.rpartition("-")[0] != config["project"]:
-            refusals.append(f"{task_id}: a new task's id is the project's own: {config['project']}-<four digits>")
-        if "closed" in task:
-            refusals.append(f"{task_id}: a new task is open")
-        title = task.get("title")
-        if not (isinstance(title, str) and title.strip() and len(title) <= TITLE_CHARS and title.isprintable()):
-            refusals.append(f"{task_id}: title: a sentence of printable characters, {TITLE_CHARS} at most")
+        refusals += new_task_refusals(config, task_id, task, known_options)
         for path in task["files"]:
             if protected(path.rstrip("/"), config["protected"]):
                 refusals.append(f"{task_id}: {path}: a protected path, which no contribution may change")
-            elif not (any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths):
+            elif not on_the_tip(path, paths):
                 refusals.append(f"{task_id}: {path}: not a file of the project's tip")
-        if not (isinstance(task.get("context", ""), str) and len(task.get("context", "")) <= cutter["context_chars"]):
-            refusals.append(f"{task_id}: context: {cutter['context_chars']} characters at most (cutter.context_chars)")
-        options = task.get("options", {})
-        if not (isinstance(options, dict) and all(name in known_options for name in options)
-                and all(isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= OPTION_CHARS and value.isprintable())
-                        for value in options.values())):
-            refusals.append(f"{task_id}: options: only under names the project's judge or its published tasks use, each a short plain value")
-        conditions = [goal, *goal.get("and", [])] if goal.get("kind") == "metric" else []
-        for condition in conditions:
-            floor = cutter["floors"].get(condition.get("name"))
-            if floor is not None and not ("min" in condition and "max" not in condition and condition["min"] >= floor):
-                refusals.append(f"{task_id}: goal: at least {floor} on {condition['name']}, with « min » (cutter.floors)")
         if goal.get("kind") != "metric" and task_id not in failing:
             refusals.append(f"{task_id}: goal « correct »: name it among the tasks shown to fail at the project's tip (--failing), once a "
                             "run of the judge there shows it")
@@ -4361,8 +4382,8 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
 def backlog_check(config, published_backlog, backlog, proposal):
     """The gate's rules for the backlog a cut proposes (BACKLOG_FILE) beside its task file: every reason to refuse it,
     as sentences. The backlog is the architect's plan: a line of the published one is never removed or changed. A line
-    the cut adds says nothing but what a task says, open, under an id of the project's own that the tasks file does not
-    use. (The caller has read it as a task file is read, its goals checked, and its links checked with the tasks.)
+    the cut adds is held to what the gate holds a new task's line to (new_task_refusals), under an id the tasks file
+    does not use. (The caller has read it as a task file is read, its goals checked, and its links checked with the tasks.)
     When it is published, a planned task is held to the gate's rules for a new task, as any other is (cut)."""
     refusals = []
     for task_id in sorted(set(published_backlog) - set(backlog)):
@@ -4374,11 +4395,7 @@ def backlog_check(config, published_backlog, backlog, proposal):
             if task_json(task) != task_json(published_backlog[task_id]):
                 refusals.append(f"{task_id}: a line of the backlog does not change")
         else:
-            extra = sorted(set(task) - set(NEW_TASK_KEYS))
-            if extra:
-                refusals.append(f"{task_id}: {safe_text(extra[0], 40)}: not something a task says ({', '.join(NEW_TASK_KEYS)})")
-            if task_id.rpartition("-")[0] != config["project"]:
-                refusals.append(f"{task_id}: a new task's id is the project's own: {config['project']}-<four digits>")
+            refusals += new_task_refusals(config, task_id, task, options_known(config, proposal))
             if task_id in proposal:
                 refusals.append(f"{task_id}: an id the tasks file uses: a planned task takes an id of its own")
     return refusals
@@ -4449,6 +4466,7 @@ def cmd_cut_check(args):
 
 BACKLOG_FILE = "hive/backlog.jsonl"  # the tasks the project's architect plans, which its cutter publishes once what they need is done
 CUT_FIGURES = 6  # how many decimals a goal cut again keeps (a half of 0.02 is 0.01, not 0.010000000000000002)
+CUT_AGAIN = "Cut again with a lower goal"  # what the context of a task cut again by the rules says, after the architect's words
 
 
 def blob_at(repo, commit, path, most=SETTINGS_BYTES):
@@ -4493,11 +4511,6 @@ def tip_paths(repo, commit):
     return {name.decode("utf-8", errors="surrogateescape") for name in listed.stdout.split(b"\0") if name}
 
 
-def on_the_tip(path, paths):
-    """True if a task's entry names files of the tip: the file itself, or a folder (« dir/ ») that holds one."""
-    return any(p.startswith(path) for p in paths) if path.endswith("/") else path in paths
-
-
 def easier(config, task):
     """The deterministic cutter's one way of cutting a stuck task again (docs/cutter.md, "The loop"): the same task
     with a lower goal. Each condition of its goal on a figure the project floors (cutter.floors) with a « min » above
@@ -4524,8 +4537,9 @@ def easier(config, task):
         return None, "at_the_floor"
     child = {key: task[key] for key in NEW_TASK_KEYS if key in task and key not in ("id", "parent", "context")}
     words = "; ".join(f"{name} at least {now} (it asked {was})" for name, was, now in lowered)
-    context = task["context"] + " " if isinstance(task.get("context"), str) and task["context"] else ""
-    return {**child, "goal": goal, "context": f"{context}Cut again with a lower goal, since members failed at the first one: {words}. "
+    context = task["context"].split(CUT_AGAIN)[0].rstrip() if isinstance(task.get("context"), str) else ""  # (the architect's own words)
+    context = context + " " if context else ""
+    return {**child, "goal": goal, "context": f"{context}{CUT_AGAIN}, since members failed at the first one: {words}. "
                                               "The goal decides."}, lowered
 
 
@@ -4541,12 +4555,14 @@ def cut(config, published, backlog, counted, live, done, paths, failing=()):
          goal is on figures the project floors, above their floors;
       2. the backlog's tasks that are not published yet are published in its order while fewer than cutter.open tasks
          are left to do, each once what it needs is done, its parent closed or done, its files on the tip and none
-         protected, and, for a goal « correct », once it is shown to fail.
+         protected, and, for a goal « correct », once it is shown to fail; a line the gate would refuse
+         (new_task_refusals) waits, « gate », for the architect to mend it.
     It says what is left to do against that aim, whether the project still starves, and the stuck tasks it could not
     cut again (for_the_cutter: the AI cutter's, or the architect's). What it proposes is held to the gate (cut_check),
     as any proposal is: a line of the backlog the gate refuses is the architect's to mend."""
     cutter, rows = config["cutter"], counted["tasks"]
     proposal = dict(published)
+    known_options = options_known(config, published)
     said = {"closed": [], "added": [], "waiting": [], "for_the_cutter": []}
     numbers = [int(task_id.rpartition("-")[2]) for task_id in [*published, *backlog] if task_id.rpartition("-")[0] == config["project"]]
     following, used = max(numbers, default=0) + 1, 0
@@ -4579,6 +4595,7 @@ def cut(config, published, backlog, counted, live, done, paths, failing=()):
         parent, goal = task.get("parent"), task.get("goal") or {"kind": "correct"}
         why = ("enough_open" if left >= cutter["open"] else
                "changes" if used >= cutter["changes"] else
+               "gate" if new_task_refusals(config, task_id, task, known_options) else
                "needs" if any(other not in done for other in task.get("needs") or []) else
                "parent" if parent is not None and parent not in done and (proposal.get(parent) or {}).get("closed") is not True else
                "files" if any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"]) else
@@ -4601,7 +4618,11 @@ def cmd_cut(args):
     repository = repository_of(args)
     branch, commit = published_tip(args.repo, "origin")
     config, published = settings_on(args.repo, commit, branch, repository)
-    listed, raw, backlog, unread = blob_at(args.repo, commit, TASKS_FILE), blob_at(args.repo, commit, BACKLOG_FILE), {}, None
+    listed, backlog, unread = blob_at(args.repo, commit, TASKS_FILE), {}, None
+    try:
+        raw = blob_at(args.repo, commit, BACKLOG_FILE)
+    except HiveError as error:
+        raw, unread = None, safe_text(error, 300)
     if raw is not None:
         try:
             backlog = tasks_of(raw.decode("utf-8").split("\n"), BACKLOG_FILE)
@@ -4642,76 +4663,215 @@ OUTLINE_SUFFIXES = (".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".rs", ".g
 OUTLINE_FILE_BYTES = 4 << 20  # a file larger than this is listed with its size alone
 OUTLINE_BYTES = 64 << 20  # what the outline reads of the tip in all
 OUTLINE_FUNCTIONS = 5000  # the most functions it lists of one file
-OUTLINE_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+/-]{0,199}\Z")  # a path it names; another is only counted
+OUTLINE_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]{0,39}(?:/[A-Za-z0-9_][A-Za-z0-9._+-]{0,39}){0,9}\Z")  # a path it names (ten parts of 40 characters at most); another is only counted
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
-# What the outline blanks before it reads a file: comments, strings, characters (scanned from the left, so that a
-# « /* » in a string or a quote in a comment is what it is), then preprocessor lines and Rust's attributes.
-NEUTRAL = re.compile(r"/\*.*?(?:\*/|\Z)|//(?:\\\n|[^\n])*|(?<![A-Za-z0-9_])b?r(#*)\"(?:.|\n)*?\"\1|\"(?:\\.|[^\"\\])*\""
-                     r"|'(?:\\.[^'\n]{0,9}|[^'\\\n])'", re.S)
-DIRECTIVE = re.compile(r"^[ \t]*#(?:\\\n|[^\n])*", re.M)
+HEADER_CHARS = 8192  # what the outline reads of a block's header, back from its brace: a function's signature is shorter
+NAME_CHARS = 64  # the longest name it keeps
+WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 C_KEYWORDS = frozenset(("if", "for", "while", "switch", "return", "sizeof", "catch", "do", "else", "case", "defined", "alignof", "decltype",
                         "typeof", "__attribute__", "__declspec", "_Static_assert", "static_assert"))
-C_TAIL = re.compile(r"\)(?:\s*(?:const|noexcept|override|final))*\s*\Z")
-C_NAME = re.compile(r"(~?[A-Za-z_][A-Za-z0-9_]*)\s*\Z")
-C_TRANSPARENT = re.compile(r"\s*(?:extern\s*|namespace(?:\s+[A-Za-z_][A-Za-z0-9_:]*)?\s*)\Z")  # extern "C" { and namespace x {
+C_QUALIFIERS = ("const", "noexcept", "override", "final")
+C_TRANSPARENT = re.compile(r"\s*(?:extern\s*|namespace(?:\s+[A-Za-z_][A-Za-z0-9_:]{0,63})?\s*)\Z")  # extern "C" { and namespace x {
+C_CHARACTER = re.compile(r"'(?:\\.[^'\n]{0,9}|[^'\\\n])'")  # a character: one, or an escape of a few
+CPP_RAW = re.compile(r"(?:u8|[uUL])?R\"([^()\\\s\"]{0,16})\(")  # R"delimiter( … )delimiter"
+RUST_RAW = re.compile(r"b?r(#{0,255})\"")  # r#" … "#
 RUST_FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
-GO_FUNC = re.compile(r"\bfunc\s*(?:\([^()]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*[\[(]")
+GO_FUNC = re.compile(r"\bfunc\b")
+STRING_STOP = {True: re.compile(r"[\"\\\n]"), False: re.compile(r"[\"\\]")}  # where a string may end: at its line's end too, in C and Go
+NESTED = re.compile(r"/\*|\*/")
 
 
-def blanked(match):
-    return re.sub(r"[^\n]", " ", match.group(0))
+def neutral_text(text, suffix):
+    """(text, closed): a file of code with every comment, string and character replaced by spaces, and in C and C++
+    every preprocessor line, its line ends kept, read once from the left: what starts first is what it is (a « /* »
+    in a string is a string, a quote in a comment or a directive is a comment or a directive). It knows C and C++ (raw
+    strings R"x(…)x" too), Rust (raw strings r#"…"#, nested comments) and Go (raw strings in backquotes). `closed` is
+    False when the file ends inside a comment or a string: all that follows its start is blanked."""
+    rust, go = suffix == ".rs", suffix == ".go"
+    c_family, n = not rust and not go, len(text)
+    spans, i, line_start, closed = [], 0, True, True
+
+    def line_end(j):  # where a line comment ends: its line's end, unless a backslash continues it (C)
+        while True:
+            k = text.find("\n", j)
+            if k < 0:
+                return n
+            if c_family and (text[k - 1:k] == "\\" or text[k - 2:k] == "\\\r"):
+                j = k + 1
+                continue
+            return k
+
+    def after(mark, j):  # just after the next `mark` from j, or the file's end (and the file is not closed)
+        k = text.find(mark, j)
+        return (n, False) if k < 0 else (k + len(mark), closed)
+
+    while i < n:
+        char, start = text[i], i
+        if char == "\n":
+            line_start, i = True, i + 1
+            continue
+        if char in " \t\r\f\v":
+            i += 1
+            continue
+        if c_family and char == "#" and line_start:
+            while i < n and text[i] != "\n":  # a directive: to its line's end, with its continuations and its comments
+                if text.startswith("/*", i):
+                    i, closed = after("*/", i + 2)
+                elif text.startswith("\\\n", i):
+                    i += 2
+                elif text.startswith("\\\r\n", i):
+                    i += 3
+                else:
+                    i += 1
+        elif text.startswith("//", i):
+            i = line_end(i)
+        elif text.startswith("/*", i) and rust:
+            depth = 0
+            for mark in NESTED.finditer(text, i):
+                depth += 1 if mark.group(0) == "/*" else -1
+                if depth == 0:
+                    i = mark.end()
+                    break
+            else:
+                i, closed = n, False
+        elif text.startswith("/*", i):
+            i, closed = after("*/", i + 2)
+        elif char == '"':
+            j = i + 1
+            while True:
+                stop = STRING_STOP[not rust].search(text, j)
+                if stop is None:
+                    i, closed = n, False
+                    break
+                if stop.group(0) == "\\":
+                    j = stop.end() + 1
+                    continue
+                i = stop.start() if stop.group(0) == "\n" else stop.end()  # (a string of C or Go ends with its line)
+                break
+        elif char == "`" and go:
+            i, closed = after("`", i + 1)
+        elif char == "'" and C_CHARACTER.match(text, i):
+            i = C_CHARACTER.match(text, i).end()
+        elif rust and char in "br" and (i == 0 or text[i - 1] not in WORD_CHARS) and RUST_RAW.match(text, i):
+            raw = RUST_RAW.match(text, i)
+            i, closed = after('"' + raw.group(1), raw.end())
+        elif c_family and char in "uULR" and (i == 0 or text[i - 1] not in WORD_CHARS) and CPP_RAW.match(text, i):
+            raw = CPP_RAW.match(text, i)
+            i, closed = after(")" + raw.group(1) + '"', raw.end())
+        else:
+            line_start, i = False, i + 1
+            continue
+        spans.append((start, i))
+        line_start = False
+    pieces, last = [], 0
+    for start, end in spans:
+        pieces += [text[last:start], re.sub(r"[^\n]", " ", text[start:end])]
+        last = end
+    return "".join(pieces) + text[last:], closed
 
 
 def c_function(header):
     """The name of the C or C++ function a block's header defines (« static int f(int a) »), and where it stands in
-    the header, or None: a header that ends with the closing parenthesis of a list after a name that is no keyword."""
-    tail = C_TAIL.search(header)
-    if not tail:
+    the header, or None: a header that ends with the closing parenthesis of a list (and qualifiers: const, noexcept…)
+    right after a name that is no keyword. Read back from the end, once: no pattern is searched in a long header."""
+    end = len(header.rstrip())
+    while True:
+        for word in C_QUALIFIERS:
+            if header.endswith(word, 0, end) and (end == len(word) or header[end - len(word) - 1] not in WORD_CHARS):
+                end = len(header[:end - len(word)].rstrip())
+                break
+        else:
+            break
+    if end == 0 or header[end - 1] != ")":
         return None
-    depth, at = 0, tail.start()
+    depth, at = 0, end - 1
     while at >= 0:
         depth += {")": 1, "(": -1}.get(header[at], 0)
         if depth == 0:
             break
         at -= 1
-    name = C_NAME.search(header[:at]) if at > 0 else None
-    if not name or name.group(1).lstrip("~") in C_KEYWORDS or "=" in header[:name.start()]:
+    last = at - 1
+    while last >= 0 and header[last].isspace():
+        last -= 1
+    first = last
+    while first >= 0 and header[first] in WORD_CHARS and last - first <= NAME_CHARS:
+        first -= 1
+    name = header[first + 1:last + 1]
+    if at <= 0 or not IDENTIFIER.match(name) or (first >= 0 and header[first] in WORD_CHARS) or name in C_KEYWORDS or "=" in header[:first + 1]:
         return None
-    return name.group(1).lstrip("~"), name.start()
+    return name, first + 1
 
 
-def outline_text(text, suffix):
-    """The functions of one file of code as the cutter may read them, [name, first line, lines] in the order of the
-    file: from its text with every comment, string and character blanked first, and every preprocessor line, so that
-    no sentence of the file reaches the cutter and no brace in a comment or a string moves where a function ends. It
-    reads C and C++ (a function defined at the top level, or in extern "C" or a namespace), Rust (« fn », at any
-    depth) and Go (« func »); a name is an identifier of 64 characters at most, another is left out. A guide, not a
-    proof: two branches of an « #if » that each open a block make the rest of the file read wrong."""
-    neutral = DIRECTIVE.sub(blanked, NEUTRAL.sub(blanked, text))
+def go_function(header):
+    """The name of the Go function a block's header defines (« func (r *R) Read(b []byte) error »), read after the
+    header's last « func », and where it stands, or None: an anonymous function has none."""
+    found = None
+    for found in GO_FUNC.finditer(header):
+        pass
+    if found is None:
+        return None
+    at = found.end()
+    while at < len(header) and header[at].isspace():
+        at += 1
+    if header[at:at + 1] == "(":  # a receiver
+        depth = 0
+        while at < len(header):
+            depth += {"(": 1, ")": -1}.get(header[at], 0)
+            at += 1
+            if depth == 0:
+                break
+        while at < len(header) and header[at].isspace():
+            at += 1
+    first = at
+    while at < len(header) and header[at] in WORD_CHARS and at - first <= NAME_CHARS:
+        at += 1
+    return (header[first:at], first) if IDENTIFIER.match(header[first:at]) and header[at:].lstrip()[:1] in ("(", "[") else None
+
+
+def outline_of(text, suffix):
+    """(functions, closed): the functions of one file of code as the cutter may read them, [name, first line, lines]
+    in the order of the file, found in its neutral text (neutral_text), so that no sentence of a comment or a string
+    reaches the cutter and no brace in one moves where a function ends; and whether the file ends outside every
+    comment and string. It reads C and C++ (a function defined at the top level, or in extern "C" or a namespace),
+    Rust (« fn », at any depth) and Go (« func »); a name is an identifier of NAME_CHARS characters at most, another is
+    left out. A name is still a word someone chose, a maintainer or a volunteer: data, as the rest is. A guide, not a
+    proof: two branches of an « #if » that each open a block make the rest of the file read wrong. Its time grows with
+    the file's length and no faster: each header is read once, and no further back than HEADER_CHARS."""
+    neutral, closed = neutral_text(text, suffix)
     rust, go = suffix == ".rs", suffix == ".go"
-    found, opened, line, start = [], [], 1, 0  # opened: a stack of (name or None, its first line, a C block that hides no function)
+    found, opened, line, start, hiding = [], [], 1, 0, 0  # opened: a stack of (name or None, its first line, a C block that hides functions)
     for at, char in enumerate(neutral):
         if char == "\n":
             line += 1
         elif char == ";":
             start = at + 1
         elif char == "{":
-            header, named = neutral[start:at], None
-            if rust or go:
-                named = (RUST_FN if rust else GO_FUNC).search(header)
+            header, named = neutral[max(start, at - HEADER_CHARS):at], None
+            if rust:
+                named = RUST_FN.search(header)
                 named = named and (named.group(1), named.start(1))
-            elif all(transparent for _, _, transparent in opened):
+            elif go:
+                named = go_function(header)
+            elif not hiding:
                 named = c_function(header)
             name, first = (named[0], line - header[named[1]:].count("\n")) if named and IDENTIFIER.match(named[0]) else (None, line)
-            opened.append((name, first, not rust and not go and name is None and bool(C_TRANSPARENT.fullmatch(header))))
+            hides = not rust and not go and (name is not None or not C_TRANSPARENT.fullmatch(header))
+            opened.append((name, first, hides))
+            hiding += hides
             start = at + 1
         elif char == "}":
             if opened:
-                name, first, _ = opened.pop()
+                name, first, hides = opened.pop()
+                hiding -= hides
                 if name:
                     found.append([name, first, line - first + 1])
             start = at + 1
-    return sorted(found, key=lambda function: function[1])[:OUTLINE_FUNCTIONS]
+    return sorted(found, key=lambda function: function[1])[:OUTLINE_FUNCTIONS], closed
+
+
+def outline_text(text, suffix):
+    """The functions of one file of code as the cutter may read them (outline_of)."""
+    return outline_of(text, suffix)[0]
 
 
 def cmd_outline(args):
@@ -4745,7 +4905,9 @@ def cmd_outline(args):
             text = (data or b"").decode("utf-8", errors="replace")
             row["lines"] = text.count("\n") + (bool(text) and not text.endswith("\n"))
             if suffix in OUTLINE_SUFFIXES:
-                row["functions"] = outline_text(text, suffix)
+                row["functions"], closed = outline_of(text, suffix)
+                if not closed:
+                    row["unclosed"] = True  # (a comment or a string runs to the file's end: what follows its start is not read)
         files.append(row)
     print(json.dumps({"project": config["project"], "tip": tip, "files": len(files), "unnamed": unnamed}, sort_keys=True, ensure_ascii=True))
     for row in files:

@@ -13366,6 +13366,8 @@ class TestTheCutGate(unittest.TestCase):
             "the project's own": check(planned, {**planned, "id": "other-0021"}),
             "an id the tasks file uses": check(planned, {**planned, "id": "toy-0002"}),
             "no number": check(planned, {**planned, "id": "toy-0021", "tier": float("inf")}),
+            "printable": check(planned, {**planned, "id": "toy-0021", "title": "x\x00y"}),
+            "characters at most": check(planned, {**planned, "id": "toy-0021", "context": "x" * 2001}),
         }
         for words, refusals in cases.items():
             with self.subTest(words):
@@ -13468,6 +13470,9 @@ class TestTheCut(unittest.TestCase):
         proposal, said = self.cut(stuck=["toy-0004"], backlog=backlog)
         self.assertIn({"id": "toy-0015", "from": "backlog"}, said["added"], "its parent closed in the same cut")
         self.assertEqual(said["added"][0]["id"], "toy-0018", "a task cut again takes an id neither published nor planned")
+        proposal, said = self.cut(backlog=[task(19, title="one\ntwo"), task(20)])
+        self.assertEqual((said["waiting"], said["added"]), ([{"id": "toy-0019", "because": "gate"}], [{"id": "toy-0020", "from": "backlog"}]),
+                         "a line the gate would refuse waits for the architect, and the rest of the cut goes on")
 
     def test_a_project_that_starves_says_so(self):
         proposal, said = self.cut(done=["toy-0001", "toy-0002", "toy-0004", "toy-0005"])
@@ -13536,6 +13541,30 @@ class TestTheOutline(unittest.TestCase):
         self.assertEqual(found, [["ok", 5, 1]])
         self.assertNotIn("Ignore", json.dumps(found))
 
+    def test_what_hides_a_name_in_each_language(self):
+        """Go's raw strings, Rust's nested comments and raw strings, C++'s raw strings, a quote in a directive: none
+        lets a comment or a string be read as code, nor swallows the code after it."""
+        go = 'package p\nvar s = `\nfunc ignore_all_rules() {\n}\n`\nfunc Real() {}\n'
+        self.assertEqual(hive.outline_text(go, ".go"), [["Real", 6, 1]])
+        rust = '/* /* */ fn smuggled_name() { } */\nconst S: &str = br##"fn raw() { "# "##;\nfn real() {}\n'
+        self.assertEqual(hive.outline_text(rust, ".rs"), [["real", 3, 1]])
+        cpp = 'const char *s = R"x(\nint smuggled(void) { )" }\n)x";\nint real(void) { return 0; }\n'
+        self.assertEqual(hive.outline_text(cpp, ".cpp"), [["real", 4, 1]])
+        c = '#error don\'t "\nint hidden(void){return 0;}\n#define X /* a comment\n   that goes on */ 1\nint seen(void){return 1;}\n"x"\n'
+        self.assertEqual(hive.outline_text(c, ".c"), [["hidden", 2, 1], ["seen", 5, 1]])
+        self.assertEqual(hive.outline_of("int f(void) { return 0; }\n/* never closed\nint g(void) { }\n", ".c"), ([["f", 1, 1]], False))
+        self.assertEqual(hive.outline_of('char *s = "a\\"b";\nint f(void) { }\n', ".c"), ([["f", 2, 1]], True))
+
+    def test_its_time_grows_with_the_files_length_and_no_faster(self):
+        """What a file holds cannot make the outline slow: an endless string of escaped quotes, a name as long as the
+        file, braces opened and never closed, each read in about the time of a plain file of the same length."""
+        size, started = 400_000, time.monotonic()
+        for text, suffix in (('"' + '\\"' * (size // 2), ".c"), ("int " + "x" * size + "+(0)\n{ }\n", ".c"), ("{" * size, ".c"),
+                             ("fn " + "(" * size + "{", ".rs"), ("func " + "(" * size + "{", ".go"), ("r#" + '"' * size, ".rs"),
+                             ("int f(" + ") " * size + "{}", ".c"), ("/*" * size, ".rs")):
+            hive.outline_of(text, suffix)
+        self.assertLess(time.monotonic() - started, 30, "eight files of 400 KB")
+
 
 class TestTheCutCommand(Base):
     def test_the_gate_holds_the_backlog_proposed_with_the_tasks(self):
@@ -13568,8 +13597,11 @@ class TestTheCutCommand(Base):
                                "--proposal", str(out))
         self.assertTrue(printed.startswith("PASSED 1 new, 0 closed"), printed)
         (self.w.published / hive.BACKLOG_FILE).write_text(json.dumps({**planned, "notes": "x"}) + "\n")
-        with self.assertRaises(SystemExit) as stopped:
-            self.step(self.job("cut-2"), "cut", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state", "--out", str(out) + "2")
+        printed, _ = self.step(self.job("cut-2"), "cut", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state", "--out", str(out))
+        self.assertEqual((json.loads(printed)["waiting"], json.loads(printed)["added"]), ([{"id": "toy-0009", "because": "gate"}], []),
+                         "a line of the backlog the gate would refuse waits for the architect")
+        with mock.patch.object(hive, "cut_check", return_value=["toy-0001: a refusal"]), self.assertRaises(SystemExit) as stopped:
+            self.step(self.job("cut-4"), "cut", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state", "--out", str(out) + "2")
         self.assertEqual((stopped.exception.code, os.path.exists(str(out) + "2")), (2, False), "what the gate refuses is not written")
         (self.w.published / hive.BACKLOG_FILE).write_text("{not json\n")
         printed, _ = self.step(self.job("cut-3"), "cut", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state", "--out", str(out))

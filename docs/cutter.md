@@ -111,7 +111,8 @@ within `cutter.changes` lines added or closed:
    task when the figure is the program's. Asking less of the same part is.
 2. **The backlog's tasks are published** as said above, each once its parent is closed or done, its files are on the
    tip and none is protected, and, for a goal « correct », once a run of the judge showed it to fail at the tip
-   (`--failing`).
+   (`--failing`). A line the gate would refuse waits (`gate`) for the architect to mend it, and the rest of the cut
+   goes on.
 3. **It says what is left to do** against `cutter.open` (`left`, `short`), whether the project **starves** (nothing
    left to do), and what it left undone and why, as codes: the AI cutter's work, or the architect's.
 
@@ -148,8 +149,10 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
   functions, where each starts and how long it is, **with comments, strings and preprocessor lines removed**, read
   from git at the project's tip as text (nothing of the project is built or run, no link is followed). The
   project's code includes accepted work from volunteers; a sentence in it is data, and a projection that keeps no
-  sentence keeps the cutter from reading one. A name is still a word a volunteer may have chosen: it is data too,
-  and the outline keeps none longer than an identifier.
+  sentence keeps the cutter from reading one. It reads each file once, in a time that grows with its length and no
+  faster, and marks a file that ends inside a comment or a string (`unclosed`). A function's name and a file's path
+  are still words a volunteer may have chosen: they are data too, and the outline keeps no name longer than 64
+  characters and no path part longer than 40.
 - Figures measured on the project's code (a profile of its hot spots, the reference's cases that fail) come from a
   run of the project's own tools in its sandbox, without network: numbers and the names of functions, nothing
   else.
@@ -185,6 +188,10 @@ prints every reason it finds to refuse it, and passes it only if there is none (
   task whose goal is « correct » is named among those that a run of the judge at the project's tip showed to fail
   (`--failing <id>`), in the judge's container. That one is the cutter's word: the gate prints it and cannot check
   it yet.
+
+The backlog a cut changes is held with it (`--backlog`): a line of the published backlog is never removed or changed,
+and a line the cut adds is held to what the gate holds a new task's own line to, under an id the tasks file does not
+use.
 
 A proposal that passes is named by its bytes: `cut-check` prints its SHA-256 and the published commit it was held
 against (`CHECKED`), and what is published is that file, on that commit; a deal made in between is caught by

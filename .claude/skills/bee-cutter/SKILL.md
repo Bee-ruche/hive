@@ -74,8 +74,8 @@ report its lines.
 - `for_the_cutter`: stuck tasks it closed and could not cut again (`no_rule`: a goal « correct »; `at_the_floor`,
   `under_the_floor`: the goal cannot go lower). These are yours: cut them again ("Writing tasks").
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
-  `enough_open`, `changes`). Nothing to do for them in this run, but `files` and `not_shown_failing`, which you
-  report.
+  `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`, `not_shown_failing` and `gate`
+  (a line of the backlog the gate would refuse: the architect mends it), which you report.
 - `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`), what is missing. **`starving`:
   nothing is left to do: the first line of your report.**
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
@@ -101,7 +101,8 @@ tasks are worth more than many vague ones.
   a goal on a figure holds the same proof (`sure_…`, `min` 1) as the published ones. Never a figure the project's
   `judge.metrics` does not list, never below `cutter.floors`. A goal « correct » (the judge's tests pass) goes to
   the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now,
-  and you cannot run it; say in your report that it waits for that run.
+  you cannot run it, and in this version nothing runs it for you (docs/cutter.md, "Not yet"). Say in your report
+  that it waits for the architect, who runs the judge and then `hive cut --failing <id>`.
 - `options`: only names and values the published tasks already use.
 - `size` and `tier`: as the published tasks of the same kind; a cut of a stuck task is smaller than it.
 - `title`: one line, the function or the area and what to change, as the published titles do.
@@ -156,12 +157,13 @@ git diff --cached --name-only              # must list hive/tasks.jsonl, and hiv
 git commit --quiet -F /tmp/message.txt
 git show HEAD:hive/tasks.jsonl | sha256sum    # must be the <sha256> CHECKED printed: otherwise stop, push nothing
 git show HEAD:hive/backlog.jsonl | sha256sum  # the same for the backlog, if you changed it
+rm -rf ~/.hive/cutter-state && git clone --quiet --depth 1 --branch hive-state "https://github.com/<PROJECT>" ~/.hive/cutter-state
 hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl  # (and --backlog)
 git push origin HEAD:refs/heads/<published>
 ```
 
-The second `cut-check`, just before the push, catches a deal made since the first; it must print the same
-`CHECKED` line. The push is accepted only if the branch is still at `<commit>`: if it is declined, stop: the next
+The second `cut-check`, just before the push and on the state taken again, catches a deal made since the first;
+it must print the same `CHECKED` line. The push is accepted only if the branch is still at `<commit>`: if it is declined, stop: the next
 cycle starts again from the new tip. If the charter asks that a person read each cut before it lands, push to
 `cutter/<the date>` instead and open one pull request to `<published>`, whose body is the message below; do not
 merge it.
