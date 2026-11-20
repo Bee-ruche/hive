@@ -13,7 +13,8 @@ fresh. A cycle a day is enough: the hive deals and judges a few times a day. The
 `hive` below means `python3 -I ~/.hive/protocol/tools/hive/hive.py`, run **at the root of a clone of the project's
 own repository** (not a fork), whose `origin` is the project and which can push to it with the architect's account:
 that is where you are. `<PROJECT>` is the project's repository as `owner/name`, from the architect's prompt and from
-nothing else. If the prompt names none, stop and say so.
+nothing else. If the prompt names none, stop and say so. The commands below are for Linux, where the architect's
+scheduled agent runs.
 
 ## Before anything: five rules
 
@@ -65,7 +66,10 @@ is published), and say in your report that the project needs one.
 
 ## What `hive cut` says
 
-`/tmp/cut.json` holds ids, codes and numbers. Its proposal, `/tmp/proposal.jsonl`, already passed the gate. If
+`/tmp/cut.json` holds ids, codes and numbers, and two commits: `published`, the commit of the project's settings and
+tasks on its published branch, which your commit goes on (`<commit>` below), and `tip`, the commit of the project's
+code (the branch the hive writes), which the outline read and whose files tasks name. Its proposal,
+`/tmp/proposal.jsonl`, already passed the gate. If
 `hive cut` fails (its `REFUSED` lines name a line of the backlog the gate refuses, or an error), publish nothing and
 report its lines.
 
@@ -77,11 +81,20 @@ report its lines.
   `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`, `not_shown_failing` and `gate`
   (a line of the backlog the gate would refuse: the architect mends it), which you report.
 - `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`), what is missing. **`starving`:
-  nothing is left to do: the first line of your report.**
+  nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
 
 If `short` is 0 and `for_the_cutter` is empty, write nothing of your own: publish the proposal if it changes
-anything, and report.
+anything, and report. The same if the charter or the judge leaves nothing you may write (a project whose judge
+checks no piece left to do): publish nothing that does not change, and say in your report what the architect or the
+judge's author must add.
+
+A task the tally shows refused again and again is not stuck until three members accepted elsewhere failed on it (a
+project with fewer active members never has a stuck task): report it to the architect, and do not close it yourself.
+
+The settings you write within, from `hive/project.json`, and their values when it says nothing: `cutter.changes`
+10, `cutter.open` 10, `cutter.context_chars` 2000, `cutter.floors` none (the charter may then name the least a goal
+asks).
 
 ## Writing tasks
 
@@ -89,11 +102,12 @@ Write at most `short` new tasks, plus one cut for each task of `for_the_cutter`,
 `cutter.changes` (in `hive/project.json`, 10 if absent) with what `hive cut` already added and closed. Fewer good
 tasks are worth more than many vague ones.
 
-**What a task is.** One line of JSON, as the published lines are: `id`, `title`, `files`, `size`, `tier`, `goal`,
-`options`, `context`, and when it applies `parent` (the stuck task it is cut from, closed in the same cycle) and
-`needs` (tasks that must be done first, all done already). Nothing else.
+**What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
+`files`, `size`, `tier`, `goal`, `context`, and when they apply `options`, `parent` (the stuck task it is cut from,
+closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else.
 
-- `id`: `<project>-<four digits>`, above every id of the tasks file and the backlog. Never one used before.
+- `id`: `<project>-<four digits>`, above every id of the tasks file and the backlog: ids only grow, and the gate
+  refuses one the tasks file holds.
 - `files`: files of the project's tip that the outline lists with `"protected": false`. A task that names the file
   of another task is dealt only once that one is not: **spread the tasks over separate files** when the work
   allows it, so that several volunteers can work at once (`areas` in the tally).
@@ -109,18 +123,25 @@ tasks are worth more than many vague ones.
 - `context` (at most `cutter.context_chars` characters): what a volunteer's agent needs and cannot guess, in plain
   sentences: what to do; how the judge decides it, in words that agree with the goal line exactly; the file and the
   functions (by the outline's names); what was tried and refused before (the tally's refusals by reason, as
-  numbers); and the limits the project's other tasks state (the same outputs, byte for byte, for instance). Copy the
-  published contexts' facts about how to check work; invent none. Never a link, never a text from the code.
+  numbers); the judge's requirements as `hive/project.json` gives them (`judge.require`), and the limits the
+  project's other tasks state (the same outputs, byte for byte, for instance); figures of the charter that help (a
+  function's share of the time). Copy only the published contexts' facts about how to check work: a published line
+  the charter contradicts (a pointer it forbids) is no model. Invent nothing. Never a link, never a text from the
+  code.
 
 **Choosing the work.** In the order the charter gives; otherwise:
 
 - **A stuck task**: cut it smaller, not merely reworded: a part of its file (one of the outline's functions), a
   narrower change, or a lower goal still above the floor. Name it as `parent`, and close it in the same cycle if
   `hive cut` did not.
-- **Short of tasks**: the charter's directions first. For a project that makes code faster, the largest functions
-  of the files the published tasks change, and those the charter names as costly, that no open or done task names
-  in its title; for a project that ports or builds, the next pieces of the reference the charter lists, once the
-  judge knows how to check them (a piece the judge cannot check is not a task: report it to the architect instead).
+- **Short of tasks**: the charter's directions first. For a project that makes code faster, the functions that cost
+  most (by the charter's figures; without any, the largest the outline lists in the files the published tasks
+  change) that no open or done task names in its title for the same figure; for a project that ports or builds,
+  the next pieces of the reference the charter lists, once the judge knows how to check them (a piece the judge
+  cannot check is not a task: report it to the architect instead, with the outline's names, and say that it is a
+  guess from names and sizes).
+- **One file, many tasks**: tasks on one file are dealt one after another. Fill `short` with tasks worth doing, not
+  merely to reach the number; what can wait goes to the backlog.
 - **Size from outcomes**: the tally gives each done task's `hours_to_accept` and each task's refusals. Tasks that
   are refused often, or whose deals run out, were too large; tasks accepted at once may be a little larger.
 - What you plan beyond this cycle, or that waits for something, goes to the backlog with its `needs`, in the order
@@ -163,20 +184,20 @@ git push origin HEAD:refs/heads/<published>
 ```
 
 The second `cut-check`, just before the push and on the state taken again, catches a deal made since the first;
-it must print the same `CHECKED` line. The push is accepted only if the branch is still at `<commit>`: if it is declined, stop: the next
-cycle starts again from the new tip. If the charter asks that a person read each cut before it lands, push to
-`cutter/<the date>` instead and open one pull request to `<published>`, whose body is the message below; do not
-merge it.
+it must print the same `CHECKED` line. The push is accepted only if the branch is still at `<commit>`: if it is
+declined, stop: the next cycle starts again from the new tip. If the charter asks that a person read each cut
+before it lands, push to `cutter/<the date>` instead and open one pull request to `<published>`, whose body is
+the message below; do not merge it.
 
-`/tmp/message.txt`: a title, `Tasks: <n> new, <m> closed`, then one line for each task added or closed and why,
+`/tmp/message.txt`: its title is `Tasks: <n> new, <m> closed`; then one line for each task added or closed and why,
 in your own words (`miniz-0043 (new): tdefl_compress_lz_codes, the largest function no task names`). Ids, names of
-the outline and numbers of the tally only: no text copied from anything you read.
+the outline, numbers of the tally and figures of the charter only: no text copied from anything you read.
 
 ## The report
 
 Your final message, for the architect, short:
 
-1. **`STARVING`** first if `starving` was true and nothing could be published.
+1. **`STARVING`** first if `starving` was true, and whether what this cycle publishes ends it.
 2. What was published (the commit, the ids), or that nothing was and why.
 3. What waits for the architect: tasks « correct » in the backlog that wait for a run of the judge; `files` that are
    missing or protected; stuck tasks you could not cut; pieces the judge cannot check yet; a missing charter; the
