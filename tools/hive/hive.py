@@ -3279,21 +3279,24 @@ def read_verdicts(table, metrics):
 # git's reasons, and never a credential. The job hands its token to git as an http header (http.<address>.extraheader
 # in the clone's settings), from a variable of its environment; git does not print it, and nothing here lets it through
 # should git ever do so (GIT_TRACE_CURL with GIT_TRACE_REDACT=0, say).
-PUSH_LINES, PUSH_LINE_CHARS = 12, 200  # the most lines of git's the log keeps, and the most characters of each
-PUSH_SAID = "push: git said: "  # what precedes each of them in the log
+PUSH_LINES, PUSH_REMOTE_LINES, PUSH_LINE_CHARS = 8, 4, 200  # the most lines the log keeps, of them the repository's, and the most characters of each
+PUSH_SAID = "push: git said (data): "  # what precedes each of them in the log
 REMOVED = "[removed]"  # what stands in a line where a credential could have been
 PUSH_STATUS = re.compile(r"[ *+=!-]\t")  # a ref's status in `git push --porcelain`: a flag, a tab, the ref, a tab, git's word
-PUSH_WORDS = ("remote:", "error:", "fatal:")  # git's own lines on its standard error that say why
+PUSH_WORDS = ("error:", "fatal:")  # git's own lines on its standard error that say why (and « remote: », the repository's)
 SECRET_NAME = re.compile(r"token|secret|passw|credential|auth|key", re.IGNORECASE)  # a variable whose value is never printed
 CREDENTIALS = (  # (written so that none reads a line more than a few times, however long it is)
     (re.compile(r"://[^\s/@]*@"), "://"),  # a user and a password in an address
     (re.compile(r"\b((?:proxy-)?authorization)\s*[:=].*", re.IGNORECASE), r"\1: " + REMOVED),  # a header, and the rest of the line
     (re.compile(r"\b(extraheader)\b.*", re.IGNORECASE), r"\1 " + REMOVED),  # the setting that carries one, and the rest
-    (re.compile(r"\b(basic|bearer|token)(\s+)\S+", re.IGNORECASE), r"\1\2" + REMOVED),  # what follows a scheme of http's
+    (re.compile(r"\b(basic|bearer|token)(\s+)(?!(?-i:[a-z]+)(?!\S))\S+", re.IGNORECASE), r"\1\2" + REMOVED),  # what follows a scheme of
+    # http's, unless it is a plain word in small letters (« the token provided is expired »)
     (re.compile(r"x-access-token:\S*", re.IGNORECASE), "x-access-token:" + REMOVED),  # the user GitHub's tokens go with
     (re.compile(r"\b(?:gh[opsur]_|github_pat_)[A-Za-z0-9_]+"), REMOVED),  # GitHub's tokens, by their prefixes
 )
-OPAQUE = re.compile(r"[A-Za-z0-9+/=_-]{32,}")  # a long word of a key's alphabet: taken out, unless it is a commit's id
+# A long word of a key's alphabet, without « / » (so that a path or a ref is cut into its parts): taken out when it mixes
+# capitals, small letters and digits, as a key does and as a path, a branch's name or a commit's id (hex) seldom does.
+OPAQUE = re.compile(r"[A-Za-z0-9+=_-]{32,}")
 
 
 def withheld(repo):
@@ -3326,31 +3329,40 @@ def credentials_out(line, hidden=()):
     """A line of git's with everything that could be a credential taken out: each string of `hidden` (withheld), a
     user and a password in an address, an http header of authorization and the rest of the line, the word after an
     http scheme of authorization (Basic, Bearer, token), GitHub's tokens by their prefixes, and every long word of a
-    key's alphabet (OPAQUE) but a commit's id. A word of git's may go with them: never a credential."""
+    key's alphabet that mixes capitals, small letters and digits (OPAQUE). A word of git's may go with them: never a
+    credential."""
     for value in hidden:
         line = line.replace(value, REMOVED)
     for pattern, instead in CREDENTIALS:
         line = pattern.sub(instead, line)
-    return OPAQUE.sub(lambda found: found.group() if is_sha(found.group()) else REMOVED, line)
+    return OPAQUE.sub(lambda found: REMOVED if all(any(test(c) for c in found.group()) for test in (str.isupper, str.islower, str.isdigit))
+                      else found.group(), line)
 
 
 def push_said(repo, pushed):
-    """What git said of a push that did not land (the result of `git push --porcelain`), as lines of data for the log:
-    first the status of the ref (its flag, the ref, and git's word for what happened, such as « [rejected] (stale
-    info) » or « [remote rejected] (pre-receive hook declined) »), then git's lines on its standard error that say why:
-    « remote: » for what the project's repository answered, « error: », « fatal: », and a ref's status as git writes it
-    there (« ! [rejected] … »). Never the line that names the address, git's advice, or anything else. Each line has
-    every credential taken out (credentials_out), then is made plain (printable ASCII, no workflow command) and bounded
-    (safe_text, PUSH_LINE_CHARS); at most PUSH_LINES of them, and one more that says how many more git wrote."""
-    def why(line):
-        word = next((word for word in PUSH_WORDS if line.startswith(word)), None)
-        return bool(line[len(word):].strip()) if word else line.lstrip().startswith("! ")
+    """What git said of a push that did not land (the result of `git push --porcelain`), as lines of data for the log,
+    git's own first: the status of the ref (its flag, the ref, and git's word for what happened, such as « [rejected]
+    (stale info) » or « [remote rejected] (pre-receive hook declined) »), then git's lines on its standard error that say
+    why (« error: », « fatal: », and a ref's status as git writes it there, « ! [rejected] … »), then the first
+    PUSH_REMOTE_LINES of what the project's repository answered (« remote: »), which may quote a path a volunteer chose:
+    so it never pushes git's own words out. Never the line that names the address, git's advice, an empty line, or
+    anything else. Each line has every credential taken out (credentials_out), then is made plain (printable ASCII, no
+    workflow command: safe_text) and cut to PUSH_LINE_CHARS; at most PUSH_LINES of them, and one more that says how many
+    more git wrote."""
+    def kind(line):
+        if line.startswith("remote:"):
+            return "remote" if line[len("remote:"):].strip() else None
+        return "git" if line.startswith(PUSH_WORDS) or line.lstrip().startswith("! ") else None
 
-    lines = [line.replace("\t", " ") for line in pushed.stdout.splitlines() if PUSH_STATUS.match(line)]
-    lines += [line for line in pushed.stderr.splitlines() if why(line)]
+    written = [(kind(line), line) for line in pushed.stderr.splitlines()]
+    own = [line.replace("\t", " ") for line in pushed.stdout.splitlines() if PUSH_STATUS.match(line)] + [line for of, line in written if of == "git"]
+    remote = [line for of, line in written if of == "remote"]
+    lines = (own + remote[:PUSH_REMOTE_LINES])[:PUSH_LINES]
+    more = len(own) + len(remote) - len(lines)
     hidden = withheld(repo) if lines else []
-    said = [safe_text(credentials_out(line.strip(), hidden), PUSH_LINE_CHARS) for line in lines[:PUSH_LINES]]
-    return said + ([f"and {len(lines) - PUSH_LINES} line(s) more, left out"] if len(lines) > PUSH_LINES else [])
+    said = [safe_text(credentials_out(line.strip(), hidden), PUSH_LINE_CHARS)[:PUSH_LINE_CHARS] for line in lines]  # (cut again: safe_text
+    # makes « :: » longer after it cuts)
+    return said + ([f"and {more} line(s) more, left out"] if more else [])
 
 
 def guarded_push(repo, remote, branch, expected, new, allow_local=False):
@@ -3376,7 +3388,8 @@ def guarded_push(repo, remote, branch, expected, new, allow_local=False):
     if any(line.startswith("!") and "[remote rejected]" in line and "declined" in line for line in pushed.stdout.splitlines()):
         return False
     raise HiveError(f"the push did not land (git's exit code {pushed.returncode}): "
-                    + (f'its reasons are the {len(said)} line(s) "{PUSH_SAID.strip()}" above' if said else "git wrote no line that says why"))
+                    + (f'its reasons are the {len(said)} line(s) "{PUSH_SAID.strip()}" above' if said
+                       else "git wrote none of the lines this step prints (a ref's status, remote:, error:, fatal:)"))
 
 
 def verdict_event(outcome, instant, kind="verdict"):
