@@ -231,14 +231,16 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
   judgement a day at most, and holds no place for ever. The job's log names it.
 - **What is recorded.** The answer is code 1 (the judge refuses the tip: `failing`), code 0 (it finds it correct:
   `passing`) or code 2 (it failed to judge: `unknown`). It goes to the state, in `tip.json` on the branch `hive-state`:
-  for each planned task, its latest answer, the commit it judged, the SHA-256 of the task's line, the instant, and how
-  many runs in a row gave it, each at a tip where the answer before it still held (below). Ids, codes, commits and
-  numbers: no text. An answer about a task published, or planned no more, is dropped, and the latest 5,000 are kept.
+  for each planned task, its latest answer, the commit it judged, the SHA-256 of the task's line, the instant, how
+  many runs in a row gave it, each at a tip where the answer before it still held (below), and the key of the run
+  that gave it last. Ids, codes, commits, keys and numbers: no text. An answer about a task published, or planned no
+  more, is dropped, and the latest 5,000 are kept.
 - **Two runs for « failing ».** A refusal can come from the judge's own limits as well as from the unit: a run that
   passes its time on a slow machine is refused. For a candidate that costs only its turn; a task published on a false
-  « failing » would be accepted for nothing. So `failing` proves once two runs in a row gave it, the second at a tip
-  where the first still holds: a task said `failing` once is asked again at the next run, and published a cycle
-  later. `passing`, which only keeps a task back, acts at once.
+  « failing » would be accepted for nothing. So `failing` proves once two runs in a row gave it, at least six hours
+  apart, the second at a tip where the first still holds: a task said `failing` once is asked again six hours later
+  or more, and published a cycle after that. A write job run again on the same plan counts once, and a second
+  `failing` that comes too soon leaves the first as it is. `passing`, which only keeps a task back, acts at once.
 - **Who writes it, with which right.** The judging job hands its answers to the write job inside `verdicts.json`, the
   file that job already takes by name; the write job (`hive.py apply`) writes `tip.json` with the token it already
   holds to write `hive-state`. No new file between jobs, no new step, no new right, no secret. The write job believes

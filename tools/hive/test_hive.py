@@ -13645,6 +13645,7 @@ class TestTheCutCommand(Base):
 
 
 LEAF_JUDGE = {"judge": {"kind": "reference", "metrics": ["cases_compared"]}}  # a judge of a kind that answers about the tip (TIP_KINDS)
+SIX_HOURS_ON, A_DAY_ON, TWO_DAYS_ON = "2026-11-12T18:00:00Z", "2026-11-13T12:00:01Z", "2026-11-14T12:00:02Z"  # after NOW
 LEAF_TASKS = [{"id": "leaf-0001", "title": "Write the leaf one", "files": ["lib.c"], "options": {"unit": "one"}}]
 WRITTEN = "/* ANSWERS AS THE ORIGINAL */\n"
 
@@ -13692,10 +13693,15 @@ class TestTheTipAsACandidate(Base):
         (self.v.published / hive.BACKLOG_FILE).write_text("".join(json.dumps(line) + "\n" for line in lines))
         self.v.publish()
 
-    def run_leaves(self, judge=judge_of_leaves, handed=None):
+    def run_leaves(self, judge=judge_of_leaves, handed=None, at=None, writes=1):
         """One run of the leaf project, its four steps as the commands run them, the backlog read at the plan's
         commit: what the judging step answered about the tip. `handed`: a function of the plan's tip, which gives
-        what the write step is handed about the tip in place of the judging step's own answers."""
+        what the write step is handed about the tip in place of the judging step's own answers. `at`: the run's
+        instant (NOW by default); `writes`: how many times the write step runs on the same plan, or the instants it runs at
+        (None: the run's own)."""
+        if at is not None:
+            with mock.patch.dict(os.environ, {"HIVE_NOW": at}):
+                return self.run_leaves(judge, handed, None, writes)
         self.v.plan()
         self.v.record()
         config, tasks, ledger = self.v.load()
@@ -13706,12 +13712,14 @@ class TestTheTipAsACandidate(Base):
         self.notes = {}
         verdicts, _, started = hive.judge_plan(self.v.bench, self.v.made, config, tasks, ledger, judge, self.v.work, notes=self.notes,
                                                backlog=backlog, answers=hive.read_tip_answers(self.v.state))
-        sh("git", "fetch", "--quiet", "origin", cwd=self.v.writer)
-        config, tasks, ledger = self.v.load()
-        hive.read_bundle(self.v.writer, hive.read_plan(self.v.made, config)[1], self.v.bundle)
-        hive.apply(self.v.writer, "origin", self.v.made, json.loads(json.dumps(verdicts)), config, tasks, ledger, self.v.state, allow_local=True,
-                   started=started, backlog=backlog,
-                   tip_answers={"commit": self.v.made["tip"], "answers": self.notes["tip"]} if handed is None else handed(self.v.made["tip"]))
+        for instant in [None] * writes if isinstance(writes, int) else writes:
+            with mock.patch.dict(os.environ, {"HIVE_NOW": instant} if instant else {}):
+                sh("git", "fetch", "--quiet", "origin", cwd=self.v.writer)
+                config, tasks, ledger = self.v.load()
+                hive.read_bundle(self.v.writer, hive.read_plan(self.v.made, config)[1], self.v.bundle)
+                hive.apply(self.v.writer, "origin", self.v.made, json.loads(json.dumps(verdicts)), config, tasks, ledger, self.v.state,
+                           allow_local=True, started=started, backlog=backlog,
+                           tip_answers={"commit": self.v.made["tip"], "answers": self.notes["tip"]} if handed is None else handed(self.v.made["tip"]))
         return self.notes["tip"]
 
     def cutter(self, command, *more):
@@ -13748,12 +13756,13 @@ class TestTheTipAsACandidate(Base):
                                                                       "the gate refuses: none is asked about")
         tip = self.v.made["tip"]
         self.assertEqual(judge_of_leaves.asked, [("leaf-0002", tip, True)], "the plan's tip, its own tree as the candidate's")
-        self.assertEqual(self.written(), {"leaf-0002": {"tip": tip, "line": hive.line_digest(line), "answer": "failing", "at": NOW, "runs": 1}},
-                         "ids, codes, commits")
+        self.assertEqual(self.written(), {"leaf-0002": {"tip": tip, "line": hive.line_digest(line), "answer": "failing", "at": NOW, "runs": 1,
+                                                        "run": self.v.made["key"]}}, "ids, codes, commits")
         self.assertEqual(self.cut()["waiting"][0], {"id": "leaf-0002", "because": "not_shown_failing"}, "said once: no proof yet")
-        self.assertEqual(self.run_leaves(), {"leaf-0002": "failing"}, "asked again")
+        self.assertEqual(self.run_leaves(at=LATER), {}, "not asked again within six hours")
+        self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {"leaf-0002": "failing"}, "asked again six hours on")
         self.assertEqual(self.entry()["runs"], 2)
-        self.assertEqual(self.run_leaves(), {}, "an answer that proves at the tip is not asked for again")
+        self.assertEqual(self.run_leaves(at=A_DAY_ON), {}, "an answer that proves at the tip is not asked for again")
         said = self.cut()
         self.assertEqual(said["added"], [{"id": "leaf-0002", "from": "backlog", "shown": "judge"}])
         self.assertEqual({entry["id"]: entry["because"] for entry in said["waiting"]},
@@ -13762,13 +13771,13 @@ class TestTheTipAsACandidate(Base):
         self.assertRegex(printed, r"\APASSED 1 new, 0 closed;.*\nCHECKED [0-9a-f]{64} against [0-9a-f]{40}; shown to fail at the tip by the judge: "
                                   r"leaf-0002\n\Z")
         self.v.tasks_file.write_text((Path(self.tmp.name) / "proposal.jsonl").read_text())  # the cutter publishes it
-        self.assertEqual(self.run_leaves(), {})
+        self.assertEqual(self.run_leaves(at=TWO_DAYS_ON), {})
         self.assertEqual(self.written(), {}, "an answer about a task published proves nothing more")
         later = planned_leaf(7, ["src/a.c"])
         self.plan_backlog(line, later)
-        self.assertEqual(self.run_leaves(), {"leaf-0007": "failing"})
+        self.assertEqual(self.run_leaves(at=TWO_DAYS_ON), {"leaf-0007": "failing"})
         self.plan_backlog(line)  # a line taken out of the backlog by hand
-        self.run_leaves()
+        self.run_leaves(at=TWO_DAYS_ON)
         self.assertEqual(self.written(), {}, "nor about a task planned no more")
 
     def test_a_line_the_tip_passes_already_is_not_published_whatever_word_is_given(self):
@@ -13793,7 +13802,7 @@ class TestTheTipAsACandidate(Base):
         protected path. A maintainer's commit, whatever it touches, leaves no proof."""
         line = planned_leaf(2, ["src/a.c"])
         self.plan_backlog(line)
-        self.run_leaves(), self.run_leaves()
+        self.run_leaves(), self.run_leaves(at=SIX_HOURS_ON)
         config, _, _ = self.v.load()
         repo = self.v.harvest
 
@@ -13803,17 +13812,19 @@ class TestTheTipAsACandidate(Base):
 
         self.assertEqual(shown(), {"leaf-0002": "failing"})
         entry = self.entry()
-        self.v.fork("vera", 201).submit("leaf-0001", content=LIB + WRITTEN)
-        self.assertEqual(self.run_leaves(), {}, "the answer holds at the plan's tip: not asked again")
+        vera = self.v.fork("vera", 201)
+        self.v.deal(vera, "leaf-0001", at=A_DAY_ON)
+        vera.submit("leaf-0001", content=LIB + WRITTEN)
+        self.assertEqual(self.run_leaves(at=A_DAY_ON), {}, "the answer holds at the plan's tip: not asked again")
         self.assertNotEqual(self.v.tip(), entry["tip"], "the candidate was integrated")
         self.assertEqual(shown(), {"leaf-0002": "failing"}, "carried across the hive's own integration of another task")
         integrated = self.v.tip()
         self.v.upstream_commit("lib.c", LIB + "/* a maintainer's */\n")
         maintainer = self.v.tip()
         self.assertEqual(shown(), {}, "a maintainer's commit, even to a file another task names")
-        self.assertEqual(self.run_leaves(), {"leaf-0002": "failing"}, "so the judge is asked again, at the tip as it is")
+        self.assertEqual(self.run_leaves(at=A_DAY_ON), {"leaf-0002": "failing"}, "so the judge is asked again, at the tip as it is")
         self.assertEqual((self.entry()["runs"], shown()), (1, {}), "and the count starts again: the answer before did not hold there")
-        self.assertEqual(self.run_leaves(), {"leaf-0002": "failing"})
+        self.assertEqual(self.run_leaves(at=TWO_DAYS_ON), {"leaf-0002": "failing"})
         self.assertEqual(shown(), {"leaf-0002": "failing"})
         self.v.upstream_commit("src/a.c", "int a = 1;\n")
         self.assertEqual(shown(), {}, "the task's own file")
@@ -13888,7 +13899,8 @@ class TestTheTipAsACandidate(Base):
         good = self.entry()
         bad = {"leaf-0003": {**good, "tip": "x" * 40}, "leaf-0004": {**good, "answer": "proven"}, "leaf-0005": {**good, "line": "LINE"},
                "leaf-0006": {**good, "at": "yesterday"}, "leaf-0007": [good], "Leaf-0008": good, "leaf-0009": {"tip": good["tip"]},
-               "leaf-0010": {**good, "runs": 0}, "leaf-0011": {**good, "runs": True}, "leaf-0012": {**good, "runs": "2"}}
+               "leaf-0010": {**good, "runs": 0}, "leaf-0011": {**good, "runs": True}, "leaf-0012": {**good, "runs": "2"},
+               "leaf-0013": {**good, "run": "a run"}, "leaf-0014": {**good, "at": "2026-02-30T12:00:00Z"}}
         (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": {**good, "more": 1}, **bad}))
         self.assertEqual(hive.read_tip_answers(self.v.state), {"leaf-0002": good})
         for name, content in (("not a table", "[]"), ("nested past what a reader takes", "[" * 100000), ("not JSON", "{"),
@@ -13939,12 +13951,12 @@ class TestTheTipAsACandidate(Base):
         self.assertEqual(hive.TIP_ASKS, 2)
         with mock.patch("sys.stderr"):
             self.assertEqual(self.run_leaves(), {"leaf-0005": "unknown", "leaf-0002": "failing"}, "in the backlog's order")
-        self.assertEqual(self.run_leaves(), {"leaf-0003": "failing", "leaf-0002": "failing"},
-                         "one never asked first, then one said failing once; one the judge could not answer waits a day")
-        self.assertEqual(self.run_leaves(), {"leaf-0003": "failing"})
-        self.assertEqual(self.run_leaves(), {}, "the others prove, and the « unknown » is not a day old")
-        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-13T12:00:01Z"}), mock.patch("sys.stderr"):
-            self.assertEqual(self.run_leaves(), {"leaf-0005": "unknown"}, "a day later")
+        self.assertEqual(self.run_leaves(), {"leaf-0003": "failing"},
+                         "one never asked; one said failing waits six hours, one the judge could not answer a day")
+        self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {"leaf-0002": "failing", "leaf-0003": "failing"})
+        self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {}, "the others prove, and the « unknown » is not a day old")
+        with mock.patch("sys.stderr"):
+            self.assertEqual(self.run_leaves(at=A_DAY_ON), {"leaf-0005": "unknown"}, "a day later")
         # among the tasks asked before, the one asked longest ago first
         config, tasks, _ = self.v.load()
         backlog, _ = hive.backlog_at(self.v.writer, self.v.made["settings"], config, tasks)
@@ -13954,14 +13966,38 @@ class TestTheTipAsACandidate(Base):
         self.assertEqual([task["id"] for task in asked], ["leaf-0002", "leaf-0005"])
         # the state keeps the latest answers, within its bound
         with mock.patch.object(hive, "TIP_ENTRIES", 1):
-            hive.write_tip_answers(self.v.writer, self.v.state, self.v.tip(), backlog, tasks, backlog, {"leaf-0002": "passing"}, hive.parse_iso("2026-11-14T00:00:00Z"),
-                                   {}, config)
+            hive.write_tip_answers(self.v.writer, self.v.state, self.v.tip(), backlog, tasks, backlog, {"leaf-0002": "passing"},
+                                   hive.parse_iso("2026-11-14T00:00:00Z"), {}, config, "f" * 32)
         self.assertEqual(list(self.written()), ["leaf-0002"])
         # and no question is started that could end after the judging's time
         self.v.set_config({**LEAF_JUDGE, "limits": {"judging_seconds": 60}})
         (self.v.state / hive.TIP_FILE).unlink()
         judge_of_leaves.asked = []
         self.assertEqual((self.run_leaves(), judge_of_leaves.asked), ({}, []))
+
+    def test_a_runs_answer_counts_once_and_only_the_same_answer_six_hours_on_counts_twice(self):
+        """« failing » proves once two runs in a row gave it, six hours apart at least: a write step run again on the
+        same plan counts once, an answer of another word before it counts nothing, and a second « failing » too soon
+        leaves the first as it is. An instant in the state that is no instant is no entry, and stops nothing."""
+        line = planned_leaf(2, ["src/a.c"])
+        self.plan_backlog(line)
+        self.assertEqual(self.run_leaves(writes=(None, SIX_HOURS_ON)), {"leaf-0002": "failing"})
+        self.assertEqual(self.entry()["runs"], 1, "the write step run again on the same plan, six hours on: one run")
+        (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": {**self.entry(), "answer": "unknown", "run": "0" * 32}}))
+        self.assertEqual(self.run_leaves(at=A_DAY_ON), {"leaf-0002": "failing"})
+        self.assertEqual(self.entry()["runs"], 1, "an « unknown » before it is no « failing »")
+        first = self.entry()
+        self.run_leaves(at="2026-11-13T13:00:00Z", handed=lambda tip: {"commit": tip, "answers": {"leaf-0002": "failing"}})
+        self.assertEqual(self.entry(), first, "an hour later: too soon to count")
+        (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": {**first, "answer": "unknown", "at": "2026-13-45T99:99:99Z"}}))
+        self.assertEqual(hive.read_tip_answers(self.v.state), {})
+        self.assertEqual(self.run_leaves(at="2026-11-13T13:00:00Z"), {"leaf-0002": "failing"}, "asked as if never, and nothing stops")
+
+        class Ledger:
+            events = [{"type": "intent", "commit": "a" * 40, "task": "leaf-0001"}, {"type": "verdict", "result": "refused", "commit": "b" * 40},
+                      {"type": "verdict", "result": "accepted", "commit": "c" * 40, "task": "leaf-0001"},
+                      {"type": "verdict", "result": "accepted", "commit": "no commit", "task": "leaf-0001"}]
+        self.assertEqual(hive.integrations(Ledger), {"c" * 40: "leaf-0001"}, "an acceptance names an integration, and nothing else does")
 
     def test_nothing_is_asked_once_the_judges_machine_is_down(self):
         """A judge that fails on a candidate and on the project's tip itself: its machine is down, the run's judging
@@ -14019,7 +14055,8 @@ class TestTheTipAsACandidate(Base):
         shutil.copy(judge / "verdicts.json", write / "taken/verdicts/verdicts.json")
         self.step(write, "apply", *common, "--plan", "taken/plan/plan.json", "--plan-sha256", digest,
                   "--bundle", "taken/candidates/candidates.bundle", "--verdicts", "taken/verdicts/verdicts.json", world=self.v)
-        self.assertEqual((self.entry()["tip"], self.entry()["answer"], self.entry()["runs"]), (tip, "failing", 1))
+        self.assertEqual((self.entry()["tip"], self.entry()["answer"], self.entry()["runs"], self.entry()["run"]),
+                         (tip, "failing", 1, json.loads((plan / "plan.json").read_text())["key"]))
 
 
 REGISTRY = Path(os.environ.get("HIVE_REGISTRY") or Path(hive.__file__).resolve().parents[2])  # the hive's own tree (a copy, in the tests' run)

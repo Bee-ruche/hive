@@ -3583,7 +3583,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
         # since: the cutter reads an answer at a later tip only where the rule of proof_holds carries it there.
         planned = planned_questions(config, tasks, backlog, ledger.done(), tip_paths(repo, tip))
         write_tip_answers(repo, state_folder, tip, backlog, tasks, planned, tip_answers_held(tip, planned, tip_answers), instant,
-                          integrations(ledger), config)
+                          integrations(ledger), config, run)
     write_state(state_folder, "feed.json", build_feed(config, tasks, ledger, reached, plan_))
     write_state(state_folder, "stats.json", build_stats(ledger))
     if checkpoint:
@@ -4782,6 +4782,7 @@ TIP_ASKS = 2  # the most planned tasks one run asks about (each costs a judgemen
 TIP_ANSWERS = ("failing", "passing", "unknown")  # the judge refused the tip as a candidate (1), found it correct (0), failed to judge (2)
 TIP_KINDS = ("reference",)  # the kinds that can answer: the common judge compares a candidate with the tip, which always passes against itself
 TIP_AGREE = 2  # « failing » proves once this many runs in a row gave it, each at a tip where the answer before it still held
+TIP_APART_HOURS = 6  # ... each this long at least after the one before it: a machine slow for an hour does not say it twice
 TIP_UNKNOWN_HOURS = 24  # an « unknown » that still holds at the tip is asked again only this long after it was given
 TIP_ENTRIES = 5000  # the most answers the state keeps (the latest): a planned task beyond them is asked again
 TIP_RUNS_MOST = 1_000_000  # what the count of runs in a row an entry gives may say at most
@@ -4797,23 +4798,26 @@ def line_digest(task):
     return hashlib.sha256(text.encode()).hexdigest() if text is not None else None
 
 
-TIP_KEYS = ("tip", "line", "answer", "at", "runs")
+TIP_KEYS = ("tip", "line", "answer", "at", "runs", "run")
 
 
 def tip_entry_ok(task_id, entry):
     return (isinstance(task_id, str) and bool(TASK_ID.match(task_id)) and isinstance(entry, dict) and is_sha(entry.get("tip"))
             and isinstance(entry.get("line"), str) and bool(re.fullmatch(r"[0-9a-f]{64}", entry["line"]))
-            and isinstance(entry.get("answer"), str) and entry["answer"] in TIP_ANSWERS and stamp(entry.get("at"))
-            and type(entry.get("runs")) is int and 1 <= entry["runs"] <= TIP_RUNS_MOST)
+            and isinstance(entry.get("answer"), str) and entry["answer"] in TIP_ANSWERS
+            and instant_text(entry.get("at")) == entry.get("at")  # (an instant that is one: 2026-13-45T99:99:99Z is not)
+            and type(entry.get("runs")) is int and 1 <= entry["runs"] <= TIP_RUNS_MOST
+            and isinstance(entry.get("run"), str) and bool(RUN_KEY.match(entry["run"])))
 
 
 def read_tip_answers(folder):
-    """{task id: {"tip", "line", "answer", "at", "runs"}}: the judge's latest answer about the tip for each planned task,
-    as the state's TIP_FILE holds it: the commit it judged, the digest of the task's line (line_digest), the answer, its
-    instant, and how many runs in a row gave it (each at a tip where the answer before it still held). The state is
-    public: what it holds is read back as untrusted data, and an entry that is not exactly of that shape is left out (a
-    key more is not read). A state without the file (a project whose run is pinned to a commit of the hive older than
-    it, or whose judge cannot answer) holds no answer, and nothing else changes."""
+    """{task id: {"tip", "line", "answer", "at", "runs", "run"}}: the judge's latest answer about the tip for each planned
+    task, as the state's TIP_FILE holds it: the commit it judged, the digest of the task's line (line_digest), the
+    answer, its instant, how many runs in a row gave it (each at a tip where the answer before it still held), and the
+    key of the run that gave it last. The state is public: what it holds is read back as untrusted data, and an entry
+    that is not exactly of that shape is left out (a key more is not read). A state without the file (a project whose
+    run is pinned to a commit of the hive older than it, or whose judge cannot answer) holds no answer, and nothing else
+    changes."""
     path = Path(folder) / TIP_FILE
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > TIP_FILE_BYTES:
@@ -4937,9 +4941,10 @@ def tip_questions(repo, config, published, backlog, done, tip, answers, integrat
         entry = answers.get(task_id)
         if tip_status(repo, answers, task, tip, integrated, config, diffs) is not None:
             continue
-        if (entry is not None and entry["answer"] == "unknown" and instant < parse_iso(entry["at"]) + dt.timedelta(hours=TIP_UNKNOWN_HOURS)
+        wait = TIP_UNKNOWN_HOURS if entry and entry["answer"] == "unknown" else TIP_APART_HOURS if entry and entry["answer"] == "failing" else None
+        if (wait is not None and instant < parse_iso(entry["at"]) + dt.timedelta(hours=wait)
                 and proof_holds(repo, entry, task, tip, integrated, config, diffs)):
-            continue
+            continue  # (an answer that still holds: asked again once its time has come)
         waiting.append((entry["at"] if entry else "", position, task))
     return [task for _, _, task in sorted(waiting, key=lambda item: item[:2])[:TIP_ASKS]]
 
@@ -4961,18 +4966,24 @@ def tip_answers_held(tip, planned, handed):
     return dict(answers)
 
 
-def write_tip_answers(repo, state_folder, tip, backlog, published, planned, held, instant, integrated, config):
+def write_tip_answers(repo, state_folder, tip, backlog, published, planned, held, instant, integrated, config, run):
     """Writes the state's TIP_FILE: the answers it held, each task's entry replaced by the one `held` gives (about
-    `tip`, for that task's line as `planned` holds it), and only for tasks the backlog still plans and the project has
-    not published: an answer about a task published, or planned no more, proves nothing to anyone. An answer the entry
-    before it gave too, at a tip where it still holds now (proof_holds), counts one run more; any other starts at one.
-    The latest TIP_ENTRIES are kept. Whole or not at all."""
+    `tip`, for that task's line as `planned` holds it, by the run whose key is `run`), and only for tasks the backlog
+    still plans and the project has not published: an answer about a task published, or planned no more, proves nothing
+    to anyone. An answer the entry before it gave too, by another run, at least TIP_APART_HOURS before, at a tip where
+    it still holds now (proof_holds), counts one run more; any other starts at one. The same run's answer is written
+    once, however many times its write step runs (a job run again on the same plan); a second « failing » that comes too
+    soon leaves the first as it is. The latest TIP_ENTRIES are kept. Whole or not at all."""
     kept, diffs = {task_id: entry for task_id, entry in read_tip_answers(state_folder).items() if task_id in backlog and task_id not in published}, {}
     for task_id, answer in held.items():
         before = kept.get(task_id)
+        if before is not None and before["run"] == run:
+            continue  # this run's answer is written already: it counts once
         again = before is not None and before["answer"] == answer and proof_holds(repo, before, planned[task_id], tip, integrated, config, diffs)
+        if again and instant < parse_iso(before["at"]) + dt.timedelta(hours=TIP_APART_HOURS):
+            continue  # the same answer, too soon to count as another run's: a later run asks again
         kept[task_id] = {"tip": tip, "line": line_digest(planned[task_id]), "answer": answer, "at": iso(instant),
-                         "runs": min(before["runs"] + 1, TIP_RUNS_MOST) if again else 1}
+                         "runs": min(before["runs"] + 1, TIP_RUNS_MOST) if again else 1, "run": run}
     latest = sorted(kept, key=lambda task_id: (kept[task_id]["at"], task_id), reverse=True)[:TIP_ENTRIES]
     write_state(state_folder, TIP_FILE, {task_id: kept[task_id] for task_id in latest})
 
