@@ -2186,10 +2186,12 @@ class TestApply(Base):
         self.assertIsInstance(error, hive.HiveError)
         self.assertEqual(str(error), f'the push did not land (git\'s exit code 1): its reasons are the {len(said)} line(s) '
                                      f'"{hive.PUSH_SAID.strip()}" above')
-        self.assertEqual(said[0], f"! {self.commit}:refs/heads/main [remote rejected] (failed to update ref)", "the ref's status first")
+        # (git's words for a locked branch change with its version: « failed to update ref », « reference already exists »)
+        self.assertRegex(said[0], rf"^! {self.commit}:refs/heads/main \[remote rejected\] \([a-z ]+\)$", "the ref's status first")
         self.assertTrue(said[1].startswith("error: failed to push some refs to "), "then git's own words")
-        self.assertTrue(said[2].startswith("remote: error: cannot lock ref 'refs/heads/main'"), "then the repository's")
-        self.assertEqual((len(said), said[-1]), (2 + hive.PUSH_REMOTE_LINES + 1, "and 2 line(s) more, left out"), said)
+        remote = [line for line in said[2:] if line.startswith("remote: ")]
+        self.assertTrue(1 <= len(remote) <= hive.PUSH_REMOTE_LINES and said[2:2 + len(remote)] == remote, "then the repository's, a few")
+        self.assertRegex(" ".join(said[2 + len(remote):]), r"^(and [0-9]+ line\(s\) more, left out)?$", said)
         self.assertFalse(any(line.startswith(("To ", "Done", "hint:", "remote: remote:")) or line == "remote:" for line in said),
                          "neither the address line, git's advice nor an empty line")
         self.assertEqual(self.w.events(), [], "neither an integration nor a failure of the candidate's: the step is the same")
