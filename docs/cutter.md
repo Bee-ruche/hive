@@ -7,8 +7,9 @@ map, closes the tasks that do not move and cuts them again, and publishes the ne
 project's trusted base, like its guardians; what volunteers push never steers it except through the judge's
 numbers.
 
-**Status (21 November 2026): the tally, the gate, the deterministic cutter, the outline, the AI cutter's guide and the
-projects' feedback to the hive (`health`, `report`) are built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
+**Status (21 November 2026): the tally, the gate, the deterministic cutter, the outline, the AI cutter's guide, the
+projects' feedback to the hive (`health`, `report`) and the judge's proof that a new task « correct » fails at the tip
+are built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
 20 November 2026; the research behind the design is summed up in "Grounds".
 
 ## Grounds
@@ -84,8 +85,9 @@ The rules that keep the ledger's history true:
 
 ## The backlog and the charter
 
-Two files of the project's repository, under `hive/` on the branch it publishes, which no run reads and no
-contribution may change (every file under `hive/` is protected):
+Two files of the project's repository, under `hive/` on the branch it publishes, which no contribution may change
+(every file under `hive/` is protected). No run reads the charter; the run's judging and write jobs read the backlog
+for one thing, the proof at the tip (below):
 
 - `hive/charter.md`: **the architect's charter**, in the architect's own words: the project's goal, what counts as
   progress, its directions and priorities, what it asks of volunteers, and what the cutter must never propose. The
@@ -110,9 +112,11 @@ within `cutter.changes` lines added or closed:
    A judge that measures the whole program is not split by function: a smaller part of a file is not a smaller
    task when the figure is the program's. Asking less of the same part is.
 2. **The backlog's tasks are published** as said above, each once its parent is closed or done, its files are on the
-   tip and none is protected, and, for a goal « correct », once a run of the judge showed it to fail at the tip
-   (`--failing`). A line the gate would refuse waits (`gate`) for the architect to mend it, and the rest of the cut
-   goes on.
+   tip and none is protected, and, for a goal « correct », once a run of the judge showed it to fail at the tip: the
+   project's own run asks the judge ("The proof at the tip", below), or, the manual way, the architect runs it and
+   gives their word (`--failing <id>`). A line not shown to fail yet waits (`not_shown_failing`); one a run of the
+   judge showed the tip passes already waits (`shown_passing`): the task is done, or empty, whatever word is given. A
+   line the gate would refuse waits (`gate`) for the architect to mend it, and the rest of the cut goes on.
 3. **It says what is left to do** against `cutter.open` (`left`, `short`), whether the project **starves** (nothing
    left to do), and what it left undone and why, as codes: the AI cutter's work, or the architect's.
 
@@ -124,7 +128,9 @@ Once a day, by the architect's agent; a whole cycle (cut, publish, deal, judge, 
 GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitHub starts it when it can").
 
 1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
-2. **The deterministic cutter** applies its rules ("The deterministic cutter", above).
+2. **The deterministic cutter** applies its rules ("The deterministic cutter", above). A planned task « correct » is
+   published at the first cycle after a run of the project's hive judged the tip as a candidate for it and saw it
+   fail ("The proof at the tip"): the cutter runs nothing of the project, and waits for that answer.
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
      account that never had an acceptance never counts, so throwaway accounts cannot make a task stuck, and a
@@ -158,6 +164,8 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
 - Figures measured on the project's code (a profile of its hot spots, the reference's cases that fail) come from a
   run of the project's own tools in its sandbox, without network: numbers and the names of functions, nothing
   else.
+- Whether the project's tip fails a planned task « correct » comes from the project's own run, which asks its judge
+  and writes the answer to the state: ids, codes and commits ("The proof at the tip").
 - It **never** reads a candidate, refused or accepted, nor a fork, a commit message or anything a volunteer wrote,
   beyond that projection.
 - The model a volunteer declares is counted, never used to decide.
@@ -187,17 +195,76 @@ prints every reason it finds to refuse it, and passes it only if there is none (
 - what a new task needs is done; a new task that names a parent leaves no copy of it open: the parent is closed in
   the same cut, or done;
 - **no task is empty**: a goal on a figure holds a proof, which a candidate that changes nothing never gives; a new
-  task whose goal is « correct » is named among those that a run of the judge at the project's tip showed to fail
-  (`--failing <id>`), in the judge's container. That one is the cutter's word: the gate prints it and cannot check
-  it yet.
+  task whose goal is « correct » is one a run of the judge showed to fail at the project's tip: the judge's answer,
+  which the project's run wrote to its state, for that very line, at the tip or at an earlier tip it still holds at
+  ("The proof at the tip"); or, the manual way, the architect's word (`--failing <id>`), which the gate prints and
+  cannot check. A new task a run of the judge showed the tip passes already is refused, whatever word is given.
 
 The backlog a cut changes is held with it (`--backlog`): a line of the published backlog is never removed or changed,
 and a line the cut adds is held to what the gate holds a new task's own line to, under an id the tasks file does not
 use.
 
 A proposal that passes is named by its bytes: `cut-check` prints its SHA-256 and the published commit it was held
-against (`CHECKED`), and what is published is that file, on that commit; a deal made in between is caught by
-running the gate again just before publishing.
+against (`CHECKED`), then the new tasks « correct » the judge showed to fail (`shown to fail at the tip by the judge:
+<ids>`) and those the architect's word names (`shown to fail at the tip, by the cutter's word: <ids>`); what is
+published is that file, on that commit; a deal made in between, or an answer of the judge that no longer holds, is
+caught by running the gate again just before publishing.
+
+## The proof at the tip
+
+A new task whose goal is « correct » is worth publishing only if the project's tip fails it: one the tip passes
+already would be accepted for nothing. Its proof is a run of the judge, not the cutter's word, and the cutter runs
+nothing of the project: its machine may hold no Docker, and it holds the right to publish.
+
+- **Where the judge runs.** In the project's own hive run, in the judging job (`hive.py judge`), which holds no secret
+  and already runs the tip's and the candidates' code, in containers without network. After the plan's candidates,
+  in the time they left (no question is started that could end after the judging's time, and none once its machine
+  is down), it judges **the plan's tip itself as a candidate** for planned tasks: the tip's own tree, written out as
+  a candidate's is, judged as a candidate's is. For the reference judge that is the tip's own files of the unit, built
+  and run as a candidate's would be, on cases drawn then ([reference-judge.md](reference-judge.md)).
+- **What is asked.** Of the lines of the backlog at the plan's commit, those the deterministic cutter would publish
+  but for the proof: not published yet, a goal « correct », held by the gate's rules for a new task's own line, what
+  they need done, their files on the tip and none protected; and among them, those for which no answer of the judge
+  holds at the tip (below). **At most two in a run**: those never asked first, then the one asked longest ago, in the
+  backlog's order between equals. The rest wait for the next run; a task the judge cannot answer is asked again after
+  the others, and holds no place for ever.
+- **What is recorded.** The answer is code 1 (the judge refuses the tip: `failing`), code 0 (it finds it correct:
+  `passing`) or code 2 (it failed to judge: `unknown`). It goes to the state, in `tip.json` on the branch `hive-state`:
+  for each planned task, its latest answer, the commit it judged, the SHA-256 of the task's line, and the instant. Ids,
+  codes and commits: no text. An answer about a task published, or planned no more, is dropped.
+- **Who writes it, with which right.** The judging job hands its answers to the write job inside `verdicts.json`, the
+  file that job already takes by name; the write job (`hive.py apply`) writes `tip.json` with the token it already
+  holds to write `hive-state`. No new file between jobs, no new step, no new right, no secret. The write job believes
+  them whole or not at all: answers about the plan's tip and no other commit, one of the three words, for at most two
+  tasks among those it finds itself it could have asked about (from the project's settings, tasks and backlog at the
+  plan's commit, the ledger and the tip's files). A judging job that a candidate's code took over can lie there, as
+  it can about a candidate's verdict, and say nothing else. A volunteer's fork reaches the state by no path: no job
+  reads anything of a fork into it, and the question is asked of the plan's tip, never of a tree a candidate made,
+  even one this run integrates. What the state holds is read back as data: an entry of any other shape is no answer.
+- **What reads it.** `hive cut` and `hive cut-check` take the proof from the state they are given, for the commit of
+  the branch the hive writes (where a volunteer's work starts). **An answer holds at a tip** when it is about the
+  task's very line (the same SHA-256), and it was given at that commit, or at an ancestor of it from which the tip
+  moved only by what contributions to other tasks bring: every path that differs between the two is a file another
+  published task names, under no protected path, and none of the task's own files. A judge of the reference kind
+  judges a unit from its own files and from the project's tree beside them (its reference, its skeleton, its judge),
+  which no task names: a contribution to another task changes none of it. Anything else (the task's own files, the
+  judge, a file no task names, which only a maintainer's commit changes, a commit of another line of history, one the
+  clone does not hold, more changes than the tool reads) leaves no proof, and the run asks again at the tip as it is.
+- **`--failing`** stays the architect's manual way: the architect runs the project's check at the tip, in the judge's
+  container, and gives their word. The gate prints it as before. A run of the judge that showed the tip passes the
+  task wins over it.
+- **A line the tip passes already** waits (`shown_passing`): the task is done, or empty. The architect looks at it.
+- **Kinds.** The question is asked only of a judge that can answer it: the reference kind. The common judge compares
+  a candidate with the tip, which always passes against itself: a project of that kind (miniz) is asked nothing, its
+  goals on figures hold their own proof, and a goal « correct » there is published on the architect's word alone.
+- **Projects on an older pin.** A project whose caller names a commit of the hive older than this (the two test
+  projects name 64615af) runs as before: its judging job asks nothing, its state holds no `tip.json`, and the
+  cutter's `hive cut` (the hive's latest) reads that state as it is: nothing is shown failing by the judge, and the
+  architect's word publishes as before. The older runs never read `tip.json`, and save only the files they write: a
+  project that goes back to an older pin keeps the file as it is, and its answers stop where they were. To take the
+  new version, a project changes the commit its caller names (`.github/workflows/hive.yml`) to one of
+  `Bee-ruche/hive`'s main that holds it, reviewed as any change of that line is ([hosting.md](hosting.md), "Which
+  version of the hive a project runs"): no setting, no file and no right more.
 
 ## Kinds of project
 
@@ -263,8 +330,6 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
 
 ## Not yet
 
-- The gate running the judge itself on a new task whose goal is « correct », in its container, rather than taking
-  the cutter's word that it fails at the project's tip.
 - A deal weighted by the cutter (recruitment in proportion to what an area yields, a share of scouts, scores that
   evaporate, a quorum before committing): a change of the protocol.
 - A way for a volunteer's agent to say "this task is impossible as stated", with its evidence, at no cost.
@@ -288,3 +353,7 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
    judged; the projects' ledgers, on their branch `hive-state`, hold the details).
 5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`. **Done.**
    (GitHub's private vulnerability reporting, which `SECURITY.md` sends weaknesses to, is the founder's to turn on.)
+6. The proof at the tip: the project's run judges its tip as a candidate for planned tasks « correct », the write job
+   records the answers in `tip.json`, and `hive cut` and `cut-check` take the proof from there ("The proof at the
+   tip"). **Done**; it acts in a project once its caller names a commit of the hive that holds it. The last manual
+   step of a cycle on a project of the reference kind: with it, a cutter can run alone on a schedule.

@@ -21,11 +21,14 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
   record  writes the plan's deals to the hive's state, so that members see them within minutes. Holds the state's
           write token only; runs nobody's code and talks to no fork.
   judge   runs contributors' code, in the judge's container. Holds no secret and cannot change the plan. Writes
-          the judge's answers by judged commit id.
+          the judge's answers by judged commit id; and, for a project whose judge can tell (TIP_KINDS), what it
+          answered when the plan's tip itself was judged as a candidate for a few of the planned tasks whose goal is
+          « correct » (tip_questions): the proof the cutter's gate takes that such a task fails at the tip.
   apply   the only step that can write to the project. Runs nobody's code and talks to no fork: it takes the candidates from
           the plan, derives every commit itself, takes from the judging step the judge's answers and the list of
-          what it started on, nothing else, pushes the
-          judged commits (never anything but a descendant of the judged tip) and records.
+          what it started on, and its answers about the tip, held to the planned tasks it finds itself
+          (tip_answers_held), nothing else, pushes the judged commits (never anything but a descendant of the judged
+          tip) and records.
 
 More commands on the hive's side write nothing to the project: feed (the feed and the statistics, before a
 project's first run); and, for the project's cutter (docs/cutter.md), tally (what the ledger says of each task, in
@@ -200,7 +203,7 @@ SETTINGS_BYTES = 16 << 20  # either of the two files larger than this is not rea
 # The project's state (the ledger, the feed...): the files of one branch of the project's own repository, at its root,
 # written by the run's steps that write (record, apply) and by nothing else of the hive's (save_state).
 STATE_BRANCH = "hive-state"
-STATE_FILES = ("accounts.json", "feed.json", "ignored.json", "ledger.jsonl", "stats.json")
+STATE_FILES = ("accounts.json", "feed.json", "ignored.json", "ledger.jsonl", "stats.json", "tip.json")
 DEFAULTS = {
     "branch": "main",
     "protected": [],
@@ -3188,13 +3191,13 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
     a judging step that is stopped leaves the answers it had."""
     state = {"down": False, "works": {}, "machine": False}
 
-    def ask(tip, tree, task, commit, label):
+    def ask(tip, tree, task, commit, label, **named):
         folder = Path(tempfile.mkdtemp(prefix="judge-", dir=workdir))
         try:
             materialize(repo, tree_of(repo, tip), folder / "base")
             with_history(repo, folder / "base", history)
             materialize(repo, tree, folder / "candidate")
-            answer = judge(folder / "base", folder / "candidate", task, tip, commit)
+            answer = judge(folder / "base", folder / "candidate", task, tip, commit, **named)
         except HiveError:
             raise
         except Exception as error:  # noqa: BLE001 (a timeout, a crash: the candidate is not answered by it)
@@ -3235,16 +3238,37 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
         if save:
             save(verdicts, started or [])
         return answer
+
+    def about_the_tip(tip, task):
+        """The tip itself, written out twice as a candidate's tree is, judged as a candidate for a planned task (a kind
+        of TIP_KINDS, told so by `question`): « failing » when the judge refuses it, « passing » when it finds it
+        correct, « unknown » when it fails to judge (no machine is blamed: a planned task may name a piece the judge
+        does not know yet). None once the run's judging is over (its time used up, its machine down): nothing more
+        is asked. Asked after every candidate of the plan, in the time they left: a member's judgement comes first."""
+        if not state["down"] and deadline is not None and time.monotonic() + longest > deadline:
+            state["down"] = True
+            log("the time allowed for judging is used up: the questions about the tip wait for the next run")
+        if state["down"]:
+            return None
+        code = ask(tip, tree_of(repo, tip), task, tip, f"{task['id']}: the tip as a candidate", question=True)["code"]
+        return {1: "failing", 0: "passing"}.get(code, "unknown")
     verdict_of.machine_down = lambda: state["machine"]  # (for the run's own account of itself: judge_plan)
+    verdict_of.about_the_tip = about_the_tip
     return verdict_of
 
 
-def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, notes=None):
+def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, notes=None, backlog=None, answers=None):
     """The step without any token: judges the plan's candidates and returns (verdicts, outcomes, started). What
     leaves it: a table from the id of each judged commit to the judge's answer, and the ids of the commits it
-    started on (so that the one it was on, if it is stopped, can be told from those it never reached)."""
+    started on (so that the one it was on, if it is stopped, can be told from those it never reached).
+
+    Then, given the project's backlog (its planned tasks, read at the plan's commit) and the judge's answers about
+    the tip the state holds (read_tip_answers), it asks the judge about the plan's tip itself, judged as a candidate
+    for each of the planned tasks tip_questions chooses, in the time the candidates left; notes["tip"] is what it
+    answered: {task id: « failing », « passing » or « unknown »}, all about the plan's tip."""
     instant, plan_ = read_plan(plan_, config)
     ledger.append(settle(ledger, instant, landings(repo, plan_["tip"], ledger, instant)), write=False)
+    questions = tip_questions(repo, config, tasks, backlog, ledger.done(), plan_["tip"], answers or {}) if backlog else []
     probe = Path(tempfile.mkdtemp(prefix="tip-", dir=workdir))
     try:
         materialize(repo, tree_of(repo, plan_["tip"]), probe / "tip")  # a tip the hive cannot write stops the run, loudly
@@ -3256,8 +3280,15 @@ def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, no
     verdict_of = judging(repo, judge, workdir, verdicts, config["judge"]["metrics"], deadline,
                          config["judge"].get("timeout_seconds", 3600), save, started, config["judge"]["history"])
     outcomes, _ = process(repo, plan_["tip"], plan_["queue"], config, tasks, ledger, verdict_of, instant)
+    asked = {}
+    for task in questions:  # (the plan's tip, as the branch the hive writes holds it: never one this run's candidates made)
+        answer = verdict_of.about_the_tip(plan_["tip"], task)
+        if answer is None:
+            break  # the judging is over: what is left is asked at the next run
+        asked[task["id"]] = answer
     if notes is not None:
         notes["down"] = verdict_of.machine_down()  # the run's own account of itself: its machine failed on the project's tip
+        notes["tip"] = asked
     return verdicts, outcomes, started
 
 
@@ -3439,11 +3470,17 @@ def record(plan_, config, tasks, ledger, state_folder):
     write_state(state_folder, "stats.json", build_stats(ledger))
 
 
-def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, allow_local=False, checkpoint=None, started=()):
+def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, allow_local=False, checkpoint=None, started=(),
+          backlog=None, tip_answers=None):
     """The only step that writes to the project. It takes the candidates from the plan (the hive's own first step),
     derives every commit by itself, and takes from the judging step the judge's answer for each commit id it derived
     and which commits it started on. So a judging step that was taken over can lie about a candidate or stay silent
     about it, and nothing else: it cannot name a candidate, a member, a task or a path, nor who is dealt what.
+
+    Given the project's backlog at the plan's commit, it also writes the judge's answers about the plan's tip
+    (`tip_answers`, the judging step's: tip_answers_held) to the state's TIP_FILE, for the project's cutter
+    (write_tip_answers). A judging step that was taken over can lie there too about what the judge said of the tip,
+    and say nothing else: no task this step does not find it could have asked about, no other commit, no other word.
 
     It promises before it pushes (an « intent » in the ledger, saved by `checkpoint`), pushes the accepted commits
     one by one, and records what happened up to the first push that did not land. A commit the project's repository
@@ -3538,6 +3575,11 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
         for deal in kept_deals:
             ignored.setdefault(str(deal["repo_id"]), []).extend(deal["asks"])  # an ask is used once
         write_ignored(state_folder, ignored)
+    if backlog is not None and config["judge"]["kind"] in TIP_KINDS:
+        # About the plan's tip (the commit the branch was at when this step started), whatever this run integrated
+        # since: the cutter reads an answer at a later tip only where the rule of proof_holds carries it there.
+        planned = planned_questions(config, tasks, backlog, ledger.done(), tip_paths(repo, tip))
+        write_tip_answers(state_folder, tip, backlog, tasks, planned, tip_answers_held(tip, planned, tip_answers), instant)
     write_state(state_folder, "feed.json", build_feed(config, tasks, ledger, reached, plan_))
     write_state(state_folder, "stats.json", build_stats(ledger))
     if checkpoint:
@@ -3839,19 +3881,25 @@ def reference_judge(registry_root, workdir=None, timeout=3600):
 
     After a failure to judge, the base asks about the tip itself (judging: machine_works). That question is asked
     with the seed of the judgement that failed: a reference or a generator that failed on the cases drawn fails
-    again and is seen, where a new draw could pass and leave the failure on the candidate."""
+    again and is seen, where a new draw could pass and leave the failure on the candidate.
+
+    `question`: the tip judged AS A CANDIDATE for a planned task (judging: about_the_tip), where `candidate` is the
+    tip's own tree, written out as a candidate's is: the whole judgement a candidate has, the unit the tip holds built
+    and run as a candidate's would be, on cases drawn then; never --tip-itself, which stops before any unit is built.
+    Correct (0) means the tip already does what the task asks; refused (1), that it does not."""
     judge_py, kept = Path(registry_root) / "tools/judge/reference.py", {"seed": None}
 
-    def run(base, candidate, task, tip, commit):
+    def run(base, candidate, task, tip, commit, question=False):
         out = Path(base).parent / "reference.json"
         seed, kept["seed"] = kept["seed"], None  # a seed is given again once, to the question that follows the failure
+        itself = commit == tip and not question  # (the tip against itself: does the machine work?)
         command = [sys.executable, str(judge_py), "--tip", str(base), "--unit", str((task.get("options") or {}).get("unit", "")),
                    "--budget", str(max(1, timeout - REFERENCE_MARGIN)), "--json", str(out)]
         for path in task.get("files") or ():
             command += ["--task-file", str(path)]
         if workdir:
             command += ["--workdir", str(workdir)]
-        if commit == tip:
+        if itself:
             command += ["--tip-itself"] + (["--seed", seed] if seed else [])
         else:
             command += ["--candidate", str(candidate)]
@@ -3869,13 +3917,13 @@ def reference_judge(registry_root, workdir=None, timeout=3600):
             report = None
         if not isinstance(report, dict) or ran.returncode not in (0, 1) or report.get("code") != ran.returncode:
             code = 2  # the judge's own word and its exit status must agree: anything else is a failure to judge
-        elif ran.returncode == 0 and commit != tip and report.get("seed_origin") != "drawn":
+        elif ran.returncode == 0 and not itself and report.get("seed_origin") != "drawn":
             code = 2  # a candidate is accepted on cases the judge drew itself: a seed it was given is a reproduction
         else:
             code = ran.returncode  # (a refusal may come before any case is drawn: a tree that differs, a unit that does not build)
         drawn = report.get("seed") if isinstance(report, dict) else None
-        if code == 2 and commit != tip and isinstance(drawn, str) and re.fullmatch(r"[0-9a-f]{64}", drawn):
-            kept["seed"] = drawn
+        if code == 2 and commit != tip and not question and isinstance(drawn, str) and re.fullmatch(r"[0-9a-f]{64}", drawn):
+            kept["seed"] = drawn  # (a question about the tip as a candidate is followed by no question about the tip itself)
         figures = {name: report[name] for name in ("cases_compared", "builds", "runs")
                    if code == 0 and type(report.get(name)) is int and 0 <= report[name] < 10 ** 12}
         return {"code": code, "report": figures}
@@ -3896,7 +3944,8 @@ def the_reference_judge(registry_root, settings, workdir):
 # kind answers 0 for the project's tip judged against itself, whatever the tip holds, for any task the kind can
 # judge at all: after a failure to judge, the base asks exactly that, and takes any other answer for a machine that
 # cannot judge (judging: machine_works), which ends the run's judging. A kind is code of the registry, trusted as this file is; a project's file can name one, never
-# bring one.
+# bring one. A kind of TIP_KINDS also takes `question=True`: the tip's own tree is then the candidate's, judged as a
+# candidate's is, and the answer says whether the tip already does what a planned task asks (judging: about_the_tip).
 JUDGES = {"common": the_common_judge, "reference": the_reference_judge}
 
 
@@ -4138,16 +4187,21 @@ def cmd_judge(args):
     if paused(config) or made.get("paused"):
         write_json(args.out, {"answers": {}, "started": []})
         return
-    read_bundle(args.repo, read_plan(made, config)[1], args.bundle)
+    checked = read_plan(made, config)[1]
+    read_bundle(args.repo, checked, args.bundle)
     judge = judge_of(args.registry, config["judge"], args.judge_workdir)
     write_json(args.out, {"answers": {}, "started": []})
     notes = {}
+    backlog, unread = backlog_at(args.repo, commit, config, tasks)
     verdicts, outcomes, started = judge_plan(
         args.repo, made, config, tasks, Ledger(args.state), judge, args.workdir,
         save=lambda answers, begun: write_state(Path(args.out).parent, Path(args.out).name, {"answers": answers, "started": begun}),
-        notes=notes)
-    write_json(args.out, {"answers": verdicts, "started": started, "down": notes.get("down") is True})
-    print(f"{len(outcomes)} candidate(s), {len(verdicts)} judged, {sum(1 for o in outcomes if o['result'] == 'accepted')} accepted")
+        notes=notes, backlog=None if unread else backlog, answers=read_tip_answers(args.state))
+    write_json(args.out, {"answers": verdicts, "started": started, "down": notes.get("down") is True,
+                          "tip": {"commit": checked["tip"], "answers": notes.get("tip") or {}}})
+    print(f"{len(outcomes)} candidate(s), {len(verdicts)} judged, {sum(1 for o in outcomes if o['result'] == 'accepted')} accepted"
+          + (f"; the tip as a candidate for {len(notes['tip'])} planned task(s): "
+             + ", ".join(f"{task_id} {answer}" for task_id, answer in sorted(notes["tip"].items())) if notes.get("tip") else ""))
 
 
 def cmd_image(args):
@@ -4230,8 +4284,9 @@ def cmd_apply(args):
         handed = {}  # the judging step left nothing readable: no answer, and nobody is marked for it
     handed = handed if isinstance(handed, dict) else {}
     state = Path(args.state)
+    backlog, unread = backlog_at(args.repo, planned_settings(made), config, tasks)
     outcomes, tip = apply(args.repo, args.remote, made, handed.get("answers"), config, tasks, Ledger(state), state, checkpoint=checkpoint,
-                          started=handed.get("started") or ())
+                          started=handed.get("started") or (), backlog=None if unread else backlog, tip_answers=handed.get("tip"))
     print(f"{sum(1 for o in outcomes if o['result'] == 'accepted')} integrated, tip {tip}")
     if handed.get("down") is True:
         # Everything this run could decide is written. The run still ends as a failure, so that a person sees it: a
@@ -4324,7 +4379,7 @@ def new_task_refusals(config, task_id, task, known_options):
     return refusals
 
 
-def cut_check(config, published, proposal, live, done, paths, failing=()):
+def cut_check(config, published, proposal, live, done, paths, failing=(), passing=()):
     """The gate of the project's cutter (docs/cutter.md, "The gate"): every reason to refuse a proposed task file
     against the one the project publishes, each as a sentence. None: the proposal may be published. Nothing
     overrides it, whoever proposed it, an AI or a person. It is there for the cutter's errors, and for what a cutter
@@ -4333,10 +4388,12 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
     `published` and `proposal` are {id: task} as tasks_of reads them; the caller has held the proposal to what a run
     holds a task file to (check_goals, check_links). `live`: the tasks dealt now; `done`: those with an accepted
     candidate; `paths`: the files of the project's tip (work_tip: the branch the hive writes, where a volunteer's
-    work starts). `failing`: the new tasks whose goal is « correct » that the cutter says a run of the judge at the
-    project's tip showed to fail, in its container (a task the project's code passes already would be accepted for
-    nothing): a claim the gate takes and prints, and cannot check itself. A goal on a figure needs no such run: it
-    holds a proof (check_goals), which a candidate that changes nothing never gives.
+    work starts). `failing`: the new tasks whose goal is « correct » shown to fail at the project's tip (a task the
+    project's code passes already would be accepted for nothing): by a run of the judge, whose answer the project's
+    run wrote to its state (shown_at_the_tip), or by the architect's word (--failing), which the gate takes and
+    prints, and cannot check. `passing`: those a run of the judge showed the tip passes already: refused, whatever
+    word is given. A goal on a figure needs neither: it holds a proof (check_goals), which a candidate that changes
+    nothing never gives.
 
     The rules: no published task is removed; a published line changes in one way only, by gaining « closed »: true,
     compared as JSON (task_json), and never while its task is dealt; a cut adds and closes at most cutter.changes
@@ -4373,9 +4430,12 @@ def cut_check(config, published, proposal, live, done, paths, failing=()):
                 refusals.append(f"{task_id}: {path}: a protected path, which no contribution may change")
             elif not on_the_tip(path, paths):
                 refusals.append(f"{task_id}: {path}: not a file of the project's tip")
-        if goal.get("kind") != "metric" and task_id not in failing:
-            refusals.append(f"{task_id}: goal « correct »: name it among the tasks shown to fail at the project's tip (--failing), once a "
-                            "run of the judge there shows it")
+        if goal.get("kind") != "metric" and task_id in passing:
+            refusals.append(f"{task_id}: goal « correct »: a run of the judge showed the project's tip passes it already: the task is done, "
+                            "or empty, and is not published")
+        elif goal.get("kind") != "metric" and task_id not in failing:
+            refusals.append(f"{task_id}: goal « correct »: not shown to fail at the project's tip, by a run of the judge (the state's "
+                            f"{TIP_FILE}) or by the architect's word (--failing)")
         for other in task.get("needs") or []:
             if other not in done:
                 refusals.append(f"{task_id}: it needs {other}, which is not done: publish it once it is")
@@ -4433,8 +4493,9 @@ def cmd_cut_check(args):
     """Holds a proposed task file to the cutter's gate (cut_check) against the one the project publishes, and the
     backlog proposed with it if there is one (--backlog: backlog_check): prints each refusal (REFUSED, then a sentence
     of this tool's), or PASSED with how many tasks it adds and closes, then what it checked (CHECKED: the files'
-    SHA-256 and the published commit). The settings, the published tasks and the backlog are read where a run reads
-    the settings, the deals in the state. It writes nothing."""
+    SHA-256 and the published commit; the new tasks « correct » a run of the judge showed to fail at the tip, and those
+    the cutter's word names). The settings, the published tasks and the backlog are read where a run reads the
+    settings; the deals, and the judge's answers about the tip (shown_at_the_tip), in the state. It writes nothing."""
     repository = repository_of(args)
     branch, commit = published_tip(args.repo, "origin")
     config, published = settings_on(args.repo, commit, branch, repository)
@@ -4451,9 +4512,12 @@ def cmd_cut_check(args):
     held = backlog_held(args, config, commit, proposal) if args.backlog else None
     ledger = Ledger(Path(args.state))
     live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
-    paths = tip_paths(args.repo, work_tip(args.repo, config))
+    tip = work_tip(args.repo, config)
+    paths = tip_paths(args.repo, tip)
+    shown = shown_at_the_tip(args.repo, args.state, config, published, {t: task for t, task in proposal.items() if t not in published}, tip)
+    judged, passing = ({t for t, answer in shown.items() if answer == word} for word in ("failing", "passing"))
     failing = set(args.failing or ())
-    refusals = cut_check(config, published, proposal, live, ledger.done(), paths, failing)
+    refusals = cut_check(config, published, proposal, live, ledger.done(), paths, judged | failing, passing)
     refusals += held[1] if held else []
     for refusal in refusals:
         print(f"REFUSED {safe_text(refusal, 300)}")
@@ -4464,8 +4528,10 @@ def cmd_cut_check(args):
     print(f"PASSED {added} new, {sum(1 for t in published if task_json(proposal[t]) != task_json(published[t]))} closed; {still} left to do, the project aims at "
           f"{aim} open (cutter.open)")
     # What was checked, so that what is published can be held to it: the file's own SHA-256, the published commit it was
-    # held against, and the cutter's word on the tasks whose goal is « correct » (a claim, which the gate cannot check).
+    # held against, the new tasks whose goal is « correct » that a run of the judge showed to fail at the tip (an answer
+    # the project's run wrote to its state), and the cutter's word on them (a claim, which the gate cannot check).
     print(f"CHECKED {hashlib.sha256(data).hexdigest()} against {commit}" + (f"; backlog {hashlib.sha256(held[0]).hexdigest()}" if held else "")
+          + (f"; shown to fail at the tip by the judge: {', '.join(sorted(judged))}" if judged else "")
           + (f"; shown to fail at the tip, by the cutter's word: "
           f"{', '.join(sorted(t for t in failing if t in proposal))}" if failing else ""))
 
@@ -4549,12 +4615,14 @@ def easier(config, task):
                                               "The goal decides."}, lowered
 
 
-def cut(config, published, backlog, counted, live, done, paths, failing=()):
+def cut(config, published, backlog, counted, live, done, paths, failing=(), passing=()):
     """The deterministic cutter (docs/cutter.md, "The loop"): the proposal its rules make of the project's task file,
     and what it did and left undone, in ids, codes and numbers. `published`: the project's tasks; `backlog`: the tasks
     its architect plans (BACKLOG_FILE), in their order; `counted`: the tally of the published tasks; `live`: the tasks
     dealt now; `done`: those with an accepted candidate; `paths`: the files of the project's tip; `failing`: the tasks
-    of the backlog whose goal is « correct » that a run of the judge at that tip showed to fail.
+    of the backlog whose goal is « correct » shown to fail at that tip (by a run of the judge, or the architect's
+    word); `passing`: those a run of the judge showed the tip passes already, which wait (« shown_passing »): done
+    already, or empty.
 
     In this order, and within cutter.changes lines added or closed:
       1. each stuck task (tally) is closed, unless it is dealt now; and cut again with a lower goal (easier) when its
@@ -4605,6 +4673,7 @@ def cut(config, published, backlog, counted, live, done, paths, failing=()):
                "needs" if any(other not in done for other in task.get("needs") or []) else
                "parent" if parent is not None and parent not in done and (proposal.get(parent) or {}).get("closed") is not True else
                "files" if any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"]) else
+               "shown_passing" if goal.get("kind") != "metric" and task_id in passing else
                "not_shown_failing" if goal.get("kind") != "metric" and task_id not in failing else None)
         if why:
             said["waiting"].append({"id": task_id, "because": why})
@@ -4617,36 +4686,32 @@ def cut(config, published, backlog, counted, live, done, paths, failing=()):
 
 def cmd_cut(args):
     """The deterministic cutter (cut). Reads the project's settings, tasks and backlog where a run reads its settings
-    (on its published branch, at its tip), the ledger in the state, and the files of the tip of the branch the hive
-    writes. Holds what it proposes to the gate (cut_check), then writes it to --out (each published line as it is, a
-    closed one with « closed »: true, the new ones after them) and prints what it did as JSON: ids, codes and numbers,
-    and the proposal's SHA-256. A proposal the gate refuses is not written. It changes nothing of the project."""
+    (on its published branch, at its tip), the ledger and the judge's answers about the tip (shown_at_the_tip) in the
+    state, and the files of the tip of the branch the hive writes. Holds what it proposes to the gate (cut_check), then
+    writes it to --out (each published line as it is, a closed one with « closed »: true, the new ones after them) and
+    prints what it did as JSON: ids, codes and numbers, and the proposal's SHA-256; a task « correct » it publishes from
+    the backlog says on whose word it was shown to fail (« shown »: « judge » or « word »). A proposal the gate refuses
+    is not written. It changes nothing of the project."""
     repository = repository_of(args)
     branch, commit = published_tip(args.repo, "origin")
     config, published = settings_on(args.repo, commit, branch, repository)
-    listed, backlog, unread = blob_at(args.repo, commit, TASKS_FILE), {}, None
-    try:
-        raw = blob_at(args.repo, commit, BACKLOG_FILE)
-    except HiveError as error:
-        raw, unread = None, safe_text(error, 300)
-    if raw is not None:
-        try:
-            backlog = tasks_of(raw.decode("utf-8").split("\n"), BACKLOG_FILE)
-            check_goals(config, backlog)
-            check_links({**backlog, **published})
-        except HiveError as error:
-            backlog, unread = {}, safe_text(error, 300)
-        except (ValueError, TypeError, RecursionError) as error:
-            backlog, unread = {}, f"{BACKLOG_FILE}: not the JSON lines of tasks ({type(error).__name__})"
+    listed = blob_at(args.repo, commit, TASKS_FILE)
+    backlog, unread = backlog_at(args.repo, commit, config, published)
     ledger, instant = Ledger(Path(args.state)), now()
     lines = [line for line in map(tally_line, ledger.events) if line is not None]
     live, done = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}, ledger.done()
     tip = work_tip(args.repo, config)
-    paths, failing = tip_paths(args.repo, tip), set(args.failing or ())
-    proposal, said = cut(config, published, backlog, tally(published, lines, instant), live, done, paths, failing)
+    paths, word = tip_paths(args.repo, tip), set(args.failing or ())
+    shown = shown_at_the_tip(args.repo, args.state, config, published, {t: task for t, task in backlog.items() if t not in published}, tip)
+    judged, passing = ({t for t, answer in shown.items() if answer == kind} for kind in ("failing", "passing"))
+    failing = judged | word
+    proposal, said = cut(config, published, backlog, tally(published, lines, instant), live, done, paths, failing, passing)
+    for entry in said["added"]:  # whose word a task « correct » from the backlog is published on: the judge's, or the architect's
+        if entry["from"] == "backlog" and (backlog[entry["id"]].get("goal") or {"kind": "correct"}).get("kind") != "metric":
+            entry["shown"] = "judge" if entry["id"] in judged else "word"
     check_goals(config, proposal)
     check_links(proposal)
-    refusals = cut_check(config, published, proposal, live, done, paths, failing)
+    refusals = cut_check(config, published, proposal, live, done, paths, failing, passing)
     for refusal in refusals:
         print(f"REFUSED {safe_text(refusal, 300)}")
     if refusals:
@@ -4663,6 +4728,191 @@ def cmd_cut(args):
         f.write(data)
     print(json.dumps({"project": config["project"], "published": commit, "tip": tip, "backlog": len(backlog), "backlog_unread": unread,
                       **said, "proposal": hashlib.sha256(data).hexdigest()}, sort_keys=True, indent=1, ensure_ascii=True))
+
+
+def backlog_at(repo, commit, config, published):
+    """(backlog, unread): the tasks the project's architect plans (BACKLOG_FILE) at a commit of its published branch,
+    {id: task} in the file's order, read as a task file is read, their goals checked and their links checked with the
+    published tasks. ({}, None) when the commit holds none; ({}, a sentence of this tool's) when it cannot be read:
+    the architect mends it, and until then nothing planned is published, nor asked about."""
+    try:
+        raw = blob_at(repo, commit, BACKLOG_FILE)
+    except HiveError as error:
+        return {}, safe_text(error, 300)
+    if raw is None:
+        return {}, None
+    try:
+        backlog = tasks_of(raw.decode("utf-8").split("\n"), BACKLOG_FILE)
+        check_goals(config, backlog)
+        check_links({**backlog, **published})
+    except HiveError as error:
+        return {}, safe_text(error, 300)
+    except (ValueError, TypeError, RecursionError) as error:
+        return {}, f"{BACKLOG_FILE}: not the JSON lines of tasks ({type(error).__name__})"
+    return backlog, None
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The tip judged as a candidate: the proof that a planned task « correct » fails at the project's tip
+#
+# A new task whose goal is « correct » is worth publishing only if the project's tip fails it: one the tip passes
+# already would be accepted for nothing. Its proof is a run of the judge, never the cutter's word. The judging job of
+# the project's own run (no secret; candidates' code already runs there, in containers without network) judges the
+# plan's tip itself as a candidate for a few planned tasks (tip_questions); the write job holds what it says to the
+# planned tasks it finds itself (tip_answers_held) and writes it to the state (write_tip_answers), with its own right
+# to write that branch; the cutter's gate reads it there (shown_at_the_tip), at the tip the answer was given at, or at
+# a later tip the answer still holds at (proof_holds). Ids, codes and commits only: no text.
+
+TIP_FILE = "tip.json"  # in the state: for each planned task « correct », the judge's latest answer about the tip judged as a candidate for it
+TIP_ASKS = 2  # the most planned tasks one run asks about (each costs a judgement's time); the others wait for the next run
+TIP_ANSWERS = ("failing", "passing", "unknown")  # the judge refused the tip as a candidate (1), found it correct (0), failed to judge (2)
+TIP_KINDS = ("reference",)  # the kinds that can answer: the common judge compares a candidate with the tip, which always passes against itself
+TIP_FILE_BYTES = 4 << 20  # a state's TIP_FILE larger than this is not read
+TIP_CHANGES_BYTES = 1 << 20  # what the list of the paths that differ between two tips may weigh, for an answer to be carried across it
+
+
+def line_digest(task):
+    """The SHA-256 of a task's line as the gate compares it (task_json): an answer about the tip is for that very line,
+    never for another line given the same id since."""
+    text = task_json(task)
+    return hashlib.sha256(text.encode()).hexdigest() if text is not None else None
+
+
+def tip_entry_ok(task_id, entry):
+    return (isinstance(task_id, str) and bool(TASK_ID.match(task_id)) and isinstance(entry, dict) and is_sha(entry.get("tip"))
+            and isinstance(entry.get("line"), str) and bool(re.fullmatch(r"[0-9a-f]{64}", entry["line"]))
+            and isinstance(entry.get("answer"), str) and entry["answer"] in TIP_ANSWERS and stamp(entry.get("at")))
+
+
+def read_tip_answers(folder):
+    """{task id: {"tip", "line", "answer", "at"}}: the judge's latest answer about the tip for each planned task, as the
+    state's TIP_FILE holds it: the commit it judged, the digest of the task's line (line_digest), the answer and its
+    instant. The state is public: what it holds is read back as untrusted data, and an entry that is not exactly of
+    that shape is left out (a key more is not read). A state without the file (a project whose run is pinned to a
+    commit of the hive older than it, or whose judge cannot answer) holds no answer, and nothing else changes."""
+    path = Path(folder) / TIP_FILE
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > TIP_FILE_BYTES:
+            return {}
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {task_id: {key: entry[key] for key in ("tip", "line", "answer", "at")} for task_id, entry in data.items()
+            if tip_entry_ok(task_id, entry)}
+
+
+def changed_between(repo, old, new, diffs):
+    """The paths that differ between two commits of the clone (a list), or None when git cannot tell, or when they
+    weigh more than TIP_CHANGES_BYTES: then no answer is carried from one to the other. Kept in `diffs`."""
+    if (old, new) not in diffs:
+        try:
+            listed = git_capped(repo, "diff-tree", "-r", "-z", "--name-only", "--no-renames", "--no-commit-id", need_sha(old), need_sha(new),
+                                limit=TIP_CHANGES_BYTES)
+        except HiveError:
+            listed = None
+        diffs[(old, new)] = None if listed is None else [name.decode("utf-8", errors="surrogateescape") for name in listed.split(b"\0") if name]
+    return diffs[(old, new)]
+
+
+def proof_holds(repo, entry, task, tip, others, config, diffs=None):
+    """True if the judge's answer about the tip in `entry`, given at commit entry["tip"], is an answer about this task's
+    line (line_digest) at `tip`. It is when the two commits are one; or when entry["tip"] is an ancestor of `tip` and
+    the tip moved from it only by what contributions to other tasks bring: every path that differs between the two is
+    a file another task of the project names (`others`: the « files » of the published tasks but this one), under no
+    path the project protects, and none of this task's own files. A kind of TIP_KINDS judges a task from its own files
+    and from the project's own tree beside them (its reference, its skeleton, its judge), which no task names: a
+    contribution to another task changes none of it, and anything else may change the answer (this task's files; the
+    judge, the reference or the skeleton; a file no task names, which only a maintainer's commit changes). Then the
+    answer is no proof, and the judge is asked again at the tip as it is."""
+    if entry.get("line") != line_digest(task):
+        return False
+    if entry["tip"] == tip:
+        return True
+    if git(repo, "merge-base", "--is-ancestor", need_sha(entry["tip"]), need_sha(tip), check=False).returncode != 0:
+        return False  # (another line of history, or a commit this clone does not hold)
+    changed = changed_between(repo, entry["tip"], tip, {} if diffs is None else diffs)
+    return changed is not None and all(not in_task_files(path, task["files"]) and not protected(path, config["protected"])
+                                       and any(in_task_files(path, files) for files in others) for path in changed)
+
+
+def tip_status(repo, answers, task, tip, published, config, diffs=None):
+    """« failing » or « passing » when the judge's latest answer about the tip, for this task (`answers`: read_tip_answers),
+    holds at `tip` (proof_holds); None otherwise: the judge was not asked, could not say, or answered at a tip it no
+    longer holds at."""
+    entry = answers.get(task["id"])
+    if entry is None or entry["answer"] == "unknown":
+        return None
+    others = [other["files"] for task_id, other in published.items() if task_id != task["id"]]
+    return entry["answer"] if proof_holds(repo, entry, task, tip, others, config, diffs) else None
+
+
+def shown_at_the_tip(repo, state_folder, config, published, tasks, tip):
+    """{task id: « failing » or « passing »}: what the judge's answers about the tip, in the state, show of these tasks
+    whose goal is « correct » at `tip`, the commit of the branch the hive writes (tip_status). What the cutter's
+    deterministic rules (cut) and its gate (cut_check) take as the proof that a task fails at the tip, or passes there."""
+    answers, diffs, shown = read_tip_answers(state_folder), {}, {}
+    for task_id, task in tasks.items():
+        if (task.get("goal") or {"kind": "correct"}).get("kind") != "metric":
+            status = tip_status(repo, answers, task, tip, published, config, diffs)
+            if status:
+                shown[task_id] = status
+    return shown
+
+
+def planned_questions(config, published, backlog, done, paths):
+    """{id: task}, in the backlog's order: the planned tasks the judge may be asked about, at a tip whose files are
+    `paths`. Those the deterministic cutter would publish but for the proof (cut): not published yet, a goal
+    « correct », held by the gate's rules for a new task's own line (new_task_refusals), what they need done, their
+    files on the tip and none protected. None at all when the project's judge cannot answer (TIP_KINDS)."""
+    if config["judge"]["kind"] not in TIP_KINDS:
+        return {}
+    known_options = options_known(config, published)
+    return {task_id: task for task_id, task in backlog.items()
+            if task_id not in published and (task.get("goal") or {"kind": "correct"}).get("kind") != "metric"
+            and not new_task_refusals(config, task_id, task, known_options)
+            and all(other in done for other in task.get("needs") or [])
+            and not any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"])}
+
+
+def tip_questions(repo, config, published, backlog, done, tip, answers):
+    """The planned tasks the judging job asks about in this run, at most TIP_ASKS: among planned_questions, those for
+    which no answer of the judge holds at the tip (tip_status), the ones never asked first, then the one asked longest
+    ago, in the backlog's order between equals. A task the judge cannot answer (« unknown ») is asked again at a later
+    run, after the others: it holds no place for ever. Beyond the bound, the rest wait for the next run."""
+    planned, diffs = planned_questions(config, published, backlog, done, tip_paths(repo, tip)), {}
+    waiting = [(answers[task_id]["at"] if task_id in answers else "", position, task) for position, (task_id, task) in enumerate(planned.items())
+               if tip_status(repo, answers, task, tip, published, config, diffs) is None]
+    return [task for _, _, task in sorted(waiting, key=lambda item: item[:2])[:TIP_ASKS]]
+
+
+def tip_answers_held(tip, planned, handed):
+    """The judging step's answers about the tip as the write step takes them: {task id: answer}, or {} when anything in
+    them is not what that step may say. It may say, of the plan's tip and of no other commit, one of TIP_ANSWERS for
+    each of at most TIP_ASKS tasks among `planned` (planned_questions, as this step finds them itself: the project's
+    settings, tasks and backlog at the plan's commit, the ledger, the tip's own files). It is believed whole or not at
+    all: a judging step that was taken over can lie about what the judge said of the tip, as it can of a candidate,
+    and say nothing else."""
+    if handed is None:
+        return {}
+    answers = handed.get("answers") if isinstance(handed, dict) and handed.get("commit") == tip else None
+    if not (isinstance(answers, dict) and len(answers) <= TIP_ASKS
+            and all(task_id in planned and isinstance(answer, str) and answer in TIP_ANSWERS for task_id, answer in answers.items())):
+        log("the judging step's answers about the tip are not what it may say: none is written")
+        return {}
+    return dict(answers)
+
+
+def write_tip_answers(state_folder, tip, backlog, published, planned, held, instant):
+    """Writes the state's TIP_FILE: the answers it held, each task's entry replaced by the one `held` gives (about
+    `tip`, for that task's line as `planned` holds it), and only for tasks the backlog still plans and the project has
+    not published: an answer about a task published, or planned no more, proves nothing to anyone. Whole or not at all."""
+    kept = {task_id: entry for task_id, entry in read_tip_answers(state_folder).items() if task_id in backlog and task_id not in published}
+    for task_id, answer in held.items():
+        kept[task_id] = {"tip": tip, "line": line_digest(planned[task_id]), "answer": answer, "at": iso(instant)}
+    write_state(state_folder, TIP_FILE, kept)
 
 
 OUTLINE_SUFFIXES = (".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".rs", ".go")  # the files whose functions the outline finds
@@ -7713,15 +7963,17 @@ def main(argv=None):
     p = sub.add_parser("cut-check", help="hold a proposed task file to the cutter's gate, against the published one (docs/cutter.md)")
     hive_side(p)
     p.add_argument("--proposal", required=True, help="the proposed hive/tasks.jsonl, a file of this machine")
-    p.add_argument("--failing", action="append", help="a new task whose goal is « correct » that a run of the judge at the project's tip "
-                                                     "showed to fail (once for each)")
+    p.add_argument("--failing", action="append", help="the architect's word: a new task whose goal is « correct » that a run of the "
+                                                     "judge at the project's tip, made by hand, showed to fail (once for each; the state's "
+                                                     "tip.json holds the project's own runs' answers)")
     p.add_argument("--backlog", help="the proposed hive/backlog.jsonl, when the cut changes it (a file of this machine)")
     p.set_defaults(run=cmd_cut_check)
     p = sub.add_parser("cut", help="the deterministic cutter: write the task file its rules propose, held to the gate (docs/cutter.md)")
     hive_side(p)
     p.add_argument("--out", required=True, help="where to write the proposed hive/tasks.jsonl, a file of this machine")
-    p.add_argument("--failing", action="append", help="a task of the backlog whose goal is « correct » that a run of the judge at the "
-                                                     "project's tip showed to fail (once for each)")
+    p.add_argument("--failing", action="append", help="the architect's word: a task of the backlog whose goal is « correct » that a run of "
+                                                     "the judge at the project's tip, made by hand, showed to fail (once for each; the state's "
+                                                     "tip.json holds the project's own runs' answers)")
     p.set_defaults(run=cmd_cut)
     p = sub.add_parser("outline", help="the project's code as its cutter may read it: files, functions and sizes, no comment and no "
                                        "string (docs/cutter.md)")

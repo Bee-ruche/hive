@@ -268,8 +268,8 @@ the hive runs those git commands with an empty attribute source.
 | --- | --- | --- | --- | --- |
 | `plan` | the project's token, to read | no | **yes, once** | reads the project's settings at its published branch's tip, and names that commit; reads the forks; decides the deals whose time is up, the candidates and the new deals; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
 | `record` | the project's token, to write its branch `hive-state` | no | no | checks that the plan is the one `plan` published, and that the published branch is still at the plan's commit; writes the plan's deals and the feed, **within minutes of the run's start** |
-| `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer** |
-| `apply` | the project's token, to write its branch for the hive and `hive-state` | no | no | checks the plan, and that the published branch is still at the plan's commit; derives every commit by itself; looks each one up in the judge's table; pushes; records |
+| `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer**; then, for a judge that can tell, judges the plan's tip itself as a candidate for at most two planned tasks « correct », for the cutter ([cutter.md](cutter.md), "The proof at the tip") |
+| `apply` | the project's token, to write its branch for the hive and `hive-state` | no | no | checks the plan, and that the published branch is still at the plan's commit; derives every commit by itself; looks each one up in the judge's table; pushes; records; writes the judge's answers about the tip to the state, held to the planned tasks it finds itself |
 
 - **The forks are read once.** What the plan read is what the run is about: a branch taken away or pushed after
   that changes nothing in this run, for anybody.
@@ -281,7 +281,10 @@ the hive runs those git commands with an empty attribute source.
   it, and so decide which candidates are accepted among those that keep every structural rule. That is its limit:
   it cannot name a candidate, a member, a task or a path, decide who is dealt what, credit an account for work
   that is not in its fork, change history, or write anything but the project's listed figures, as numbers, into
-  the ledger. The judge's container is what stands between a contribution and that job.
+  the ledger. It can lie in the same way about what the judge said of the plan's tip judged as a candidate for a
+  planned task, and say nothing else: the write job keeps such answers only about the plan's tip, for at most two
+  planned tasks it finds itself the run could have asked about, as one of three words. The judge's container is
+  what stands between a contribution and that job.
 - **The settings are read at one commit for the whole run.** The plan names the commit of the project's published
   branch it read the settings and the tasks at; the judging job reads them there, and judges nothing when its own clone
   of the project is at another commit (the branch moved since the plan); the jobs that write read them
@@ -314,7 +317,10 @@ the hive runs those git commands with an empty attribute source.
   writes answers exactly as the project's reference does, on cases drawn when it is judged. In both, candidate
   code builds and runs only in a container without network, and the verdict is derived on the host. Whatever the
   kind, code 0 is correct, 1 a refusal, 2 a failure to judge, and the project's tip judged against itself is
-  answered 0.
+  answered 0. Another question is asked of the reference kind alone: the tip judged **as a candidate** for a task,
+  where the unit the tip holds is built and run as a candidate's is. Its answer is no verdict and moves nobody: it
+  tells the project's cutter whether a planned task « correct » fails at the tip ([cutter.md](cutter.md), "The proof
+  at the tip").
 - **A project's settings are its own, and name it.** `hive/project.json`, in the project's repository, names that
   repository (`repo`) and its default branch (`published`), where it is read: a file that names another repository or
   another branch is refused, so one project's settings never run another's state or forks. A step of the hive reads
@@ -662,6 +668,11 @@ The hive's files there:
   holds its answer. Only what is still at a tip of that fork is
   kept: what one fork pushes never costs another its entries.
 - `accounts.json`: when each account that owns a fork was created, asked of GitHub once.
+- `tip.json`, in a project whose judge answers about the tip (the reference kind): for each planned task « correct »
+  of the backlog, the judge's latest answer when the tip itself was judged as a candidate for it (`failing`,
+  `passing` or `unknown`), the commit it judged, the SHA-256 of the task's line and the instant. Written by the write
+  job alone, read by the cutter ([cutter.md](cutter.md), "The proof at the tip"); a run pinned to an older commit of
+  the hive neither writes nor reads it.
 
 A task the judge keeps refusing asks for a stronger worker: the feed gives a `hint` that rises by one for every
 three different members refused, among those the judge has accepted something from. It is a hint for people;
@@ -751,11 +762,13 @@ hour and the fork's own number, which adding forks to the list does not shift.
   `kind` (`work`, `probe` or `hunt`), which name other tasks of the file and go round in no cycle, or the file is
   not run ([cutter.md](cutter.md), "The map: links between tasks"). Tasks are
   written by the project's maintainers or by its cutter ([cutter.md](cutter.md)); they are trusted data.
-- Two more files under `hive/`, which no run reads, for the project's cutter: `hive/charter.md`, the architect's
-  charter (the project's goal, what counts as progress, its directions), and `hive/backlog.jsonl`, the tasks the
-  architect plans, as lines of the tasks file, which the cutter publishes once what they need is done
-  ([cutter.md](cutter.md), "The backlog and the charter"). Like every file under `hive/`, no contribution may change
-  them.
+- Two more files under `hive/`, for the project's cutter: `hive/charter.md`, the architect's charter (the project's
+  goal, what counts as progress, its directions), which no run reads, and `hive/backlog.jsonl`, the tasks the
+  architect plans, as lines of the tasks file, which the cutter publishes once what they need is done and, for a goal
+  « correct », once a run of the judge showed the tip fails them ([cutter.md](cutter.md), "The backlog and the
+  charter", "The proof at the tip"). The judging and the write jobs read the backlog at the plan's commit, for that
+  question alone; a backlog they cannot read is asked nothing. Like every file under `hive/`, no contribution may
+  change them.
 
 ## What this version does not do yet
 

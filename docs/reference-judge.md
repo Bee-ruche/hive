@@ -83,6 +83,14 @@ The verdict:
   control, the machine. The base then asks about the tip itself ([protocol.md](protocol.md)); that question is
   asked with the seed of the judgement that failed, so that the same cases are drawn.
 
+**The tip as a candidate.** For the project's cutter, the base also asks whether the tip already does what a planned
+task asks ([cutter.md](cutter.md), "The proof at the tip"). That is not the tip against itself: it is a candidate's
+whole judgement (steps 0 to 8), where the candidate's tree is the tip's own, written out as a candidate's is. The unit
+the tip holds is built and run as a candidate's, for its own task, which is what rule 1 lets a unit that was
+accepted be. Refused (1): the tip fails the task, which is worth publishing. Correct (0): the tip passes it already.
+A failure to judge (2) says nothing, and blames no machine: a planned task may name a unit the manifest does not
+know yet. The kind's program is the same; the base gives it `--candidate` with the tip's tree.
+
 Of the judge's report the base keeps numbers only: `cases_compared`, `builds`, `runs` (what was done).
 
 ## The manifest

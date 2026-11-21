@@ -738,6 +738,35 @@ class TestTheJudgeInContainers(Base):
         self.assertIsNone(verdict_of({"sha": right}, odd, tip, hive.tree_of(str(repo), right), right))
         self.assertTrue(verdict_of.machine_down(), "the run's judging stops, and no candidate is charged")
 
+    def test_the_tip_judged_as_a_candidate_through_the_bases_own_judging(self):
+        """The question the cutter's gate takes as its proof (docs/cutter.md, "The gate"; judging: about_the_tip): the
+        tip itself, judged as a candidate for a task, its own unit built and run as a candidate's is. The toy's tip
+        holds a unit not written yet (it aborts): the tip fails the task. Once the unit is written there, it passes.
+        A task the judge cannot take is « unknown », and no machine is blamed for it."""
+        import hive
+
+        def git(*words):
+            return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *words],
+                                  cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+        repo = write_tree(self.root / "repo")
+        git("init", "-q", "-b", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "the project")
+        tip = git("rev-parse", "HEAD")
+        (repo / "port/upper.c").write_text(UPPER)
+        git("commit", "-q", "-am", "the unit, accepted")
+        written = git("rev-parse", "HEAD")
+        judge = hive.judge_of(str(HERE.parent.parent), {"kind": "reference", "timeout_seconds": 1200}, str(self.root / "work"))
+        task = {"id": "toy-0001", "files": ["port/upper.c"], "options": {"unit": "upper"}}
+        (self.root / "trees").mkdir()
+        verdict_of = hive.judging(str(repo), judge, str(self.root / "trees"), {}, ["cases_compared", "builds", "runs"], longest=1200)
+        self.assertEqual(verdict_of.about_the_tip(tip, task), "failing")
+        self.assertEqual(verdict_of.about_the_tip(written, task), "passing")
+        self.assertEqual(verdict_of.about_the_tip(written, {**task, "files": ["port/"]}), "unknown")
+        self.assertFalse(verdict_of.machine_down())
+        self.assertEqual(os.listdir(self.root / "trees"), [], "the base removes the trees it wrote")
+
 
 if __name__ == "__main__":
     unittest.main()

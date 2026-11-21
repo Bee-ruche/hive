@@ -29,7 +29,8 @@ All of it in the project's own repository. Copies of the first test project's ar
    branch its `if` names set to the project's default branch. It asks GitHub to run the hive every hour (below, "GitHub
    starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for.
 4. **The branch `hive-state`**, made once by the lead: a branch of its own history (none of the project's), which
-   holds the hive's state (`ledger.jsonl`, `feed.json`, `ignored.json`, `accounts.json`, `stats.json`) at its root.
+   holds the hive's state (`ledger.jsonl`, `feed.json`, `ignored.json`, `accounts.json`, `stats.json`, and `tip.json`
+   where the project's judge answers about the tip: [cutter.md](cutter.md), "The proof at the tip") at its root.
    The run writes it and reads it; it needs it to exist (its jobs check it out): for instance `git switch --orphan
    hive-state`, a README that says what it is, a commit, and `git push origin hive-state`.
 5. **The branch the hive writes** (`branch` in the settings, `hive` for the test projects), made once by a maintainer
@@ -85,8 +86,8 @@ them apart:
 | --- | --- | --- | --- | --- | --- |
 | `plan` | `hive.py plan` | reads | the project (its settings at its published branch's tip), its forks (public), the state | nothing: it uploads `plan.json` and the bundle, and publishes the plan's SHA-256 as a job output | runs code from a fork |
 | `record` | `hive.py record` | writes | the plan, the project's settings at the plan's commit, the state | the branch `hive-state` | reads a fork; runs anyone's code; unpacks another job's archive |
-| `judge` | `hive.py image`, `hive.py judge` | reads | the project, its settings at the plan's commit, the plan and the bundle, the state | nothing: it uploads `verdicts.json` | talks to a fork; has the network while a candidate's code runs |
-| `apply` | `hive.py apply` | writes | the plan, the bundle, the verdicts, the project's settings at the plan's commit, the state | the hive's branch and the branch `hive-state` | reads a fork; runs anyone's code; unpacks another job's archive |
+| `judge` | `hive.py image`, `hive.py judge` | reads | the project, its settings and backlog at the plan's commit, the plan and the bundle, the state | nothing: it uploads `verdicts.json` (the candidates' answers, and its answers about the tip) | talks to a fork; has the network while a candidate's code runs |
+| `apply` | `hive.py apply` | writes | the plan, the bundle, the verdicts, the project's settings and backlog at the plan's commit, the state | the hive's branch and the branch `hive-state` | reads a fork; runs anyone's code; unpacks another job's archive |
 
 What carries it:
 
@@ -105,7 +106,13 @@ What carries it:
    of every job reads which repository and commit the workflow is (`job.workflow_repository`, `job.workflow_sha`: the
    called workflow's own, where the `github` context is the caller's), stops unless they are `Bee-ruche/hive` at a full
    commit that its main holds (GitHub's compare API: « identical » or « behind »), and checks the code out there.
-5. **One run at a time**: the caller's concurrency group, never cancelled in progress by a newer run. Two runs that
+5. **The proof at the tip rides on what is there** ([cutter.md](cutter.md), "The proof at the tip"). In a project
+   whose judge can answer it, the judging step, once the candidates are judged, judges the plan's tip itself as a
+   candidate for at most two planned tasks « correct », and writes what it saw into `verdicts.json`, which `apply`
+   already takes by name, within the same bound on its size; `apply` holds those answers to the planned tasks it finds
+   itself and writes them to `tip.json` on `hive-state`, with the token it already has. No new step, file between
+   jobs, permission or secret, and the workflow's text is the same.
+6. **One run at a time**: the caller's concurrency group, never cancelled in progress by a newer run. Two runs that
    overlap are safe by the protocol (the jobs that write check the ledger the plan read) and wasteful. **A run that
    a person cancels pushes nothing**: `apply` runs unless the run was cancelled or `plan` did not succeed, so also
    when `record` or `judge` failed.
@@ -150,6 +157,12 @@ that catches an honest mistake, nothing more:
 So the lead copies the id from the main branch of `Bee-ruche/hive` itself, and a change of that line is reviewed as
 code is: a `CODEOWNERS` line that names the project's maintainers for `.github/workflows/hive.yml`, with a ruleset on
 the published branch that requires a pull request and the code owners' review, so that no one changes the pin alone.
+
+**Taking a newer version is changing that line, and nothing else**, unless the hive's own change says otherwise. A
+newer commit reads the state an older one wrote; a file of the state that an older commit does not know (`tip.json`,
+for one) is neither read nor saved by it, and stays as it is. The proof at the tip ([cutter.md](cutter.md)) acts in a
+project from the first run whose caller names a commit that holds it; until then the project's cutter publishes a
+task « correct » on the architect's word, as before.
 
 ## Stopping the hive
 

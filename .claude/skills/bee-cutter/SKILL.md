@@ -74,12 +74,16 @@ code (the branch the hive writes), which the outline read and whose files tasks 
 report its lines.
 
 - `closed`: the stuck tasks it closed (three members accepted elsewhere failed on each); `added`: what it added,
-  `from` `easier` (a stuck task cut again with a lower goal) or `backlog` (a planned task whose needs are done).
+  `from` `easier` (a stuck task cut again with a lower goal) or `backlog` (a planned task whose needs are done); a
+  planned task « correct » also says on whose word it was shown to fail at the tip: `shown` `judge` (a run of the
+  project's judge) or `word` (the architect's, `--failing`).
 - `for_the_cutter`: stuck tasks it closed and could not cut again (`no_rule`: a goal « correct »; `at_the_floor`,
   `under_the_floor`: the goal cannot go lower). These are yours: cut them again ("Writing tasks").
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
-  `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`, `not_shown_failing` and `gate`
-  (a line of the backlog the gate would refuse: the architect mends it), which you report.
+  `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
+  `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's run asks,
+  two planned tasks at most per run), `shown_passing` (a run of the judge showed the tip passes it already: done, or
+  empty) and `gate` (a line of the backlog the gate would refuse: the architect mends it), which you report.
 - `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`), what is missing. **`starving`:
   nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
@@ -119,9 +123,10 @@ writes its `goal`, whatever the published lines do.
 - `goal`: a shape the project already uses. Copy a published goal on the same figures and change only its bounds;
   a goal on a figure holds the same proof (`sure_…`, `min` 1) as the published ones. Never a figure the project's
   `judge.metrics` does not list, never below `cutter.floors`. A goal « correct » (the judge's tests pass) goes to
-  the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now,
-  you cannot run it, and in this version nothing runs it for you (docs/cutter.md, "Not yet"). Say in your report
-  that it waits for the architect, who runs the judge and then `hive cut --failing <id>`.
+  the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now, and
+  you cannot run it. The project's own run asks its judge (docs/cutter.md, "The proof at the tip"), and the `hive cut`
+  of a later cycle publishes the task once the judge showed it to fail there. Never pass `--failing` yourself: it is
+  the architect's word, for a project whose judge cannot answer (the common kind) or for a run they made by hand.
 - `options`: only names and values the published tasks already use, with one exception: a new value of the option
   `unit`, when the charter or the architect's prompt gives that value word for word and says that the judge checks
   that piece (in a project that ports or builds, a piece the judge has just learned to check). The value is a plain
@@ -171,7 +176,8 @@ hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --propo
 ```
 
 It prints `REFUSED <reason>` for each reason it refuses the file, or `PASSED …` then
-`CHECKED <sha256> against <commit>` (and `; backlog <sha256>` with `--backlog`). If it refuses, mend your own
+`CHECKED <sha256> against <commit>` (and `; backlog <sha256>` with `--backlog`, then `; shown to fail at the tip by the
+judge: <ids>` for the new tasks « correct » the project's judge showed to fail). If it refuses, mend your own
 lines and run it again, at most twice; then publish what `hive cut` proposed alone, if it changes anything, and
 report the refusals. Never remove a refusal by another way than mending the line it names.
 
@@ -214,8 +220,9 @@ Your final message, for the architect, short:
 
 1. **`STARVING`** first if `starving` was true, and whether what this cycle publishes ends it.
 2. What was published (the commit, the ids), or that nothing was and why.
-3. What waits for the architect: tasks « correct » in the backlog that wait for a run of the judge; `files` that are
-   missing or protected; stuck tasks you could not cut; pieces the judge cannot check yet; a missing charter; the
+3. What waits for the architect: tasks « correct » in the backlog that wait for a run of the judge
+   (`not_shown_failing`), and those it showed the tip passes already (`shown_passing`); `files` that are missing or
+   protected; stuck tasks you could not cut; pieces the judge cannot check yet; a missing charter; the
    gate's refusals; the new values of `unit` you wrote, and where the charter or the prompt gave them; anything in
    the project that disagreed with this guide.
 
