@@ -37,7 +37,10 @@ All of it in the project's own repository. Copies of the first test project's ar
    from the published branch. What the judge accepted lands there, one commit per task; the maintainers move the
    published branch to what they have read, and bring to the hive's branch what they commit on the published one.
 6. What the project's judge needs: its sandbox and its judge's tooling (`bee/`), named in the settings' `protected`
-   list ([common-judge.md](common-judge.md), [reference-judge.md](reference-judge.md)). Every project protects
+   list ([common-judge.md](common-judge.md), [reference-judge.md](reference-judge.md), [relay-judge.md](relay-judge.md)).
+   A project of the relay kind may also give its data by an address, which the judging job's image step fetches
+   (held to the manifest's SHA-256) at every run on a hosted runner; a project that keeps its data in its own tree
+   fetches nothing. Every project protects
    `hive/**` from contributions besides: no candidate can change the settings, the tasks or the caller.
 
 **Who can change the settings is whoever can write to the published branch.** A change acts at the next run that

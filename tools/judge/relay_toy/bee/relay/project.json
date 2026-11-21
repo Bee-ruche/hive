@@ -1,0 +1,14 @@
+{
+  "image": "common",
+  "data": {"path": "bee/relay/data", "bytes": 4270, "sha256": "747d0c1386dbd1bbf39519ad8562bc38be8f0c072702736742ff8c46a7cf7644"},
+  "skeleton": ["bee/relay/build", "bee/relay/main.c"],
+  "program": ["codec"],
+  "build_seconds": 60,
+  "build_processes": 64,
+  "encode_seconds": 4,
+  "decode_seconds": 4,
+  "memory_mb": 256,
+  "output_mb": 16,
+  "program_bytes": 65536,
+  "program_files": 8
+}

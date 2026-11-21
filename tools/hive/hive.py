@@ -4059,6 +4059,51 @@ def the_reference_judge(registry_root, settings, workdir):
     return reference_judge(registry_root, workdir=workdir, timeout=settings.get("timeout_seconds", 3600))
 
 
+RELAY_FIGURES = ("total_bytes", "tip_total_bytes", "gain_total_bytes", "sure_total_bytes", "message_bytes", "program_bytes",
+                 "encode_seconds", "decode_seconds", "encode_memory_kb", "decode_memory_kb", "builds", "runs")
+
+
+def relay_judge(registry_root, workdir=None, timeout=3600):
+    """The judge of the third kind (tools/judge/relay.py, docs/relay-judge.md) as a judge function: a program is run
+    in two phases, the second with the first's message alone, and must give the project's data back; what is
+    measured is exact, the message's bytes and the built program's. Code 0 correct, 1 refused, 2 failure to judge.
+    The report holds numbers only (RELAY_FIGURES): total_bytes, its gain against the tip judged in the same
+    judgement (gain_total_bytes) and the proof (sure_total_bytes: 1 when the candidate's exact total is below the
+    tip's and the same at each of its runs). The tip against itself is asked with --tip-itself; the tip judged as a
+    candidate (`question`) is a candidate's whole judgement, as for the second kind."""
+    judge_py = Path(registry_root) / "tools/judge/relay.py"
+
+    def run(base, candidate, task, tip, commit, question=False):
+        out = Path(base).parent / "relay.json"
+        command = [sys.executable, str(judge_py), "--tip", str(base), "--budget", str(max(1, timeout - REFERENCE_MARGIN)), "--json", str(out)]
+        for path in task.get("files") or ():
+            command += ["--task-file", str(path)]
+        if workdir:
+            command += ["--workdir", str(workdir)]
+        command += ["--tip-itself"] if commit == tip and not question else ["--candidate", str(candidate)]
+        try:
+            out.unlink()  # never an earlier judgement's report
+        except OSError:
+            pass
+        try:
+            ran = subprocess.run(command, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return {"code": 2}
+        try:
+            report = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            report = None
+        # the judge's own word and its exit status must agree: anything else is a failure to judge
+        code = ran.returncode if isinstance(report, dict) and ran.returncode in (0, 1) and report.get("code") == ran.returncode else 2
+        return {"code": code, "report": {name: report[name] for name in RELAY_FIGURES if code == 0 and number(report.get(name))}}
+
+    return run
+
+
+def the_relay_judge(registry_root, settings, workdir):
+    return relay_judge(registry_root, workdir=workdir, timeout=settings.get("timeout_seconds", 3600))
+
+
 # THE KINDS OF JUDGE. The hive is one and its projects are of several natures: what a verdict is, where the judged
 # code runs and what may accept a candidate are the base's (this file, the same for every project); HOW a candidate is
 # found right or wrong is a kind of judge's; what a project asks of the figures is the project's file. A project names
@@ -4070,7 +4115,7 @@ def the_reference_judge(registry_root, settings, workdir):
 # cannot judge (judging: machine_works), which ends the run's judging. A kind is code of the registry, trusted as this file is; a project's file can name one, never
 # bring one. A kind of TIP_KINDS also takes `question=True`: the tip's own tree is then the candidate's, judged as a
 # candidate's is, and the answer says whether the tip already does what a planned task asks (judging: about_the_tip).
-JUDGES = {"common": the_common_judge, "reference": the_reference_judge}
+JUDGES = {"common": the_common_judge, "reference": the_reference_judge, "relay": the_relay_judge}
 
 
 def judge_of(registry_root, settings, workdir):
@@ -4082,7 +4127,8 @@ def judge_of(registry_root, settings, workdir):
 # project's own tree (the clone's work tree, its published branch). It runs in the judging job before any candidate's
 # code is on the machine, the one moment that job has the network for it (judge_image).
 JUDGE_IMAGES = {"common": ("tools/judge/judge.py", "--tooling", "tree", "--image-only"),
-                "reference": ("tools/judge/reference.py", "--tip", "tree", "--image-only")}
+                "reference": ("tools/judge/reference.py", "--tip", "tree", "--image-only"),
+                "relay": ("tools/judge/relay.py", "--tip", "tree", "--image-only")}
 
 
 def judge_image(registry_root, kind, tree):

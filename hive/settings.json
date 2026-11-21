@@ -25,7 +25,7 @@
   "accounts or none": "a list of GitHub account numbers, or null",
   "accounts and logins": "a list of GitHub account numbers; a login is taken too",
   "models": "a list of model identifiers (letters, digits, dots, dashes and underscores, no space)",
-  "judge kind": "one of the kinds of judge the hive holds: common, reference",
+  "judge kind": "one of the kinds of judge the hive holds: common, reference, relay",
   "options": "names and their values",
   "commits": "a list of full commit ids",
   "figures": "a list of names of the judge's figures",
@@ -73,7 +73,7 @@
   {"key": "limits.judging_seconds", "section": "limits", "type": "seconds", "default": 14400, "least": 1, "most": 14400, "what": "How long a run spends judging: no judgement is started that could end after it."},
   {"key": "limits.queue", "section": "limits", "type": "whole number", "default": 500, "least": 1, "most": 10000, "what": "How many candidates a plan lists at most."},
 
-  {"key": "judge.kind", "section": "judge", "type": "judge kind", "default": "common", "what": "How a candidate is found right. common: outputs identical to the base, and measures taken beside it (a faster or smaller same thing). reference: the unit a task names answers exactly as the project's reference does (a port, a rewrite)."},
+  {"key": "judge.kind", "section": "judge", "type": "judge kind", "default": "common", "what": "How a candidate is found right. common: outputs identical to the base, and measures taken beside it (a faster or smaller same thing). reference: the unit a task names answers exactly as the project's reference does (a port, a rewrite). relay: the program is run in two phases, the second with the first's message alone, and gives the project's data back; the message's bytes and the built program's are counted (a compressor and its decompressor)."},
   {"key": "judge.repetitions", "section": "judge", "type": "whole number", "default": 10, "least": 1, "most": 1000, "what": "common judge: how many times each measure is taken."},
   {"key": "judge.timeout_seconds", "section": "judge", "type": "seconds", "default": 3600, "least": 1, "most": 3600, "what": "The longest one judgement may take."},
   {"key": "judge.options", "section": "judge", "type": "options", "default": {}, "what": "common judge: options handed to the project's own plug-in; a task may add its own."},

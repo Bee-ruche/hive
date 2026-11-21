@@ -9085,7 +9085,7 @@ class TestTwoProjectsInOneHive(Base):
         self.assertEqual(code, 0, said)
         self.assertEqual([(r["task"], r["login"]) for r in self.w.run()], [(task, "alice")], "collected and judged as ever")
         # the second project's own workers are told which setting stops them, at every command, and nothing is pushed
-        refused = r"\Ahive: hive/project\.json: judge\.kind: a kind of judge this tool holds \(common, reference\)\n\Z"
+        refused = r"\Ahive: hive/project\.json: judge\.kind: a kind of judge this tool holds \(common, reference, relay\)\n\Z"
         def pushed():
             return sh("git", "for-each-ref", "--format=%(refname) %(objectname)", cwd=self.vera.bare).stdout
 
@@ -9216,8 +9216,8 @@ class TestTwoProjectsInOneHive(Base):
             self.assertEqual(printed.split()[-1], self.v.tip(), "integrated in the second project's own repository")
             self.assertEqual([(e["member"], e["report"]) for e in hive.Ledger(self.v.state).events if e["type"] == "verdict"],
                              [("vera", {"cases_compared": 64})])
-        self.assertEqual(sorted(hive.JUDGES), ["common", "reference"], "the kinds this tool holds by itself")
-        with self.assertRaisesRegex(hive.HiveError, r"judge\.kind: a kind of judge this tool holds \(common, reference\)"):
+        self.assertEqual(sorted(hive.JUDGES), ["common", "reference", "relay"], "the kinds this tool holds by itself")
+        with self.assertRaisesRegex(hive.HiveError, r"judge\.kind: a kind of judge this tool holds \(common, reference, relay\)"):
             self.v.load()
         for wrong in (None, 3, "", ["common"], "Common"):
             self.v.set_config({"judge": {"metrics": ["cases_compared"], "kind": wrong}})

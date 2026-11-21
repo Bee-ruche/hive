@@ -1,0 +1,6 @@
+#!/bin/sh
+# The toy's build: « sh /src/bee/relay/build », in a container that holds the skeleton (this script, main.c) and one
+# program (codec/), and neither the data nor another program. It leaves the program as /out/run.
+set -eu
+# Linked statically: a phase runs in a container that holds no library, and what the program needs is in the file that is counted.
+cc -O2 -std=gnu99 -Wall -Wextra -static -o /out/run /src/bee/relay/main.c /src/codec/*.c

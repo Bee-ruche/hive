@@ -316,11 +316,15 @@ the hive runs those git commands with an empty attribute source.
   what may accept a candidate are the hive's, the same for every project; how a candidate is found right or wrong
   is a kind of judge's; what is asked of the judge's figures is the project's. A kind is code of the protocol's: a
   project's file can name one and never bring one, and a file that names a kind the tool does not hold is refused
-  when it is loaded, at every step. Two kinds exist. `common`, which a project that names none has, is the
+  when it is loaded, at every step. Three kinds exist. `common`, which a project that names none has, is the
   protocol's common judge (docs/common-judge.md): the candidate gives the same outputs as the project's tip, and
   is measured against it. `reference` (docs/reference-judge.md) is for a port or a rewrite: the unit a candidate
-  writes answers exactly as the project's reference does, on cases drawn when it is judged. In both, candidate
-  code builds and runs only in a container without network, and the verdict is derived on the host. Whatever the
+  writes answers exactly as the project's reference does, on cases drawn when it is judged. `relay`
+  (docs/relay-judge.md) is for a program run in two phases, the second handed the first's message and nothing
+  else, which must give the project's data back: what it measures is exact (the message's bytes and the built
+  program's), and its proof is an exact comparison with the tip's figure, with no noise to be beyond (a
+  compressor and its decompressor). In all three, candidate code builds and runs only in a container without
+  network, and the verdict is derived on the host. Whatever the
   kind, code 0 is correct, 1 a refusal, 2 a failure to judge, and the project's tip judged against itself is
   answered 0. Another question is asked of the reference kind alone, in a quiet run (no candidate, no task held): the tip
   judged **as a candidate** for a task, where the unit the tip holds is built and run as a candidate's is. Its answer
