@@ -291,8 +291,15 @@ A failure of the tip's own build or phases in a judgement (its build fails or pa
 fails, is killed or passes its bound, its two encodings differ, its decoding does not give the data back) is a
 failure to judge (2), and the judge says it is the tip's own doing: « the tip's own doing (not the candidate's) » in
 the reason, and `"fault": "tip"` in the report it writes. It happens before anything of the candidate's is built or
-run, so nothing of the candidate's can bring it about. What the hive does with such an answer is the hive's rule
-([protocol.md](protocol.md), "How a candidate is judged and integrated").
+run, so nothing of the candidate's can bring it about.
+
+The hive takes that answer as it takes a judge that fails on the tip itself ([protocol.md](protocol.md), "How a
+candidate is judged and integrated"): the run stops judging, the candidate it was on is not charged, the log says the
+judge found the tip at fault and for which task, and the run ends as a failure, so that a person sees it. A project
+whose tip wavers (a program that fails one of its own runs one time in some, on purpose or not: rule 3 tests
+determinism, it does not enforce it) therefore stalls, loudly, from the first judgement that meets the failure: its
+candidates wait, and nobody pays for them. **The architect recovers** by one revert of the commit that brought the
+program in, on the hive's branch; the next run judges against the tip before it.
 
 ## What a run costs
 

@@ -4723,6 +4723,80 @@ class TestDealing(Base):
         self.assertEqual(([(o["login"], o["result"]) for o in outcomes], down), ([("bob", "accepted"), ("alice", "skipped")], True))
         self.assertEqual((self.w.load()[2].marks("toy-0001", self.alice.id, second), self.w.deals()["toy-0001"]), ([], ("alice", "live")))
 
+    def test_a_judge_that_finds_the_tip_at_fault_charges_nobody_and_stops_the_judging(self):
+        """A failure to judge (2) whose answer says, as the judge's own report says it, that the failure is the tip's own
+        doing (`"fault": "tip"`) is taken as the judge failing on the project's own tip: nothing more is judged in the
+        run, the candidate it was on gets no mark, the tip is not asked about (the judge has said), and the run says its
+        judge failed on the tip. Without the field a 2 is as before: the tip itself passes, a mark on the candidate; it
+        fails, the judging stops. In an answer of 0 or 1 the field changes nothing, and no answer kept holds it."""
+        said = {"candidate": None, "tip": 0}
+        asked_about_the_tip = []
+
+        def judge(base, candidate, task, tip, commit):
+            if commit == tip:
+                asked_about_the_tip.append(task["id"])
+                return {"code": said["tip"], "report": {"gain": 0.0, "outputs_compared": 1}}
+            return dict(said["candidate"])
+
+        def run(clock, candidate, tip=0):
+            said.update(candidate=candidate, tip=tip)
+            asked_about_the_tip.clear()
+            with self.at(clock):
+                self.w.plan()
+                self.w.record()
+                verdicts, _ = self.w.judge(judge)
+                return verdicts, {o["login"]: (o["result"], o.get("kind") or o.get("reason")) for o in self.w.apply(verdicts)[0]}, self.w.notes["down"]
+
+        dealt = self.hold(self.alice, "toy-0001")[0]
+        self.alice.fresh("hive/submit/toy-0001").submit("toy-0001", content=LIB + "/* a change */\n", deal=dealt)
+        marks = lambda: self.w.load()[2].marks("toy-0001", self.alice.id, dealt)  # noqa: E731
+        # the tip at fault: down, no mark, no question about the tip, nothing kept
+        verdicts, outcomes, down = run("12:00:00", {"code": 2, "fault": "tip"})
+        self.assertEqual((verdicts, outcomes, down, marks(), asked_about_the_tip), ({}, {"alice": ("skipped", None)}, True, [], []))
+        self.assertEqual(self.w.deals()["toy-0001"], ("alice", "live"))
+        # a field of another spelling, or none: as before; the tip itself passes, a mark on the candidate
+        for clock, candidate in (("13:00:00", {"code": 2}), ("14:00:00", {"code": 2, "fault": "Tip"})):
+            with self.subTest(candidate=candidate):
+                verdicts, outcomes, down = run(clock, candidate)
+                self.assertEqual((outcomes, down, asked_about_the_tip), ({"alice": ("error", "judge")}, False, ["toy-0001"]))
+                self.assertNotIn("fault", json.dumps(verdicts))
+        self.assertEqual(len(marks()), 2)
+        # without the field, and the tip itself fails: the judging stops, no mark
+        verdicts, outcomes, down = run("15:00:00", {"code": 2}, tip=2)
+        self.assertEqual((outcomes, down, len(marks())), ({"alice": ("skipped", None)}, True, 2))
+        # in a refusal the field changes nothing: refused by the judge, its deal over
+        verdicts, outcomes, down = run("16:00:00", {"code": 1, "fault": "tip"})
+        self.assertEqual((outcomes, down, asked_about_the_tip), ({"alice": ("refused", "judge_refused")}, False, []))
+        self.assertNotIn("fault", json.dumps(verdicts))
+        # nor in a correct answer: accepted
+        dealt = self.hold(self.bob, "toy-0002")[0]
+        self.bob.attempt("toy-0002", dealt)
+        verdicts, outcomes, down = run("17:00:00", {"code": 0, "fault": "tip", "report": {"gain": 0.0, "outputs_compared": 1}})
+        self.assertEqual((outcomes, down), ({"bob": ("accepted", None)}, False))
+        self.assertNotIn("fault", json.dumps(verdicts))
+
+    def test_the_relay_kinds_call_carries_the_judges_word_that_the_tip_is_at_fault(self):
+        """The relay kind's call takes `"fault": "tip"` from the report its judge wrote, on a failure to judge alone, and
+        only when the report's own code and the judge's exit status agree (2): never from anything else."""
+        judge = hive.judge_of("/registry", {"kind": "relay", "timeout_seconds": 900}, None)
+        cases = ((2, {"code": 2, "fault": "tip", "reason": "x"}, {"code": 2, "report": {}, "fault": "tip"}),
+                 (2, {"code": 2, "reason": "x"}, {"code": 2, "report": {}}),
+                 (2, {"code": 1, "fault": "tip"}, {"code": 2, "report": {}}),
+                 (1, {"code": 1, "fault": "tip"}, {"code": 1, "report": {}}),
+                 (2, {"code": 2, "fault": "tips"}, {"code": 2, "report": {}}),
+                 (2, ["code", 2, "fault", "tip"], {"code": 2, "report": {}}))
+        for exit_status, report, expected in cases:
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as folder:
+                base = Path(folder) / "base"
+                base.mkdir()
+
+                def ran(command, **options):
+                    (base.parent / "relay.json").write_text(json.dumps(report))
+                    return subprocess.CompletedProcess(command, exit_status, "", "")
+
+                with mock.patch.object(hive.subprocess, "run", side_effect=ran):
+                    self.assertEqual(judge(base, base, {"id": "toy-0001", "files": ["src/"]}, "T" * 40, "C" * 40), expected)
+
     def test_over_many_draws_a_kept_preference_gives_a_task_its_member_could_be_dealt_anyway_and_moves_nobodys_turn(self):
         """The invariant of the dealing, held over many keys on tasks that share files, differ in tier, are closed or
         held: whatever the asks prefer, each member dealt is dealt a task of `mine` (the tasks it could be dealt

@@ -3180,13 +3180,21 @@ def with_history(repo, folder, commits):
             raise HiveError(f"judge.history: commit {commit[:12]} could not be copied for the judge")
 
 
+# What a judge's answer says when its failure to judge (code 2) is the project's tip's own doing, as the judge's own
+# report says it (a kind reads it from the report its judge wrote, never from anything a candidate writes): the judging
+# then stops as when the judge fails on the tip itself, and the candidate it was on is not charged (judging).
+TIP_FAULT = "tip"
+
+
 def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, save=None, started=None, history=()):
     """The judging step's verdict_of: writes the two trees to disk, runs the judge, removes them, and keeps the
     answer under the judged commit's id. Whatever the judge function throws is a failure to judge (code 2).
 
-    A failure is the candidate's doing only if the machine works: when the judge fails on a candidate, it is asked
-    about the project's own tip against itself. If that fails too, the machine is down: nothing is answered, nothing
-    more is judged in this run, and no candidate is refused for the breakdown.
+    A failure is the candidate's doing only if the machine works and the tip is sound: when the judge fails on a
+    candidate, it is asked about the project's own tip against itself. If that fails too, the machine is down:
+    nothing is answered, nothing more is judged in this run, and no candidate is refused for the breakdown. The same
+    holds, without the question, when the judge's own answer says the failure is the tip's doing (`"fault": "tip"`,
+    which a kind takes from the report its judge wrote: TIP_FAULT).
 
     The judging has a total time allowed: no judgement is started that could end after `deadline` (on the
     monotonic clock), `longest` being what one judgement may take. And `save` is called after each answer, so that
@@ -3208,8 +3216,11 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
         finally:
             shutil.rmtree(folder, ignore_errors=True)
         code = answer.get("code") if isinstance(answer, dict) else 2
-        return {"code": code if code in (0, 1) and type(code) is int else 2,
-                "report": clean_report(answer.get("report") if isinstance(answer, dict) else None, metrics)}
+        code = code if code in (0, 1) and type(code) is int else 2
+        said = {"code": code, "report": clean_report(answer.get("report") if isinstance(answer, dict) else None, metrics)}
+        if code == 2 and isinstance(answer, dict) and answer.get("fault") == TIP_FAULT:
+            said["fault"] = TIP_FAULT  # (on a failure to judge alone, and in that one spelling: never kept with an answer)
+        return said
 
     def machine_works(tip, task):
         mark = (tip, task["id"])
@@ -3228,13 +3239,17 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
             if save:
                 save(verdicts, started)
         answer = ask(tip, tree, task, commit, entry["sha"][:12])
-        if answer["code"] == 2 and not machine_works(tip, task):
+        at_fault = answer["code"] == 2 and answer.get("fault") == TIP_FAULT
+        if answer["code"] == 2 and (at_fault or not machine_works(tip, task)):
             state["down"] = state["machine"] = True
             if started is not None and commit in started:
-                started.remove(commit)  # the machine, not this candidate: it is not the one the judging stopped on
+                started.remove(commit)  # the machine or the tip, not this candidate: it is not the one the judging stopped on
                 if save:
                     save(verdicts, started)
-            log("the judge fails on the project's own tip: nothing more is judged in this run")
+            if at_fault:
+                log(f"the judge found the project's tip at fault, for task {safe_text(task['id'], 40)}: nothing more is judged in this run")
+            else:
+                log("the judge fails on the project's own tip: nothing more is judged in this run")
             return None
         verdicts[commit] = answer
         if save:
@@ -4095,7 +4110,11 @@ def relay_judge(registry_root, workdir=None, timeout=3600):
             report = None
         # the judge's own word and its exit status must agree: anything else is a failure to judge
         code = ran.returncode if isinstance(report, dict) and ran.returncode in (0, 1) and report.get("code") == ran.returncode else 2
-        return {"code": code, "report": {name: report[name] for name in RELAY_FIGURES if code == 0 and number(report.get(name))}}
+        said = {"code": code, "report": {name: report[name] for name in RELAY_FIGURES if code == 0 and number(report.get(name))}}
+        # The judge's own word that its failure is the tip's doing: in the report it wrote, which agrees with its exit status.
+        if code == 2 and ran.returncode == 2 and isinstance(report, dict) and report.get("code") == 2 and report.get("fault") == TIP_FAULT:
+            said["fault"] = TIP_FAULT
+        return said
 
     return run
 
