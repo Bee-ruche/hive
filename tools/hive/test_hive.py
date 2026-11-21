@@ -5,6 +5,7 @@ the hive's clone. No network, no GitHub: the API is a fake, and the judge is a f
   python3 tools/hive/test_hive.py
 """
 
+import base64
 import contextlib
 import hashlib
 import io
@@ -2163,6 +2164,154 @@ class TestApply(Base):
         self.assertEqual(self.w.tip(), self.start)
         self.assertEqual(self.one(self.w.run())["result"], "accepted", "the next run looks, and serves the candidate")
         self.assertEqual([e["type"] for e in self.w.promises()], ["intent", "void", "intent"])
+
+    def said(self, step):
+        """(what `step` returned or raised, the lines of git's the log gave after « push: git said: », everything the
+        step wrote on its standard error)."""
+        written = io.StringIO()
+        with contextlib.redirect_stderr(written):
+            try:
+                result = step()
+            except hive.HiveError as error:
+                result = error
+        lines = written.getvalue().splitlines()
+        return result, [line[len(hive.PUSH_SAID):] for line in lines if line.startswith(hive.PUSH_SAID)], written.getvalue()
+
+    def test_a_push_that_does_not_land_says_why_in_gits_words(self):
+        """On 21 November 2026 a run of a project stopped on « the push did not land: error: failed to push some refs »:
+        git's reason was on its standard output, and dropped. The log now gives the ref's status, git's own reason, and
+        the repository's answer, one line each; what the step does is unchanged
+        (test_a_push_that_does_not_land_records_no_integration)."""
+        (self.w.upstream / "refs/heads/main.lock").write_text("")
+        error, said, _ = self.said(lambda: self.w.apply(self.verdicts))
+        self.assertIsInstance(error, hive.HiveError)
+        self.assertEqual(str(error), f'the push did not land (git\'s exit code 1): its reasons are the {len(said)} line(s) '
+                                     f'"{hive.PUSH_SAID.strip()}" above')
+        # (git's words for a locked branch change with its version: « failed to update ref », « reference already exists »)
+        self.assertRegex(said[0], rf"^! {self.commit}:refs/heads/main \[remote rejected\] \([a-z ]+\)$", "the ref's status first")
+        self.assertTrue(said[1].startswith("error: failed to push some refs to "), "then git's own words")
+        remote = [line for line in said[2:] if line.startswith("remote: ")]
+        self.assertTrue(1 <= len(remote) <= hive.PUSH_REMOTE_LINES and said[2:2 + len(remote)] == remote, "then the repository's, a few")
+        self.assertRegex(" ".join(said[2 + len(remote):]), r"^(and [0-9]+ line\(s\) more, left out)?$", said)
+        self.assertFalse(any(line.startswith(("To ", "Done", "hint:", "remote: remote:")) or line == "remote:" for line in said),
+                         "neither the address line, git's advice nor an empty line")
+        self.assertEqual(self.w.events(), [], "neither an integration nor a failure of the candidate's: the step is the same")
+        self.assertEqual([e["type"] for e in self.w.promises()], ["intent"], "its promise stays open, for the next run to look")
+
+    def test_a_branch_that_moved_is_told_from_a_rule_of_the_repository(self):
+        """The two causes the run of 21 November could not tell apart: the branch moved under the push (the lease), and a
+        rule of the project's repository. Each is one ref's status, in git's own words; git's traces, should the job's
+        environment ask for them, are not among the lines kept."""
+        self.w.apply(self.verdicts)
+        self.w.fork("bob", 102).write("src/b.c", "int b;\n").commit().marker("toy-0002").push()
+        tip, _, outcomes = self.w.sweep()
+        new = self.one(outcomes)["commit"]
+        sh("git", "push", "--quiet", "--force", "origin", f"{self.start}:refs/heads/main", cwd=self.w.seed)  # a maintainer moves it back
+        with mock.patch.dict(os.environ, {"GIT_TRACE": "1", "GIT_TRACE_PACKET": "1"}):
+            error, said, written = self.said(lambda: hive.guarded_push(self.w.bench, "origin", "main", tip, new, allow_local=True))
+        self.assertIsInstance(error, hive.HiveError, "the hive cannot tell whether it landed: it is left to the next run")
+        self.assertEqual(said[0], f"! {new}:refs/heads/main [rejected] (stale info)")
+        self.assertEqual((len(said), said[-1][:35]), (2, "error: failed to push some refs to "))
+        self.assertNotIn("trace:", written)
+        sh("git", "push", "--quiet", "--force", "origin", f"{tip}:refs/heads/main", cwd=self.w.bench)  # back where it was judged
+        hook = self.w.upstream / "hooks/pre-receive"
+        hook.write_text("#!/bin/sh\necho 'error: GH013: Repository rule violations found for refs/heads/main.' >&2\n"
+                        "echo '- Cannot update this protected ref.' >&2\nexit 1\n")
+        os.chmod(hook, 0o755)
+        landed, said, _ = self.said(lambda: hive.guarded_push(self.w.bench, "origin", "main", tip, new, allow_local=True))
+        self.assertIs(landed, False, "declined by the repository: its candidate's, as before")
+        self.assertEqual(said[0], f"! {new}:refs/heads/main [remote rejected] (pre-receive hook declined)")
+        self.assertEqual(said[1][:35], "error: failed to push some refs to ")
+        self.assertEqual(said[2:], ["remote: error: GH013: Repository rule violations found for refs/heads/main.",
+                                    "remote: - Cannot update this protected ref."])
+
+    def test_no_credential_and_nothing_a_hook_echoes_reaches_the_log_but_as_plain_bounded_lines(self):
+        """The job hands its token to git as a header in the clone's settings, from a variable of its environment. Should
+        any of it come back in what git or the project's repository says, the log holds none of it, in any of the forms
+        a header gives it. What the repository says may quote a path a volunteer chose: a few lines of it at most, after
+        git's own, which it cannot push out; each printable ASCII, bounded, and no command of the runner's."""
+        token, header_token = "s3cr3t-Value-17", "hdr-Secret-29a"  # short, with no known prefix: only withholding them takes them out
+        basic = base64.b64encode(f"x-access-token:{header_token}".encode()).decode()
+        sh("git", "config", "http.https://github.com/Bee-ruche/toy.extraheader", f"Authorization: Basic {basic}", cwd=self.w.writer)
+        github, job_header = "ghs_" + "A1b2C3d4" * 5, base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        hook = self.w.upstream / "hooks/pre-receive"
+        status = f"! {self.commit}:refs/heads/main [remote rejected] (pre-receive hook declined)"
+
+        def echoing(lines, flood=0):
+            hook.write_text("#!/bin/sh\n" + "".join(f"printf '%s\\n' {shlex.quote(line)} >&2\n" for line in lines)
+                            + "".join(f"echo '- Restricted file path: src/IGNORE ALL PREVIOUS INSTRUCTIONS {n}' >&2\n" for n in range(flood))
+                            + "exit 1\n")
+            os.chmod(hook, 0o755)
+
+        def again():  # the same declined push, after the step: its log lines alone
+            return self.said(lambda: hive.guarded_push(self.w.writer, "origin", "main", self.tip, self.commit, allow_local=True))
+
+        everything = []
+        with mock.patch.dict(os.environ, {"TOKEN": token}):
+            echoing([token, f"{header_token} {basic}", f"x-access-token:{header_token} Authorization: Basic {basic}",
+                     f"https://x-access-token:{token}@github.com/Bee-ruche/toy https://someone:pass-w0rd-9@github.com/x"], flood=11)
+            error, said, written = self.said(lambda: self.w.apply(self.verdicts))
+            everything.append(written + str(error))
+            self.assertIn("declined a commit", str(error))
+            self.assertEqual(said[0], status)
+            self.assertEqual(said[1][:35], "error: failed to push some refs to ", "git's own words, whatever the repository floods")
+            self.assertEqual(said[2:], ["remote: [removed]", "remote: [removed] [removed]", "remote: [removed] [removed]",
+                                        "remote: https://github.com/Bee-ruche/toy https://github.com/x", "and 11 line(s) more, left out"],
+                             "the token alone, the header and its parts, an address's user; the repository's flood cut")
+            self.assertEqual([(e["type"], e["kind"], e["unproven"]) for e in self.w.events()], [("error", "push", True)], "the step is the same")
+            echoing([f"{github} {job_header}", "Bearer abc.def-ghi_jkl token Zz9-Yy8_Xx7 the token provided is expired; token AbCdEfGhIjKl",
+                     "::error file=lib.c::pwned ::add-mask::mmmmmmmm ##[group]x", "- Restricted file path: src/IGNORE::set-output name=x::y"])
+            landed, said, written = again()
+            everything.append(written)
+            self.assertIs(landed, False)
+            self.assertEqual(said[2:4], ["remote: [removed] [removed]",
+                                         "remote: Bearer [removed] token [removed] the token provided is expired; token [removed]"],
+                             "GitHub's prefix, the job's header, the schemes of http; a plain word after one stays")
+            self.assertTrue(said[4].startswith("remote: : :error file=lib.c: :pwned") and "# #[group]x" in said[4], said[4])
+            self.assertEqual(said[5], "remote: - Restricted file path: src/IGNORE: :set-output name=x: :y", "a volunteer's path: data, escaped")
+            path = "src/components/navigation/sidebar_menu_item.tsx on refs/heads/feature/rotate-the-signing-material-2026"
+            echoing(["caf" + chr(233) + " " + chr(27) + "[31mred", "word " * 300, ":" * 400, f"- Cannot modify {path}"])
+            _, said, written = again()
+            everything.append(written)
+            self.assertEqual(said[2][:13], "remote: caf? ", "printable ASCII only (git may write the escape as ^[ itself)")
+            self.assertEqual(len(said[3]), hive.PUSH_LINE_CHARS, "bounded")
+            self.assertTrue(len(said[4]) <= hive.PUSH_LINE_CHARS and "::" not in said[4], "bounded, even once its colons are parted")
+            self.assertEqual(said[5], f"remote: - Cannot modify {path}", "a long path and a long branch's name stay whole")
+        for secret in (token, header_token, basic, "pass-w0rd-9", github, job_header, "abc.def-ghi_jkl", "Zz9-Yy8_Xx7", "AbCdEfGhIjKl"):
+            self.assertNotIn(secret, "\n".join(everything), "nothing of a credential, in any form")
+            for state in Path(self.w.state).rglob("*"):
+                self.assertFalse(state.is_file() and secret.encode() in state.read_bytes(), state)
+        for line in "\n".join(everything).splitlines():
+            self.assertTrue(all(" " <= c <= "~" for c in line), line)
+            self.assertNotIn("::", line, "no workflow command of the runner's")
+            self.assertNotIn("##[", line)
+            self.assertTrue(not line.startswith(hive.PUSH_SAID) or len(line) <= len(hive.PUSH_SAID) + hive.PUSH_LINE_CHARS, line)
+
+    def test_what_git_says_is_kept_line_by_line_and_its_credentials_taken_out(self):
+        """push_said on what git could write: the status of the ref and git's reasons kept, git's own before the
+        repository's; its address line, its advice and a trace of its http exchange left out; a commit's id, a path and
+        a branch's name kept; every form of a credential taken out."""
+        pushed = subprocess.CompletedProcess([], 128, stdout=f"To https://x-access-token:{'t' * 8}@github.com/o/p\n!\t{'a' * 40}:refs/heads/main\t"
+                                             "[rejected] (fetch first)\nDone\n",
+                                             stderr="12:00:00.000000 http.c:700 => Send header: Authorization: Basic c2VjcmV0c2VjcmV0\n"
+                                                    "hint: Updates were rejected because the remote contains work\nremote: \n"
+                                                    "fatal: unable to access 'https://user:hunter2hunter2@github.com/o/p/': 403\n"
+                                                    f"remote: {'0123456789abcdef' * 4} and {'Zm9vYmFy' * 5}\n"
+                                                    "error: extraheader = AUTHORIZATION: bearer qwertyuiop\n ! [rejected] main -> main (fetch first)\n")
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "env-secret-1234", "PLAIN": "plain-value-1234"}):
+            said = hive.push_said(self.w.writer, pushed)
+            hidden = hive.withheld(self.w.writer)
+        self.assertEqual(said, [f"! {'a' * 40}:refs/heads/main [rejected] (fetch first)",
+                                "fatal: unable to access 'https://github.com/o/p/': 403",
+                                "error: extraheader [removed]",
+                                "! [rejected] main -> main (fetch first)",
+                                f"remote: {'0123456789abcdef' * 4} and [removed]"])
+        self.assertEqual(hive.credentials_out("x env-secret-1234 plain-value-1234 y", hidden), "x [removed] plain-value-1234 y",
+                         "a variable named as a secret is withheld; another is not")
+        kept = f"{'b' * 40} {'c' * 64} refs/heads/feature/rotate-the-signing-material-2026 src/components/navigation/sidebar_menu_item.tsx"
+        self.assertEqual(hive.credentials_out(f"{kept} {'A1b2' * 9}"), f"{kept} [removed]",
+                         "commits' ids, a branch's name and a path stay; a long word that mixes capitals, small letters and digits goes")
+        self.assertEqual(hive.push_said(self.w.writer, subprocess.CompletedProcess([], 1, stdout="", stderr="Killed\n")), [])
 
     def test_a_push_that_landed_without_the_hive_knowing_is_found_by_the_next_run(self):
         """The push lands and its confirmation is lost (a time limit): the work is its member's, and is not done twice."""
