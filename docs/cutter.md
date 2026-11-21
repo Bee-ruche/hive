@@ -129,8 +129,8 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
 
 1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
 2. **The deterministic cutter** applies its rules ("The deterministic cutter", above). A planned task « correct » is
-   published at the first cycle after a run of the project's hive judged the tip as a candidate for it and saw it
-   fail ("The proof at the tip"): the cutter runs nothing of the project, and waits for that answer.
+   published at the first cycle after two runs of the project's hive in a row judged the tip as a candidate for it and
+   saw it fail ("The proof at the tip"): the cutter runs nothing of the project, and waits for that answer.
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
      account that never had an acceptance never counts, so throwaway accounts cannot make a task stuck, and a
@@ -225,13 +225,20 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
 - **What is asked.** Of the lines of the backlog at the plan's commit, those the deterministic cutter would publish
   but for the proof: not published yet, a goal « correct », held by the gate's rules for a new task's own line, what
   they need done, their files on the tip and none protected; and among them, those for which no answer of the judge
-  holds at the tip (below). **At most two in a run**: those never asked first, then the one asked longest ago, in the
-  backlog's order between equals. The rest wait for the next run; a task the judge cannot answer is asked again after
-  the others, and holds no place for ever.
+  proves at the tip (below). **At most two in a run**: those never asked first, then the one asked longest ago, in the
+  backlog's order between equals. The rest wait for the next run. A task the judge could not answer is asked again
+  once that answer no longer holds (a change to the judge, for one), or a day after it was given: it costs a
+  judgement a day at most, and holds no place for ever. The job's log names it.
 - **What is recorded.** The answer is code 1 (the judge refuses the tip: `failing`), code 0 (it finds it correct:
   `passing`) or code 2 (it failed to judge: `unknown`). It goes to the state, in `tip.json` on the branch `hive-state`:
-  for each planned task, its latest answer, the commit it judged, the SHA-256 of the task's line, and the instant. Ids,
-  codes and commits: no text. An answer about a task published, or planned no more, is dropped.
+  for each planned task, its latest answer, the commit it judged, the SHA-256 of the task's line, the instant, and how
+  many runs in a row gave it, each at a tip where the answer before it still held (below). Ids, codes, commits and
+  numbers: no text. An answer about a task published, or planned no more, is dropped, and the latest 5,000 are kept.
+- **Two runs for « failing ».** A refusal can come from the judge's own limits as well as from the unit: a run that
+  passes its time on a slow machine is refused. For a candidate that costs only its turn; a task published on a false
+  « failing » would be accepted for nothing. So `failing` proves once two runs in a row gave it, the second at a tip
+  where the first still holds: a task said `failing` once is asked again at the next run, and published a cycle
+  later. `passing`, which only keeps a task back, acts at once.
 - **Who writes it, with which right.** The judging job hands its answers to the write job inside `verdicts.json`, the
   file that job already takes by name; the write job (`hive.py apply`) writes `tip.json` with the token it already
   holds to write `hive-state`. No new file between jobs, no new step, no new right, no secret. The write job believes
@@ -244,12 +251,14 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
 - **What reads it.** `hive cut` and `hive cut-check` take the proof from the state they are given, for the commit of
   the branch the hive writes (where a volunteer's work starts). **An answer holds at a tip** when it is about the
   task's very line (the same SHA-256), and it was given at that commit, or at an ancestor of it from which the tip
-  moved only by what contributions to other tasks bring: every path that differs between the two is a file another
-  published task names, under no protected path, and none of the task's own files. A judge of the reference kind
-  judges a unit from its own files and from the project's tree beside them (its reference, its skeleton, its judge),
-  which no task names: a contribution to another task changes none of it. Anything else (the task's own files, the
-  judge, a file no task names, which only a maintainer's commit changes, a commit of another line of history, one the
-  clone does not hold, more changes than the tool reads) leaves no proof, and the run asks again at the tip as it is.
+  moved by the hive's own integrations of other tasks alone: every commit between the two is one the ledger records
+  as an accepted contribution to another task, and no path that differs between the two is one of the task's own
+  files (a task cut again names its parent's) or a protected path. A judge of the reference kind judges a unit from
+  its own files and from the project's tree beside them (its reference, its skeleton, its judge), and the hive refuses
+  any contribution that changes a path outside its own task's files: such a contribution changes none of that.
+  Anything else leaves no proof: a maintainer's commit or a merge, whatever it touches; the task's own files; a
+  commit of another line of history, or one the clone does not hold; more commits or changes than the tool reads.
+  The run then asks again at the tip as it is.
 - **`--failing`** stays the architect's manual way: the architect runs the project's check at the tip, in the judge's
   container, and gives their word. The gate prints it as before. A run of the judge that showed the tip passes the
   task wins over it.

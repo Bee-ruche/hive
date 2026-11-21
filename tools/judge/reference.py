@@ -495,7 +495,9 @@ def judge(args, work):
 
     # The control: the skeleton with the project's BLANK unit in the unit's place builds, twice, into two different
     # binaries, and its driver starts. Never the unit the tip holds: that one was a candidate's, and nothing a
-    # candidate wrote is built or run in another's judgement, or in the question about the tip itself.
+    # candidate wrote is built or run in another's judgement, or in the question about the tip itself. (The tip judged
+    # AS A CANDIDATE for a task, which the base asks for its cutter, is a candidate's judgement: there the unit the tip
+    # holds is built and run as a candidate's, for its own unit and in steps 4 and 7 alone, never in the control.)
     STATE["step"] = 3
     control_sources = judgement.folder("control-sources")
     copy_paths(args.tip, manifest["skeleton"], control_sources, JudgeError)

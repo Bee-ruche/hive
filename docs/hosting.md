@@ -109,9 +109,9 @@ What carries it:
 5. **The proof at the tip rides on what is there** ([cutter.md](cutter.md), "The proof at the tip"). In a project
    whose judge can answer it, the judging step, once the candidates are judged, judges the plan's tip itself as a
    candidate for at most two planned tasks « correct », and writes what it saw into `verdicts.json`, which `apply`
-   already takes by name, within the same bound on its size; `apply` holds those answers to the planned tasks it finds
-   itself and writes them to `tip.json` on `hive-state`, with the token it already has. No new step, file between
-   jobs, permission or secret, and the workflow's text is the same.
+   already takes by name (16 MiB at most, as before: two answers weigh a few hundred bytes); `apply` holds those
+   answers to the planned tasks it finds itself and writes them to `tip.json` on `hive-state`, with the token it
+   already has. No new step, file between jobs, permission or secret, and the workflow's text is the same.
 6. **One run at a time**: the caller's concurrency group, never cancelled in progress by a newer run. Two runs that
    overlap are safe by the protocol (the jobs that write check the ledger the plan read) and wasteful. **A run that
    a person cancels pushes nothing**: `apply` runs unless the run was cancelled or `plan` did not succeed, so also

@@ -670,9 +670,9 @@ The hive's files there:
 - `accounts.json`: when each account that owns a fork was created, asked of GitHub once.
 - `tip.json`, in a project whose judge answers about the tip (the reference kind): for each planned task « correct »
   of the backlog, the judge's latest answer when the tip itself was judged as a candidate for it (`failing`,
-  `passing` or `unknown`), the commit it judged, the SHA-256 of the task's line and the instant. Written by the write
-  job alone, read by the cutter ([cutter.md](cutter.md), "The proof at the tip"); a run pinned to an older commit of
-  the hive neither writes nor reads it.
+  `passing` or `unknown`), the commit it judged, the SHA-256 of the task's line, the instant and how many runs in a
+  row gave it. Written by the write job alone, read by the cutter ([cutter.md](cutter.md), "The proof at the tip");
+  a run pinned to an older commit of the hive neither writes nor reads it.
 
 A task the judge keeps refusing asks for a stronger worker: the feed gives a `hint` that rises by one for every
 three different members refused, among those the judge has accepted something from. It is a hint for people;

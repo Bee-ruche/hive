@@ -3251,6 +3251,9 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
         if state["down"]:
             return None
         code = ask(tip, tree_of(repo, tip), task, tip, f"{task['id']}: the tip as a candidate", question=True)["code"]
+        if code not in (0, 1):
+            log(f"{task['id']}: the judge could not judge the tip as a candidate for it (the task names a piece it does not know, or its "
+                "machine fails): « unknown », asked again in a day")
         return {1: "failing", 0: "passing"}.get(code, "unknown")
     verdict_of.machine_down = lambda: state["machine"]  # (for the run's own account of itself: judge_plan)
     verdict_of.about_the_tip = about_the_tip
@@ -3268,7 +3271,7 @@ def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, no
     answered: {task id: « failing », « passing » or « unknown »}, all about the plan's tip."""
     instant, plan_ = read_plan(plan_, config)
     ledger.append(settle(ledger, instant, landings(repo, plan_["tip"], ledger, instant)), write=False)
-    questions = tip_questions(repo, config, tasks, backlog, ledger.done(), plan_["tip"], answers or {}) if backlog else []
+    questions = tip_questions(repo, config, tasks, backlog, ledger.done(), plan_["tip"], answers or {}, integrations(ledger), instant) if backlog else []
     probe = Path(tempfile.mkdtemp(prefix="tip-", dir=workdir))
     try:
         materialize(repo, tree_of(repo, plan_["tip"]), probe / "tip")  # a tip the hive cannot write stops the run, loudly
@@ -3579,7 +3582,8 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
         # About the plan's tip (the commit the branch was at when this step started), whatever this run integrated
         # since: the cutter reads an answer at a later tip only where the rule of proof_holds carries it there.
         planned = planned_questions(config, tasks, backlog, ledger.done(), tip_paths(repo, tip))
-        write_tip_answers(state_folder, tip, backlog, tasks, planned, tip_answers_held(tip, planned, tip_answers), instant)
+        write_tip_answers(repo, state_folder, tip, backlog, tasks, planned, tip_answers_held(tip, planned, tip_answers), instant,
+                          integrations(ledger), config)
     write_state(state_folder, "feed.json", build_feed(config, tasks, ledger, reached, plan_))
     write_state(state_folder, "stats.json", build_stats(ledger))
     if checkpoint:
@@ -4201,7 +4205,8 @@ def cmd_judge(args):
                           "tip": {"commit": checked["tip"], "answers": notes.get("tip") or {}}})
     print(f"{len(outcomes)} candidate(s), {len(verdicts)} judged, {sum(1 for o in outcomes if o['result'] == 'accepted')} accepted"
           + (f"; the tip as a candidate for {len(notes['tip'])} planned task(s): "
-             + ", ".join(f"{task_id} {answer}" for task_id, answer in sorted(notes["tip"].items())) if notes.get("tip") else ""))
+             + ", ".join(f"{task_id} {answer}" for task_id, answer in sorted(notes["tip"].items())) if notes.get("tip") else "")
+          + (f"; {BACKLOG_FILE} cannot be read: nothing is asked about the tip" if unread else ""))
 
 
 def cmd_image(args):
@@ -4285,6 +4290,8 @@ def cmd_apply(args):
     handed = handed if isinstance(handed, dict) else {}
     state = Path(args.state)
     backlog, unread = backlog_at(args.repo, planned_settings(made), config, tasks)
+    if unread and config["judge"]["kind"] in TIP_KINDS:
+        log(f"{BACKLOG_FILE} cannot be read: the state's {TIP_FILE} is left as it is")
     outcomes, tip = apply(args.repo, args.remote, made, handed.get("answers"), config, tasks, Ledger(state), state, checkpoint=checkpoint,
                           started=handed.get("started") or (), backlog=None if unread else backlog, tip_answers=handed.get("tip"))
     print(f"{sum(1 for o in outcomes if o['result'] == 'accepted')} integrated, tip {tip}")
@@ -4514,7 +4521,8 @@ def cmd_cut_check(args):
     live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
     tip = work_tip(args.repo, config)
     paths = tip_paths(args.repo, tip)
-    shown = shown_at_the_tip(args.repo, args.state, config, published, {t: task for t, task in proposal.items() if t not in published}, tip)
+    shown = shown_at_the_tip(args.repo, args.state, config, {t: task for t, task in proposal.items() if t not in published}, tip,
+                             integrations(ledger))
     judged, passing = ({t for t, answer in shown.items() if answer == word} for word in ("failing", "passing"))
     failing = set(args.failing or ())
     refusals = cut_check(config, published, proposal, live, ledger.done(), paths, judged | failing, passing)
@@ -4702,7 +4710,8 @@ def cmd_cut(args):
     live, done = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}, ledger.done()
     tip = work_tip(args.repo, config)
     paths, word = tip_paths(args.repo, tip), set(args.failing or ())
-    shown = shown_at_the_tip(args.repo, args.state, config, published, {t: task for t, task in backlog.items() if t not in published}, tip)
+    shown = shown_at_the_tip(args.repo, args.state, config, {t: task for t, task in backlog.items() if t not in published}, tip,
+                             integrations(ledger))
     judged, passing = ({t for t, answer in shown.items() if answer == kind} for kind in ("failing", "passing"))
     failing = judged | word
     proposal, said = cut(config, published, backlog, tally(published, lines, instant), live, done, paths, failing, passing)
@@ -4762,13 +4771,23 @@ def backlog_at(repo, commit, config, published):
 # planned tasks it finds itself (tip_answers_held) and writes it to the state (write_tip_answers), with its own right
 # to write that branch; the cutter's gate reads it there (shown_at_the_tip), at the tip the answer was given at, or at
 # a later tip the answer still holds at (proof_holds). Ids, codes and commits only: no text.
+#
+# A refusal can come from the judge's own limits as well as from the unit (a run that passes its time on a slow
+# machine): harmless for a candidate, which only loses its turn, but a task published on a false « failing » would be
+# accepted for nothing. So « failing » proves only once two runs in a row said it (TIP_AGREE); « passing », which only
+# keeps a task back, acts at once.
 
 TIP_FILE = "tip.json"  # in the state: for each planned task « correct », the judge's latest answer about the tip judged as a candidate for it
 TIP_ASKS = 2  # the most planned tasks one run asks about (each costs a judgement's time); the others wait for the next run
 TIP_ANSWERS = ("failing", "passing", "unknown")  # the judge refused the tip as a candidate (1), found it correct (0), failed to judge (2)
 TIP_KINDS = ("reference",)  # the kinds that can answer: the common judge compares a candidate with the tip, which always passes against itself
-TIP_FILE_BYTES = 4 << 20  # a state's TIP_FILE larger than this is not read
+TIP_AGREE = 2  # « failing » proves once this many runs in a row gave it, each at a tip where the answer before it still held
+TIP_UNKNOWN_HOURS = 24  # an « unknown » that still holds at the tip is asked again only this long after it was given
+TIP_ENTRIES = 5000  # the most answers the state keeps (the latest): a planned task beyond them is asked again
+TIP_RUNS_MOST = 1_000_000  # what the count of runs in a row an entry gives may say at most
+TIP_FILE_BYTES = 4 << 20  # a state's TIP_FILE larger than this is not read (TIP_ENTRIES entries weigh far less)
 TIP_CHANGES_BYTES = 1 << 20  # what the list of the paths that differ between two tips may weigh, for an answer to be carried across it
+TIP_COMMITS = 1000  # the most commits between two tips, for an answer to be carried across them
 
 
 def line_digest(task):
@@ -4778,18 +4797,23 @@ def line_digest(task):
     return hashlib.sha256(text.encode()).hexdigest() if text is not None else None
 
 
+TIP_KEYS = ("tip", "line", "answer", "at", "runs")
+
+
 def tip_entry_ok(task_id, entry):
     return (isinstance(task_id, str) and bool(TASK_ID.match(task_id)) and isinstance(entry, dict) and is_sha(entry.get("tip"))
             and isinstance(entry.get("line"), str) and bool(re.fullmatch(r"[0-9a-f]{64}", entry["line"]))
-            and isinstance(entry.get("answer"), str) and entry["answer"] in TIP_ANSWERS and stamp(entry.get("at")))
+            and isinstance(entry.get("answer"), str) and entry["answer"] in TIP_ANSWERS and stamp(entry.get("at"))
+            and type(entry.get("runs")) is int and 1 <= entry["runs"] <= TIP_RUNS_MOST)
 
 
 def read_tip_answers(folder):
-    """{task id: {"tip", "line", "answer", "at"}}: the judge's latest answer about the tip for each planned task, as the
-    state's TIP_FILE holds it: the commit it judged, the digest of the task's line (line_digest), the answer and its
-    instant. The state is public: what it holds is read back as untrusted data, and an entry that is not exactly of
-    that shape is left out (a key more is not read). A state without the file (a project whose run is pinned to a
-    commit of the hive older than it, or whose judge cannot answer) holds no answer, and nothing else changes."""
+    """{task id: {"tip", "line", "answer", "at", "runs"}}: the judge's latest answer about the tip for each planned task,
+    as the state's TIP_FILE holds it: the commit it judged, the digest of the task's line (line_digest), the answer, its
+    instant, and how many runs in a row gave it (each at a tip where the answer before it still held). The state is
+    public: what it holds is read back as untrusted data, and an entry that is not exactly of that shape is left out (a
+    key more is not read). A state without the file (a project whose run is pinned to a commit of the hive older than
+    it, or whose judge cannot answer) holds no answer, and nothing else changes."""
     path = Path(folder) / TIP_FILE
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > TIP_FILE_BYTES:
@@ -4800,8 +4824,14 @@ def read_tip_answers(folder):
         return {}
     if not isinstance(data, dict):
         return {}
-    return {task_id: {key: entry[key] for key in ("tip", "line", "answer", "at")} for task_id, entry in data.items()
-            if tip_entry_ok(task_id, entry)}
+    return {task_id: {key: entry[key] for key in TIP_KEYS} for task_id, entry in data.items() if tip_entry_ok(task_id, entry)}
+
+
+def integrations(ledger):
+    """{commit: task}: the commits the hive itself integrated on the project's branch, as the ledger's acceptances name
+    them (a candidate's, or a commit a guardian admitted). Each changes only its own task's files: the hive checked it
+    before it judged."""
+    return {e["commit"]: e.get("task") for e in ledger.events if e.get("type") == "verdict" and e.get("result") == "accepted" and is_sha(e.get("commit"))}
 
 
 def changed_between(repo, old, new, diffs):
@@ -4817,46 +4847,64 @@ def changed_between(repo, old, new, diffs):
     return diffs[(old, new)]
 
 
-def proof_holds(repo, entry, task, tip, others, config, diffs=None):
+def commits_between(repo, old, new, diffs):
+    """The commits reachable from `new` and not from `old` (a list), or None when git cannot tell, or when they are
+    more than TIP_COMMITS: then no answer is carried from one to the other. Kept in `diffs`."""
+    if ("commits", old, new) not in diffs:
+        try:
+            listed = git_capped(repo, "rev-list", f"--max-count={TIP_COMMITS + 1}", f"^{need_sha(old)}", need_sha(new), limit=(TIP_COMMITS + 1) * 41)
+        except HiveError:
+            listed = None
+        commits = None if listed is None else listed.decode("ascii", errors="replace").split()
+        diffs[("commits", old, new)] = commits if commits is not None and len(commits) <= TIP_COMMITS and all(map(is_sha, commits)) else None
+    return diffs[("commits", old, new)]
+
+
+def proof_holds(repo, entry, task, tip, integrated, config, diffs=None):
     """True if the judge's answer about the tip in `entry`, given at commit entry["tip"], is an answer about this task's
     line (line_digest) at `tip`. It is when the two commits are one; or when entry["tip"] is an ancestor of `tip` and
-    the tip moved from it only by what contributions to other tasks bring: every path that differs between the two is
-    a file another task of the project names (`others`: the « files » of the published tasks but this one), under no
-    path the project protects, and none of this task's own files. A kind of TIP_KINDS judges a task from its own files
-    and from the project's own tree beside them (its reference, its skeleton, its judge), which no task names: a
-    contribution to another task changes none of it, and anything else may change the answer (this task's files; the
-    judge, the reference or the skeleton; a file no task names, which only a maintainer's commit changes). Then the
-    answer is no proof, and the judge is asked again at the tip as it is."""
+    the tip moved from it by the hive's own integrations of other tasks alone: every commit between the two is one the
+    ledger records as an accepted contribution to another task (`integrated`: integrations), and no path that differs
+    between the two is one of this task's own files (a task cut again names its parent's), or a path the project
+    protects. A kind of TIP_KINDS judges a task from its own files and from the project's own tree beside them (its
+    reference, its skeleton, its judge), which a contribution to another task never changes: the hive refuses any
+    contribution that changes a path outside its own task's files. Anything else may change the answer (this task's
+    files; a maintainer's commit, a merge, whatever it touches; a commit of another line of history, or one the clone
+    does not hold). Then the answer is no proof, and the judge is asked again at the tip as it is."""
     if entry.get("line") != line_digest(task):
         return False
     if entry["tip"] == tip:
         return True
     if git(repo, "merge-base", "--is-ancestor", need_sha(entry["tip"]), need_sha(tip), check=False).returncode != 0:
         return False  # (another line of history, or a commit this clone does not hold)
-    changed = changed_between(repo, entry["tip"], tip, {} if diffs is None else diffs)
-    return changed is not None and all(not in_task_files(path, task["files"]) and not protected(path, config["protected"])
-                                       and any(in_task_files(path, files) for files in others) for path in changed)
+    diffs = {} if diffs is None else diffs
+    commits = commits_between(repo, entry["tip"], tip, diffs)
+    if commits is None or not all(integrated.get(commit) not in (None, task["id"]) for commit in commits):
+        return False
+    changed = changed_between(repo, entry["tip"], tip, diffs)
+    return changed is not None and all(not in_task_files(path, task["files"]) and not protected(path, config["protected"]) for path in changed)
 
 
-def tip_status(repo, answers, task, tip, published, config, diffs=None):
+def tip_status(repo, answers, task, tip, integrated, config, diffs=None):
     """« failing » or « passing » when the judge's latest answer about the tip, for this task (`answers`: read_tip_answers),
-    holds at `tip` (proof_holds); None otherwise: the judge was not asked, could not say, or answered at a tip it no
-    longer holds at."""
+    holds at `tip` (proof_holds) and proves: « passing » at once, « failing » once TIP_AGREE runs in a row gave it. None
+    otherwise: the judge was not asked, could not say, said « failing » once only, or answered at a tip it no longer
+    holds at."""
     entry = answers.get(task["id"])
-    if entry is None or entry["answer"] == "unknown":
+    if entry is None or entry["answer"] == "unknown" or (entry["answer"] == "failing" and entry["runs"] < TIP_AGREE):
         return None
-    others = [other["files"] for task_id, other in published.items() if task_id != task["id"]]
-    return entry["answer"] if proof_holds(repo, entry, task, tip, others, config, diffs) else None
+    return entry["answer"] if proof_holds(repo, entry, task, tip, integrated, config, diffs) else None
 
 
-def shown_at_the_tip(repo, state_folder, config, published, tasks, tip):
+def shown_at_the_tip(repo, state_folder, config, tasks, tip, integrated):
     """{task id: « failing » or « passing »}: what the judge's answers about the tip, in the state, show of these tasks
-    whose goal is « correct » at `tip`, the commit of the branch the hive writes (tip_status). What the cutter's
-    deterministic rules (cut) and its gate (cut_check) take as the proof that a task fails at the tip, or passes there."""
+    whose goal is « correct » at `tip`, the commit of the branch the hive writes (tip_status; `integrated`: the
+    ledger's integrations). What the cutter's deterministic rules (cut) and its gate (cut_check) take as the proof that
+    a task fails at the tip, or passes there."""
     answers, diffs, shown = read_tip_answers(state_folder), {}, {}
     for task_id, task in tasks.items():
         if (task.get("goal") or {"kind": "correct"}).get("kind") != "metric":
-            status = tip_status(repo, answers, task, tip, published, config, diffs)
+            status = tip_status(repo, answers, task, tip, integrated, config, diffs)
             if status:
                 shown[task_id] = status
     return shown
@@ -4877,14 +4925,22 @@ def planned_questions(config, published, backlog, done, paths):
             and not any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"])}
 
 
-def tip_questions(repo, config, published, backlog, done, tip, answers):
+def tip_questions(repo, config, published, backlog, done, tip, answers, integrated, instant):
     """The planned tasks the judging job asks about in this run, at most TIP_ASKS: among planned_questions, those for
-    which no answer of the judge holds at the tip (tip_status), the ones never asked first, then the one asked longest
-    ago, in the backlog's order between equals. A task the judge cannot answer (« unknown ») is asked again at a later
-    run, after the others: it holds no place for ever. Beyond the bound, the rest wait for the next run."""
-    planned, diffs = planned_questions(config, published, backlog, done, tip_paths(repo, tip)), {}
-    waiting = [(answers[task_id]["at"] if task_id in answers else "", position, task) for position, (task_id, task) in enumerate(planned.items())
-               if tip_status(repo, answers, task, tip, published, config, diffs) is None]
+    which no answer of the judge proves at the tip (tip_status; a « failing » said once is asked again, to be said a
+    second time or not), the ones never asked first, then the one asked longest ago, in the backlog's order between
+    equals. A task the judge could not answer (« unknown ») is asked again once that answer no longer holds (a change to
+    the judge, for one), or TIP_UNKNOWN_HOURS after it was given: it costs a judgement a day at most, and holds no
+    place for ever. Beyond the bound, the rest wait for the next run."""
+    planned, diffs, waiting = planned_questions(config, published, backlog, done, tip_paths(repo, tip)), {}, []
+    for position, (task_id, task) in enumerate(planned.items()):
+        entry = answers.get(task_id)
+        if tip_status(repo, answers, task, tip, integrated, config, diffs) is not None:
+            continue
+        if (entry is not None and entry["answer"] == "unknown" and instant < parse_iso(entry["at"]) + dt.timedelta(hours=TIP_UNKNOWN_HOURS)
+                and proof_holds(repo, entry, task, tip, integrated, config, diffs)):
+            continue
+        waiting.append((entry["at"] if entry else "", position, task))
     return [task for _, _, task in sorted(waiting, key=lambda item: item[:2])[:TIP_ASKS]]
 
 
@@ -4905,14 +4961,20 @@ def tip_answers_held(tip, planned, handed):
     return dict(answers)
 
 
-def write_tip_answers(state_folder, tip, backlog, published, planned, held, instant):
+def write_tip_answers(repo, state_folder, tip, backlog, published, planned, held, instant, integrated, config):
     """Writes the state's TIP_FILE: the answers it held, each task's entry replaced by the one `held` gives (about
     `tip`, for that task's line as `planned` holds it), and only for tasks the backlog still plans and the project has
-    not published: an answer about a task published, or planned no more, proves nothing to anyone. Whole or not at all."""
-    kept = {task_id: entry for task_id, entry in read_tip_answers(state_folder).items() if task_id in backlog and task_id not in published}
+    not published: an answer about a task published, or planned no more, proves nothing to anyone. An answer the entry
+    before it gave too, at a tip where it still holds now (proof_holds), counts one run more; any other starts at one.
+    The latest TIP_ENTRIES are kept. Whole or not at all."""
+    kept, diffs = {task_id: entry for task_id, entry in read_tip_answers(state_folder).items() if task_id in backlog and task_id not in published}, {}
     for task_id, answer in held.items():
-        kept[task_id] = {"tip": tip, "line": line_digest(planned[task_id]), "answer": answer, "at": iso(instant)}
-    write_state(state_folder, TIP_FILE, kept)
+        before = kept.get(task_id)
+        again = before is not None and before["answer"] == answer and proof_holds(repo, before, planned[task_id], tip, integrated, config, diffs)
+        kept[task_id] = {"tip": tip, "line": line_digest(planned[task_id]), "answer": answer, "at": iso(instant),
+                         "runs": min(before["runs"] + 1, TIP_RUNS_MOST) if again else 1}
+    latest = sorted(kept, key=lambda task_id: (kept[task_id]["at"], task_id), reverse=True)[:TIP_ENTRIES]
+    write_state(state_folder, TIP_FILE, {task_id: kept[task_id] for task_id in latest})
 
 
 OUTLINE_SUFFIXES = (".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".rs", ".go")  # the files whose functions the outline finds
