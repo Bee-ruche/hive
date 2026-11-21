@@ -268,7 +268,7 @@ the hive runs those git commands with an empty attribute source.
 | --- | --- | --- | --- | --- |
 | `plan` | the project's token, to read | no | **yes, once** | reads the project's settings at its published branch's tip, and names that commit; reads the forks; decides the deals whose time is up, the candidates and the new deals; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
 | `record` | the project's token, to write its branch `hive-state` | no | no | checks that the plan is the one `plan` published, and that the published branch is still at the plan's commit; writes the plan's deals and the feed, **within minutes of the run's start** |
-| `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer**; then, for a judge that can tell, judges the plan's tip itself as a candidate for at most two planned tasks « correct », for the cutter ([cutter.md](cutter.md), "The proof at the tip") |
+| `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer**; in a run whose plan holds no candidate, for a judge that can tell, judges the plan's tip itself as a candidate for at most two planned tasks « correct », for the cutter ([cutter.md](cutter.md), "The proof at the tip") |
 | `apply` | the project's token, to write its branch for the hive and `hive-state` | no | no | checks the plan, and that the published branch is still at the plan's commit; derives every commit by itself; looks each one up in the judge's table; pushes; records; writes the judge's answers about the tip to the state, held to the planned tasks it finds itself |
 
 - **The forks are read once.** What the plan read is what the run is about: a branch taken away or pushed after
@@ -281,10 +281,15 @@ the hive runs those git commands with an empty attribute source.
   it, and so decide which candidates are accepted among those that keep every structural rule. That is its limit:
   it cannot name a candidate, a member, a task or a path, decide who is dealt what, credit an account for work
   that is not in its fork, change history, or write anything but the project's listed figures, as numbers, into
-  the ledger. It can lie in the same way about what the judge said of the plan's tip judged as a candidate for a
-  planned task, and say nothing else: the write job keeps such answers only about the plan's tip, for at most two
-  planned tasks it finds itself the run could have asked about, as one of three words. The judge's container is
-  what stands between a contribution and that job.
+  the ledger. The judge's container is what stands between a contribution and that job.
+- **The judging job of a run whose plan holds no candidate asks about the tip** ([cutter.md](cutter.md), "The proof at
+  the tip"): it builds and runs again, outside any member's judgement, the units the tip holds, which are the work of
+  volunteers the judge accepted. One that broke out of its container there could make the job lie about the tip, for
+  the questions due in that run (two at most, about that run's tip, as one of three words), and nothing else: the
+  write job works out itself which questions were due and takes answers for those alone, and takes none in a run with
+  a candidate, so no candidate's code writes one. Two such lies, in two runs six hours apart, would have the cutter
+  publish a task the tip already passes, which a candidate then completes for nothing: the residual risk of the
+  proof, as lying about a verdict is the residual risk of the judging.
 - **The settings are read at one commit for the whole run.** The plan names the commit of the project's published
   branch it read the settings and the tasks at; the judging job reads them there, and judges nothing when its own clone
   of the project is at another commit (the branch moved since the plan); the jobs that write read them
@@ -317,8 +322,9 @@ the hive runs those git commands with an empty attribute source.
   writes answers exactly as the project's reference does, on cases drawn when it is judged. In both, candidate
   code builds and runs only in a container without network, and the verdict is derived on the host. Whatever the
   kind, code 0 is correct, 1 a refusal, 2 a failure to judge, and the project's tip judged against itself is
-  answered 0. Another question is asked of the reference kind alone: the tip judged **as a candidate** for a task,
-  where the unit the tip holds is built and run as a candidate's is. Its answer is no verdict and moves nobody: it
+  answered 0. Another question is asked of the reference kind alone, in a run whose plan holds no candidate: the tip
+  judged **as a candidate** for a task, where the unit the tip holds is built and run as a candidate's is. Its answer
+  is no verdict and moves nobody: it
   tells the project's cutter whether a planned task « correct » fails at the tip ([cutter.md](cutter.md), "The proof
   at the tip").
 - **A project's settings are its own, and name it.** `hive/project.json`, in the project's repository, names that
@@ -671,9 +677,9 @@ The hive's files there:
 - `tip.json`, in a project whose judge answers about the tip (the reference kind): for each planned task « correct »
   of the backlog, the judge's latest answer when the tip itself was judged as a candidate for it (`failing`,
   `passing` or `unknown`), the commit it judged, the SHA-256 of the task's line, the instant, how many runs in a row
-  gave it and the key of the last. Written by the write job alone, read by the cutter ([cutter.md](cutter.md), "The
-  proof at the tip");
-  a run pinned to an older commit of the hive neither writes nor reads it.
+  gave it, the key of the last, and digests of what judged. Written by the write job alone, in a run whose plan holds
+  no candidate, read by the cutter ([cutter.md](cutter.md), "The proof at the tip"); a run pinned to an older commit of
+  the hive neither writes nor reads it.
 
 A task the judge keeps refusing asks for a stronger worker: the feed gives a `hint` that rises by one for every
 three different members refused, among those the judge has accepted something from. It is a hint for people;
