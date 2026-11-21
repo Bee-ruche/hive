@@ -13948,6 +13948,7 @@ class TestTheTipAsACandidate(Base):
                                                         "run": self.v.made["key"], "tools": tools, "settings": settings}}, "ids, codes, commits, digests")
         self.assertEqual(self.cut()["waiting"][0], {"id": "leaf-0002", "because": "not_shown_failing"}, "said once: no proof yet")
         self.assertEqual(self.run_leaves(at=LATER), {}, "not asked again within six hours")
+        self.assertEqual(self.run_leaves(at="2026-11-12T17:59:59Z"), {}, "nor a second before")
         self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {"leaf-0002": "failing"}, "asked again six hours on")
         self.assertEqual(self.entry()["runs"], 2)
         self.assertEqual(self.run_leaves(at=A_DAY_ON), {}, "a « failing » that proves is not asked for again")
@@ -14079,6 +14080,9 @@ class TestTheTipAsACandidate(Base):
         self.assertEqual(hive.judge_identity(self.v.registry, config), (tools, settings), "a test of the judge judges nothing")
         (judges / "reference.py").write_text("# the judge\n")
         self.assertNotEqual(hive.judge_identity(self.v.registry, config)[0], tools, "a judge program changed")
+        with mock.patch.object(hive, "REFERENCE_CALL", hive.common_judge):
+            called = hive.judge_identity(self.v.registry, config)[0]
+        self.assertNotEqual(called, hive.judge_identity(self.v.registry, config)[0], "the hive's call of the judge changed")
         self.assertNotEqual(hive.judge_identity(self.v.registry, {**config, "judge": {**config["judge"], "timeout_seconds": 60}})[1], settings,
                             "the project's judge settings changed")
         line = planned_leaf(2, ["src/a.c"])
@@ -14096,6 +14100,12 @@ class TestTheTipAsACandidate(Base):
         self.assertEqual(self.shown(line), {"leaf-0002": "failing"}, "the cutter cannot tell the hive's commit the run uses")
         self.assertEqual(self.run_leaves(at=A_DAY_ON), {"leaf-0002": "failing"}, "the run asks again under the judge that changed")
         self.assertEqual(self.entry()["runs"], 1, "and counts from one")
+        # the newest answer names the judge of the latest run that asked: an answer under another is set aside
+        newer = {**self.entry(), "answer": "unknown", "runs": 1}
+        (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": proven, "leaf-0003": newer}))
+        self.assertEqual(self.shown(line), {}, "a newer answer given under another judge sets the older ones aside")
+        (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": proven, "leaf-0003": {**newer, "tools": proven["tools"]}}))
+        self.assertEqual(self.shown(line), {"leaf-0002": "failing"}, "under the same judge it stands")
 
     def test_what_the_judging_step_says_of_the_tip_is_believed_only_for_the_questions_that_were_due(self):
         """The judging job runs the tip's code: what it hands over about the tip is held, whole or not at all, to what it
@@ -14133,7 +14143,10 @@ class TestTheTipAsACandidate(Base):
                "leaf-0010": {**good, "runs": 0}, "leaf-0011": {**good, "runs": True}, "leaf-0012": {**good, "runs": "2"},
                "leaf-0013": {**good, "run": "a run"}, "leaf-0014": {**good, "at": "2026-02-30T12:00:00Z"},
                "leaf-0015": {key: value for key, value in good.items() if key != "at"}, "leaf-0016": {**good, "at": None},
-               "leaf-0017": {**good, "at": 7}, "leaf-0018": {**good, "tools": None}, "leaf-0019": {**good, "settings": "S" * 64}}
+               "leaf-0017": {**good, "at": 7}, "leaf-0018": {**good, "tools": None}, "leaf-0019": {**good, "settings": "S" * 64},
+               "leaf-0020": {**good, "runs": -1}, "leaf-0021": {**good, "runs": hive.TIP_RUNS_MOST + 1},
+               "leaf-0022": {**good, "at": "1999-12-31T23:59:59Z"}, "leaf-0023": {**good, "at": "3000-01-01T00:00:00Z"},
+               "leaf-0024": {**good, "line": "a" * 64 + "\n"}, "leaf-0025": {**good, "tip": good["tip"] + "\n"}}
         (self.v.state / hive.TIP_FILE).write_text(json.dumps({"leaf-0002": {**good, "more": 1}, **bad}))
         self.assertEqual(hive.read_tip_answers(self.v.state), {"leaf-0002": good})
         for name, content in (("not a table", "[]"), ("nested past what a reader takes", "[" * 100000), ("not JSON", "{"),
@@ -14173,6 +14186,22 @@ class TestTheTipAsACandidate(Base):
         self.assertFalse((self.v.state / hive.TIP_FILE).exists(), "no answer written, and no file made")
         self.assertEqual(self.run_leaves(), {"leaf-0002": "failing"}, "the next run, with no candidate, asks")
         self.assertEqual(self.entry()["tip"], self.v.made["tip"])
+
+    def test_a_run_in_which_a_member_holds_a_task_asks_nothing(self):
+        """A member who holds a task may push its candidate at any moment: a run then asks nothing, so that the questions
+        never keep that candidate waiting behind them. An empty backlog asks nothing and leaves the answers as they are."""
+        line = planned_leaf(2, ["src/a.c"])
+        self.plan_backlog(line)
+        vera = self.v.fork("vera", 201)
+        self.v.deal(vera, "leaf-0001")  # (dealt an hour ago: live until three hours after)
+        self.assertEqual((self.run_leaves(), judge_of_leaves.asked), ({}, []))
+        self.assertFalse((self.v.state / hive.TIP_FILE).exists())
+        self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {"leaf-0002": "failing"}, "once the deal is over, the run asks")
+        answered = self.written()
+        (self.v.published / hive.BACKLOG_FILE).write_text("")
+        self.v.publish()
+        self.assertEqual(self.run_leaves(at=A_DAY_ON), {})
+        self.assertEqual(self.written(), answered, "a backlog that plans nothing changes nothing of the answers")
 
     def test_the_proof_at_the_tip_never_stops_members_work(self):
         """The proof at the tip is an extra. In a run with a candidate none of its code runs, and the candidate is judged,
@@ -14241,6 +14270,7 @@ class TestTheTipAsACandidate(Base):
             self.assertEqual(self.run_leaves(), {"leaf-0005": "unknown"}, "one never asked; those said failing wait six hours")
         self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {"leaf-0002": "failing", "leaf-0003": "failing"}, "one the judge could not answer waits a day")
         self.assertEqual(self.run_leaves(at=SIX_HOURS_ON), {}, "the others prove, and the « unknown » is not a day old")
+        self.assertEqual(self.run_leaves(at="2026-11-13T11:59:59Z"), {}, "nor a second before a day")
         with mock.patch("sys.stderr"):
             self.assertEqual(self.run_leaves(at=A_DAY_ON), {"leaf-0005": "unknown"}, "a day later")
         # among the tasks asked before, the one asked longest ago first
@@ -14323,14 +14353,19 @@ REGISTRY = Path(os.environ.get("HIVE_REGISTRY") or Path(hive.__file__).resolve()
 class TestTheToolsNames(unittest.TestCase):
     def test_no_name_is_given_twice_at_the_top_of_the_tool(self):
         """A constant or a function given a second time further down the file replaces the first for every reader of
-        it, without a word: each top-level name of hive.py is given once."""
+        it, without a word: each name hive.py defines at its top (a function, a class, a name assigned, alone or among
+        others) is defined once. (An import that a fallback replaces, in a « try », is the one way two are meant.)"""
         import ast
         given = []
+
+        def names(target):
+            return [target.id] if isinstance(target, ast.Name) else [n for t in getattr(target, "elts", ()) for n in names(t)]
         for node in ast.parse(Path(hive.__file__).read_text(encoding="utf-8")).body:
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 given.append(node.name)
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                given += [target.id for target in (node.targets if isinstance(node, ast.Assign) else [node.target]) if isinstance(target, ast.Name)]
+                given += [n for target in (node.targets if isinstance(node, ast.Assign) else [node.target]) for n in names(target)]
+        self.assertGreater(len(given), 300)
         self.assertEqual(sorted({name for name in given if given.count(name) > 1}), [])
 
 

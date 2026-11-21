@@ -135,8 +135,8 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
 
 1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
 2. **The deterministic cutter** applies its rules ("The deterministic cutter", above). A planned task « correct » is
-   published at the first cycle after two runs of the project's hive with no candidate, six hours apart at least,
-   judged the tip as a candidate for it and saw it fail ("The proof at the tip"): the cutter runs nothing of the
+   published at the first cycle after two quiet runs of the project's hive (no candidate, no task held), six hours
+   apart, judged the tip as a candidate for it and saw it fail ("The proof at the tip"): the cutter runs nothing of the
    project, and waits for that answer.
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
      refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
@@ -224,9 +224,10 @@ already would be accepted for nothing. Its proof is a run of the judge, not the 
 nothing of the project: its machine may hold no Docker, and it holds the right to publish.
 
 - **Where the judge runs.** In the project's own hive run, in the judging job (`hive.py judge`), which holds no secret
-  and runs the tip's code in containers without network, **and only in a run whose plan holds no candidate**: no
-  candidate's code has run in that job before the questions, and no member waits for them. Under a steady flow of
-  candidates the proof waits for a quiet run, and the architect's word (`--failing`) stays. The job judges **the
+  and runs the tip's code in containers without network, **and only in a quiet run**: one whose plan holds no
+  candidate, and in which no member holds a task. No candidate's code has run in that job before the questions, and
+  no candidate can come while they are asked. A busy project, or one where a member always holds a task, has no quiet
+  run: its proofs wait, and the architect's word (`--failing`) stays. The job judges **the
   plan's tip itself as a candidate** for planned tasks: the tip's own tree, written out as a candidate's is, judged
   as a candidate's is. For the reference judge that is the tip's own files of the unit, built and run as a
   candidate's would be, on cases drawn then ([reference-judge.md](reference-judge.md)). No question is started that
@@ -261,7 +262,7 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
   words, whole or not at all; in a run with a candidate it takes none. So a write step run again on the same plan,
   even after a later run wrote, takes nothing: at its plan's instant, the question it answered is not due. What the
   state holds is read back as data: an entry of any other shape is no answer.
-- **What a judging job taken over can do to it, and what it cannot.** The judging job of a run without candidates
+- **What a judging job taken over can do to it, and what it cannot.** The judging job of a quiet run
   builds and runs the units the tip holds, in containers without network: the work of volunteers the judge accepted,
   now built and run again outside any member's judgement. A unit that broke out of its container there could make the
   job lie about the tip: say `failing`, `passing` or `unknown` for the questions due in that run (two at most), about
@@ -277,14 +278,16 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
   from which the tip moved by the hive's own integrations of other tasks alone: every commit between the two is one
   the ledger records as an accepted contribution to another task, and no path that differs between the two is one of
   the task's own files (a task cut again names its parent's) or a protected path. A judge of the reference kind judges
-  a unit from its own files and from the project's tree beside them (its reference, its skeleton, its judge), and the
-  hive refuses any contribution that changes a path outside its own task's files: such a contribution changes none of
-  that. Anything else leaves no proof: a maintainer's commit or a merge, whatever it touches; the task's own files; a
-  commit of another line of history, or one the clone does not hold; more commits or changes than the tool reads;
-  another judge. The run then asks again at the tip as it is. The cutter holds an answer to the project's judge
-  settings as its file says them now; which commit of the hive the project's run uses, it cannot tell: an answer
-  given under the judge of an older pin is taken until the project's next run asks again under the new one. A
-  project whose judge cannot answer reads no answer.
+  a unit from its own files and from the project's tree beside them (its reference, its skeleton, its judge). The hive
+  refuses any contribution that changes a path outside its own task's files, and the reference judge takes a task whose
+  files are exactly its unit's, which it never reads when it judges another unit: a contribution to another task
+  changes nothing of this one's judgement. Anything else leaves no proof: a maintainer's commit or a merge, whatever it
+  touches; the task's own files; a commit of another line of history, or one the clone does not hold; more commits or
+  changes than the tool reads; another judge. The run then asks again at the tip as it is. The cutter holds an answer
+  to the project's judge settings as its file says them now, and to the judge programs of the newest answer in the
+  state: which commit of the hive the project's run uses, it cannot tell, and the newest answer comes from the latest
+  run that asked. After the project changes the commit its caller names, the first quiet run sets aside every answer
+  given under the judge before; until then they stand. A project whose judge cannot answer reads no answer.
 - **`--failing`** stays the architect's manual way: the architect runs the project's check at the tip, in the judge's
   container, and gives their word. The gate prints it as before. A run of the judge that showed the tip passes the
   task wins over it.
@@ -294,9 +297,9 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
 - **The proof is an extra.** Whatever fails in it (a backlog or a `tip.json` it cannot read, the judge, the state) is
   said in the job's log, in the tool's own words and the error's kind, and the run goes on without it: the members'
   candidates are judged, integrated and recorded as before.
-- **What it costs.** Two judgements at most per run without candidates, and nothing in a run with one. The project's
-  runs go one at a time: a run queued behind one that asks waits for those judgements (the project's
-  `judge.timeout_seconds` each at most) before it starts.
+- **What it costs.** Two judgements at most per quiet run, and nothing in any other. The project's runs go one at a
+  time: a run queued behind one that asks waits for those judgements (the project's `judge.timeout_seconds` each at
+  most) before it starts. A member who asks for a task while a quiet run asks waits that long more for its deal.
 - **Kinds.** The question is asked only of a judge that can answer it: the reference kind. The common judge compares
   a candidate with the tip, which always passes against itself: a project of that kind (miniz) is asked nothing, its
   goals on figures hold their own proof, and a goal « correct » there is published on the architect's word alone.

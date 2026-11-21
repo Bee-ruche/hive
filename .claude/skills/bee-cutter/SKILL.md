@@ -81,9 +81,9 @@ report its lines.
   `under_the_floor`: the goal cannot go lower). These are yours: cut them again ("Writing tasks").
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
   `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
-  `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's runs
-  without candidates ask, two planned tasks at most per run, and a failure counts once two runs saw it, six hours
-  apart at least), `shown_passing` (a run of the judge showed the tip passes it already: done, or empty; it is asked
+  `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's quiet
+  runs, with no candidate and no task held, ask, two planned tasks at most per run, and a failure counts once two runs
+  saw it, six hours apart at least), `shown_passing` (a run of the judge showed the tip passes it already: done, or empty; it is asked
   again a day later, and the architect clears it at once by changing the line, or takes the line out of the backlog
   when the task is done) and `gate` (a line of the backlog the gate would refuse: the architect mends it), which you
   report. You change no line of the backlog yourself.

@@ -107,8 +107,9 @@ What carries it:
    called workflow's own, where the `github` context is the caller's), stops unless they are `Bee-ruche/hive` at a full
    commit that its main holds (GitHub's compare API: « identical » or « behind »), and checks the code out there.
 5. **The proof at the tip rides on what is there** ([cutter.md](cutter.md), "The proof at the tip"). In a project
-   whose judge can answer it, and in a run whose plan holds no candidate, the judging step judges the plan's tip
-   itself as a candidate for at most two planned tasks « correct », and writes what it saw into `verdicts.json`, which
+   whose judge can answer it, and in a quiet run (its plan holds no candidate, no member holds a task), the judging
+   step judges the plan's tip itself as a candidate for at most two planned tasks « correct », and writes what it saw
+   into `verdicts.json`, which
    `apply` already takes by name (16 MiB at most, as before: two answers weigh a few hundred bytes); `apply` takes
    those answers for the questions it finds were due, and writes them to `tip.json` on `hive-state`, with the token it
    already has. No new step, file between jobs, permission or secret, and the workflow's text is the same. Such a run

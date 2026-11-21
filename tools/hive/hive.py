@@ -21,7 +21,7 @@ shell. Four steps, for four jobs of a workflow; each carries one risk and no mor
   record  writes the plan's deals to the hive's state, so that members see them within minutes. Holds the state's
           write token only; runs nobody's code and talks to no fork.
   judge   runs contributors' code, in the judge's container. Holds no secret and cannot change the plan. Writes
-          the judge's answers by judged commit id; and, in a run whose plan holds no candidate, for a project whose
+          the judge's answers by judged commit id; and, in a quiet run (quiet), for a project whose
           judge can tell (TIP_KINDS), what it answered when the plan's tip itself was judged as a candidate for a few
           of the planned tasks whose goal is « correct » (tip_questions): the proof the cutter's gate takes that such
           a task fails at the tip.
@@ -3267,7 +3267,7 @@ def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, no
     leaves it: a table from the id of each judged commit to the judge's answer, and the ids of the commits it
     started on (so that the one it was on, if it is stopped, can be told from those it never reached).
 
-    In a run whose plan holds no candidate, and given the project's backlog (its planned tasks, read at the plan's
+    In a quiet run (no candidate, no task held: quiet), and given the project's backlog (its planned tasks, read at the plan's
     commit), the judge's answers about the tip the state holds (read_tip_answers) and what judges (identity:
     judge_identity), it asks the judge about the plan's tip itself, judged as a candidate for each of the planned tasks
     tip_questions chooses, in the judging's time, and stops after an answer « unknown » (the judge could not say: its
@@ -3277,7 +3277,7 @@ def judge_plan(repo, plan_, config, tasks, ledger, judge, workdir, save=None, no
     instant, plan_ = read_plan(plan_, config)
     ledger.append(settle(ledger, instant, landings(repo, plan_["tip"], ledger, instant)), write=False)
     questions = []
-    if backlog and identity is not None and not plan_["queue"]:
+    if backlog and identity is not None and quiet(plan_, ledger):
         questions = tip_work("choosing the questions", [], tip_questions, repo, config, tasks, backlog, ledger.done(), plan_["tip"], answers or {},
                              integrations(ledger), instant, identity)
     probe = Path(tempfile.mkdtemp(prefix="tip-", dir=workdir))
@@ -3590,7 +3590,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     and which commits it started on. So a judging step that was taken over can lie about a candidate or stay silent
     about it, and nothing else: it cannot name a candidate, a member, a task or a path, nor who is dealt what.
 
-    In a run whose plan holds no candidate, given the project's backlog at the plan's commit and what judges
+    In a quiet run (no candidate, no task held: quiet), given the project's backlog at the plan's commit and what judges
     (identity: judge_identity), it also writes the judge's answers about the plan's tip (`tip_answers`, the judging
     step's) to the state's TIP_FILE, for the project's cutter (write_tip_answers). It works out itself which questions
     were due, from the same plan, ledger and state as the judging step (tip_questions), and takes answers for those
@@ -3628,7 +3628,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     ledger.append(settle(ledger, instant, landings(repo, tip, ledger, instant), own=plan_["key"]))
     # The questions about the tip that were due in this run, as the judging step chose them: worked out here, before
     # this step records anything, from the plan, its instant, the ledger as the judging step read it and the state.
-    asks = backlog is not None and identity is not None and not plan_["queue"] and config["judge"]["kind"] in TIP_KINDS
+    asks = bool(backlog) and identity is not None and quiet(plan_, ledger) and config["judge"]["kind"] in TIP_KINDS
     due = tip_work("finding the questions that were due", None, lambda: {
         task["id"]: task for task in tip_questions(repo, config, tasks, backlog, ledger.done(), tip, read_tip_answers(state_folder),
                                                    integrations(ledger), planned, identity)}) if asks else None
@@ -4331,8 +4331,9 @@ def cmd_judge(args):
 
 def tip_inputs(repo, commit, config, tasks, registry, plan_):
     """(backlog, identity) for the proof at the tip, in a step of a run whose plan holds no candidate and whose judge can
-    answer (TIP_KINDS): the planned tasks at the plan's commit (backlog_at) and what judges (judge_identity). (None, None)
-    otherwise, when the backlog cannot be read (said in the log), or when anything fails (tip_work): no tip work."""
+    answer (TIP_KINDS): the planned tasks at the plan's commit (backlog_at) and what judges (judge_identity); the step
+    then holds the run to quiet with its ledger. (None, None) otherwise, when the backlog cannot be read (said in the
+    log), or when anything fails (tip_work): no tip work."""
     if plan_.get("queue") or config["judge"]["kind"] not in TIP_KINDS:
         return None, None
 
@@ -4901,7 +4902,7 @@ def backlog_at(repo, commit, config, published):
 # A new task whose goal is « correct » is worth publishing only if the project's tip fails it: one the tip passes
 # already would be accepted for nothing. Its proof is a run of the judge, never the cutter's word. The judging job of
 # the project's own run (no secret; it runs the tip's code in containers without network) judges the plan's tip itself
-# as a candidate for a few planned tasks (tip_questions), and only in a run whose plan holds no candidate: no
+# as a candidate for a few planned tasks (tip_questions), and only in a quiet run (quiet): no
 # candidate's code has run in that job before the questions, and no member waits for them. The write job takes what it
 # says for the questions it finds were due, and for no other task (tip_answers_held), and writes it to the state
 # (write_tip_answers), with its own right to write that branch; the cutter's gate reads it there (shown_at_the_tip), at
@@ -4932,6 +4933,14 @@ TIP_CHANGES_BYTES = 1 << 20  # what the list of the paths that differ between tw
 TIP_COMMITS = 1000  # the most commits between two tips, for an answer to be carried across them
 TIP_JUDGE_FOLDER = "tools/judge"  # the protocol's judge programs, whose digest an answer records (judge_identity)
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def quiet(plan_, ledger):
+    """True for a run whose plan holds no candidate and in which no member holds a task: the one kind of run that asks
+    about the tip. No candidate's code runs in its judging job, and no member's candidate can come while it asks (a
+    member who asks for a task then waits for the run, its questions included: two judgements at most). The judging and
+    the write step hold it to the same plan and the same ledger, once the plan's deals are recorded."""
+    return not plan_.get("queue") and all(deal["state"] == "closed" for deal in ledger.deals().values())
 
 
 def tip_work(what, default, work, *args, **named):
@@ -5049,8 +5058,9 @@ def proof_holds(repo, entry, task, tip, integrated, config, diffs=None, judge=(N
     integrations), and no path that differs between the two is one of this task's own files (a task cut again names its
     parent's), or a path the project protects. A kind of TIP_KINDS judges a task from its own files and from the
     project's own tree beside them (its reference, its skeleton, its judge), which a contribution to another task never
-    changes: the hive refuses any contribution that changes a path outside its own task's files. Anything else may change
-    the answer (this task's files; a maintainer's commit, a merge, whatever it touches; a commit of another line of
+    changes: the hive refuses any contribution that changes a path outside its own task's files, and the reference kind
+    takes a task whose files are exactly its unit's, which it never reads when it judges another unit. Anything else may
+    change the answer (this task's files; a maintainer's commit, a merge, whatever it touches; a commit of another line of
     history, or one the clone does not hold; another judge). Then the answer is no proof, and the judge is asked again
     at the tip as it is."""
     tools, settings = judge
@@ -5059,9 +5069,12 @@ def proof_holds(repo, entry, task, tip, integrated, config, diffs=None, judge=(N
         return False
     if entry["tip"] == tip:
         return True
-    if git(repo, "merge-base", "--is-ancestor", need_sha(entry["tip"]), need_sha(tip), check=False).returncode != 0:
-        return False  # (another line of history, or a commit this clone does not hold)
     diffs = {} if diffs is None else diffs
+    if ("ancestor", entry["tip"], tip) not in diffs:  # (answers given in one run share their tip: git is asked once for them)
+        diffs[("ancestor", entry["tip"], tip)] = git(repo, "merge-base", "--is-ancestor", need_sha(entry["tip"]), need_sha(tip),
+                                                     check=False).returncode == 0
+    if not diffs[("ancestor", entry["tip"], tip)]:
+        return False  # (another line of history, or a commit this clone does not hold)
     commits = commits_between(repo, entry["tip"], tip, diffs)
     if commits is None or not all(integrated.get(commit) not in (None, task["id"]) for commit in commits):
         return False
@@ -5084,11 +5097,15 @@ def shown_at_the_tip(repo, state_folder, config, tasks, tip, integrated):
     whose goal is « correct » at `tip`, the commit of the branch the hive writes (tip_status; `integrated`: the
     ledger's integrations). What the cutter's deterministic rules (cut) and its gate (cut_check) take as the proof that
     a task fails at the tip, or passes there. Nothing at all for a project whose judge cannot answer (TIP_KINDS). The
-    cutter holds an answer to the project's judge settings as its file says them now; which commit of the hive the
-    project's run uses, it cannot tell: the run itself asks again, under a judge that changed, at its next run."""
+    cutter holds an answer to the project's judge settings as its file says them now, and to the judge programs of the
+    newest answer the state holds: which commit of the hive the project's run uses, it cannot tell, and the newest
+    answer was given by the latest run that asked. After the project changes the hive's commit its caller names, the
+    first quiet run's answers so set aside every answer given under the judge before; until then they stand."""
     if config["judge"]["kind"] not in TIP_KINDS:
         return {}
-    answers, diffs, shown, judge = read_tip_answers(state_folder), {}, {}, (None, settings_digest(config))
+    answers, diffs, shown = read_tip_answers(state_folder), {}, {}
+    newest = max(answers.values(), key=lambda entry: entry["at"], default=None)
+    judge = (newest["tools"] if newest else None, settings_digest(config))
     for task_id, task in tasks.items():
         if (task.get("goal") or {"kind": "correct"}).get("kind") != "metric":
             status = tip_status(repo, answers, task, tip, integrated, config, diffs, judge)
