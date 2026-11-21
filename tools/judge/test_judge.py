@@ -1576,6 +1576,19 @@ class TestBounds(unittest.TestCase):
                 container.Execution(container.Docker("i"), "/c", {"B": "/b"}, self.dir).launch(
                     "B", "/e", os.path.join(self.dir, "s"), [("verify", [container.HARNESS, "verify", "/inputs", "/outputs"])])
 
+    def test_dockers_record_of_a_memory_kill_is_handed_back(self):
+        """What launch returns says whether Docker's own record of the container says the kernel ended it for its memory
+        (`OOMKilled`), and nothing else does: the code (137 either way) and the streams are the judged code's to write."""
+        record = lambda **more: json.dumps({"Status": "exited", "Error": "", "ExitCode": 137, **more})  # noqa: E731
+        for state, expected in ((record(OOMKilled=True), True), (record(OOMKilled=False), False), (record(), False),
+                                (record(OOMKilled="true"), False), (record(OOMKilled=1), False)):
+            with self.subTest(state=state), mock.patch.dict(os.environ, {"FAKE_DOCKER_CODE": "137", "FAKE_DOCKER_STATE": state,
+                                                                          "FAKE_DOCKER_ERROR": "OOMKilled: true\n"}):
+                ran = container.Docker("i").launch(["x"], [])
+            self.assertEqual((ran.returncode, ran.oom_killed), (137, expected))
+        with mock.patch.dict(os.environ, {}):
+            self.assertIs(container.Docker("i").launch(["x"], []).oom_killed, False)
+
     def test_judge_json_says_the_environment_error(self):
         """ruche-0136: the judge stopped by a failure of the machine exits with 2, and its judge.json says so (code 2,
         environment_error, machine_failure); stopped by a refusal, 1 and refusal; report.py publishes the code only when the

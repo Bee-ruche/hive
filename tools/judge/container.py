@@ -111,7 +111,11 @@ class Docker:
         if (state.get("Status"), state.get("Error"), state.get("ExitCode")) != ("exited", "", p.returncode):
             log("docker run's errors (kept out of the reason): " + clean(bytes(kept[1]), 500))
             raise MachineFailure(f"failure of the judge's machine (Docker, its runtime or the image; code {p.returncode})")
-        return subprocess.CompletedProcess(cmd, p.returncode, bytes(kept[0]), bytes(kept[1]))
+        ran = subprocess.CompletedProcess(cmd, p.returncode, bytes(kept[0]), bytes(kept[1]))
+        # One more field of the same record, for a caller that must tell a container the kernel ended for its memory from
+        # one the machine ended otherwise (both exit 137): True only where Docker itself says so.
+        ran.oom_killed = state.get("OOMKilled") is True
+        return ran
 
 
 def survey(name, kill_it=False):
