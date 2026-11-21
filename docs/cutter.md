@@ -82,10 +82,11 @@ The rules that keep the ledger's history true:
   once what it needs is done.
 - The project's page draws the map from these links, given the project's task file (`tools/hive/page.py --tasks`):
   the tree of cuts, each task under the one it was cut from, what each task waits for, and how each stands (open,
-  dealt, done, closed); a branch whose tasks are all done or closed is one row. Tasks with no links are one flat list,
-  those left to do first. Beside it, the tasks that need attention: the stuck ones, the others refused or run out twice
-  or more (refusals by reason), the runs spent without an answer by kind, and whether the project starves. Numbers,
-  codes and task ids, from the tally and what `health` adds up of it.
+  dealt, done, closed); a branch whose tasks are all done or closed is one row, and on a large map the rows that lead to
+  a task left to do come first. A task that needs a closed one is counted: it will wait for ever. Tasks with no links
+  are one flat list, those left to do first. Beside it, the tasks that need attention: the stuck ones, the others
+  refused or run out twice or more (refusals by reason), the runs spent without an answer by kind, and whether the
+  project starves. Numbers, codes and task ids, from the tally and what `health` adds up of it.
 
 ## The backlog and the charter
 

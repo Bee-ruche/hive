@@ -393,7 +393,10 @@ def listed_tasks(path):
             return None
         tasks = hive.tasks_of(data.decode("utf-8").split("\n"), str(path))
         hive.check_links(tasks)
-    except (hive.HiveError, OSError, ValueError, TypeError, RecursionError):
+    except (hive.HiveError, OSError, ValueError, TypeError, RecursionError) as error:
+        why = str(error) if isinstance(error, hive.HiveError) else type(error).__name__
+        print(hive.safe_text(f"page: the task file is not one the hive would run ({why}): the tasks that need attention and their map "
+                             "are left out", 400), file=sys.stderr)
         return None
     if any(len(task_id) > TASK_ID_MAX for task_id in tasks) or sum(len(task["files"]) for task in tasks.values()) > hive.HEALTH_FILES_MOST:
         print(hive.safe_text(f"page: the task file holds a task id longer than {TASK_ID_MAX} characters, or names more than "
@@ -457,17 +460,24 @@ def task_map(listed, tallied, titles):
     gives each (open, dealt, done, closed). Task ids, statuses, kinds and numbers, with the feed's titles.
 
       tasks, done, dealt, open, closed   how many tasks, and how many of each status
-      ready, waiting                     the open tasks every task of whose needs is done, and the others
-      cut, lineages, deepest             the tasks cut from another; the tasks cut from none, each the first of its
-                                         lineage; and the most cuts between a lineage's first task and one of its own
+      ready, waiting, on_closed          the open tasks every task of whose needs is done, the others, and of those the
+                                         ones that need a closed task (which will not be done: the cutter's to mend).
+                                         The deal does not read `needs` yet: a waiting task may still be dealt
+      cut, lineages, deepest             the tasks cut from another; the lineages they are in (the tasks cut from none
+                                         that were cut again); and the most cuts between a lineage's first task and one
+                                         of its own
       linked                             whether any task names a parent or needs another
-      rows                               the tasks in the order of the tree: each lineage from its first task, a task
-                                         followed by those cut from it, by id; the lineages that hold a task left to
+      rows                               the tasks in the order of the tree: each task cut from none first, followed by
+                                         the tasks cut from it, by id, and so on; the lineages that hold a task left to
                                          do (open or dealt) first, by id, then the others. A branch whose tasks are all
                                          done or closed is one row, its first task's, which counts the others
                                          (`folded`). A row: the task, its title, status, depth (its cuts below the
-                                         lineage's first task), parent, kind, and the first NEEDS_SHOWN of its needs
-                                         with their status (the rest counted). MAP_SHOWN rows at most
+                                         lineage's first task), parent, kind, the first NEEDS_SHOWN of its needs with
+                                         their status (the rest counted), and how many tasks just before it in the
+                                         tree's order are not listed (`after`). MAP_SHOWN rows at most: when the tree
+                                         has more, the rows that lead to the frontier (a task left to do, the task it
+                                         was cut from, the first task of a lineage that holds one) are listed first, and
+                                         the others after them, in the tree's order, as long as there is room
       rows_left_out                      the tasks neither listed nor counted in a listed row
 
     A project whose tasks name no parent and need nothing gets the same rows, flat: one task a row, those left to do
@@ -492,27 +502,41 @@ def task_map(listed, tallied, titles):
         parent = listed[task_id].get("parent")
         depth[task_id] = 0 if parent is None else depth[parent] + 1
 
-    def row(task_id, folded):
-        needs = listed[task_id].get("needs") or []
-        return {"task": task_id, "title": titles.get(task_id, ""), "status": status[task_id], "depth": depth[task_id],
-                "parent": listed[task_id].get("parent"), "kind": rows[task_id]["kind"],
-                "needs": [{"task": other, "status": status[other]} for other in needs[:NEEDS_SHOWN]],
-                "needs_left_out": max(0, len(needs) - NEEDS_SHOWN), "folded": below[task_id] if folded else 0}
-
-    shown = []
+    tree = []  # (task, how many tasks its row counts below it): every row of the tree, in its order
     for root in sorted(roots, key=lambda root: finished[root]):  # (a stable sort: by id within each)
         stack = [root]
-        while stack and len(shown) < MAP_SHOWN:
+        while stack:
             task_id = stack.pop()
-            folded = finished[task_id] and below[task_id] > 0
-            shown.append(row(task_id, folded))
+            folded = below[task_id] if finished[task_id] else 0
+            tree.append((task_id, folded))
             if not folded:
                 stack.extend(reversed(children[task_id]))
+    # More rows than the map lists: first those that lead to the frontier (a task left to do, the task it was cut from,
+    # the first task of its lineage), then the others in the tree's order, as many as there is room for; all in the
+    # tree's order, a row saying how many tasks before it are not listed.
+    kept = range(len(tree))
+    if len(tree) > MAP_SHOWN:
+        left = {task_id for task_id in listed if status[task_id] in ("open", "dealt")}
+        frontier = {task_id for task_id, _ in tree if task_id in left or any(child in left for child in children[task_id])
+                    or (listed[task_id].get("parent") is None and not finished[task_id])}
+        first = [n for n, (task_id, _) in enumerate(tree) if task_id in frontier][:MAP_SHOWN]
+        kept = sorted(first + [n for n, (task_id, _) in enumerate(tree) if task_id not in frontier][:MAP_SHOWN - len(first)])
+    shown, previous = [], -1
+    for n in kept:
+        task_id, folded = tree[n]
+        needs = listed[task_id].get("needs") or []
+        shown.append({"task": task_id, "title": titles.get(task_id, ""), "status": status[task_id], "depth": depth[task_id],
+                      "parent": listed[task_id].get("parent"), "kind": rows[task_id]["kind"],
+                      "needs": [{"task": other, "status": status[other]} for other in needs[:NEEDS_SHOWN]],
+                      "needs_left_out": max(0, len(needs) - NEEDS_SHOWN), "folded": folded,
+                      "after": sum(1 + count for _, count in tree[previous + 1:n])})
+        previous = n
     opened = [task_id for task_id in listed if status[task_id] == "open"]
-    ready = sum(1 for task_id in opened if all(status[other] == "done" for other in listed[task_id].get("needs") or []))
+    ready = [task_id for task_id in opened if all(status[other] == "done" for other in listed[task_id].get("needs") or [])]
     return {"tasks": len(listed), **{name: sum(1 for task_id in listed if status[task_id] == name) for name in STATUSES},
-            "ready": ready, "waiting": len(opened) - ready, "cut": len(listed) - len(roots), "lineages": len(roots),
-            "deepest": max(depth.values(), default=0),
+            "ready": len(ready), "waiting": len(opened) - len(ready),
+            "on_closed": sum(1 for task_id in opened if any(status[other] == "closed" for other in listed[task_id].get("needs") or [])),
+            "cut": len(listed) - len(roots), "lineages": sum(1 for root in roots if children[root]), "deepest": max(depth.values(), default=0),
             "linked": any(task.get("parent") is not None or task.get("needs") for task in listed.values()),
             "rows": shown, "rows_left_out": len(listed) - sum(1 + item["folded"] for item in shown)}
 
@@ -606,10 +630,11 @@ def read_json(folder, name):
         return None
 
 
-def read_ledger(folder, goals=None, proofs=None, tallied=None):
+def read_ledger(folder, goals=None, proofs=None, tally=False):
     """(the ledger's lines as the page uses them, in order (clean_event); how many lines the ledger holds; how many
-    of them are not JSON objects). `tallied`, a list, receives what the hive's tally reads of each line (hive.tally_line),
-    from the same reading. Unlike the hive, the page goes on when a line is broken: it shows what it can read, and says
+    of them are not JSON objects). With `tally`, each line the page uses also carries what the hive's tally reads of it
+    (hive.tally_line, under « tally »), from the same reading: the tally then counts the lines the page counts, each answer
+    once (once()) and none from the future. Unlike the hive, the page goes on when a line is broken: it shows what it can read, and says
     how many lines it could not. Each line is cleaned as it is read, and only what the page uses of it
     is kept: what the reading costs follows the number of lines, not what a line was filled with. The ledger is read
     only if it is a plain file under its own name (plain_file). `goals`, `proofs`: see clean_event."""
@@ -629,10 +654,7 @@ def read_ledger(folder, goals=None, proofs=None, tallied=None):
                     continue
                 event = clean_event(value, goals, proofs)
                 if event is not None:
-                    events.append(event)
-                counted = hive.tally_line(value) if tallied is not None else None
-                if counted is not None:
-                    tallied.append(counted)
+                    events.append({**event, "tally": hive.tally_line(value)} if tally else event)
     except FileNotFoundError:
         return [], 0, 0
     except OSError:
@@ -819,8 +841,8 @@ def collect(state, now, tasks=None, project=None):
     contributions and nothing else: what was refused is counted for the project and for a model (model_rows), and
     added up for no person, here or in any file (the public ledger still names the member of every answer)."""
     goals, asked = read_tasks(tasks) if tasks is not None else ({}, {})
-    listed, tallied = listed_tasks(tasks) if tasks is not None else None, []
-    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tallied)
+    listed = listed_tasks(tasks) if tasks is not None else None
+    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tally=listed is not None)
     # A line dated after `now` says nothing yet: the page is made for that instant, and its latest contribution is never
     # one from the future. Then each answer is read once (once()). Both are said on the standard error and in the files.
     dated = [event for event in usable if event["at"] <= now]
@@ -957,7 +979,8 @@ def collect(state, now, tasks=None, project=None):
                    "lines_after_now": after, "repeated_lines": repeated},
     }
     data["trusted_base"] = read_base(state)
-    counts = counted(listed, tallied, now) if listed is not None else None  # the hive's tally, once, for the two sections it gives
+    # The hive's tally, once, for the two sections it gives, of the lines the page counts: each answer once, none from the future.
+    counts = counted(listed, [event["tally"] for event in events if event.get("tally") is not None], now) if listed is not None else None
     data["attention"] = attention(counts, titles) if counts is not None else None
     data["map"] = task_map(listed, counts, titles) if counts is not None else None
     data["stats_json"] = compare_stats(read_json(state, "stats.json"), models)
@@ -1333,15 +1356,19 @@ def map_block(found):
     statuses = ", ".join(f"{found[status]:,} {STATUS_WORDS[status]}" for status in STATUSES)
     block = [el("p", f"Tasks: {found['tasks']:,} ({statuses}).")]
     if found["linked"]:
-        block.append(el("p", f"Cut again from another task: {found['cut']:,}, in {found['lineages']:,} lineage(s); the deepest is "
-                             f"{found['deepest']:,} cut(s) below its lineage's first task. Open, with every task it needs done: "
-                             f"{found['ready']:,}; open, and waiting for a task it needs: {found['waiting']:,}."))
+        block.append(el("p", (f"Cut again from another task: {found['cut']:,}, in {found['lineages']:,} lineage(s); the deepest is "
+                              f"{found['deepest']:,} cut(s) below its lineage's first task." if found["cut"] else "No task was cut again from another.")
+                             + f" Open, with every task it needs done: "
+                             f"{found['ready']:,}; open, and waiting for a task it needs: {found['waiting']:,}"
+                             + (f", of which {found['on_closed']:,} need a closed task, which will not be done" if found["on_closed"] else "")
+                             + ". (The deal does not read what a task needs yet: a task that waits may still be dealt.)"))
     rows = []
     for item in found["rows"]:
         step = el("span", NBSP * 2 * (min(item["depth"], DEPTH_SHOWN) - 1) + CUT_SIGN, aria_hidden="true") if item["depth"] else None
         task = [step, el("code", item["task"]), " ", el("span", item["title"], class_="soft"),
                 f" ({item['kind']})" if item["kind"] not in ("work", None) else None,
-                el("span", f" · and {item['folded']:,} below it, all done or closed", class_="soft") if item["folded"] else None]
+                el("span", f" · and {item['folded']:,} below it, all done or closed", class_="soft") if item["folded"] else None,
+                el("span", f" · {item['after']:,} task(s) before it not listed", class_="soft") if item["after"] else None]
         if not found["linked"]:
             rows.append([task, task_status(item["status"])])
             continue
@@ -1354,8 +1381,9 @@ def map_block(found):
     block.append(table(head, rows) if rows else el("p", "The task file holds no task.", class_="soft"))
     if found["linked"]:
         note = ("A task cut again from another is listed under it, a step in. The lineages that hold a task left to do come first; a "
-                "branch whose tasks are all done or closed is one row, which counts the tasks below it. « Waits for » names the tasks "
-                "it needs, and how they stand: the project's cutter publishes a task once what it needs is done.")
+                "branch whose tasks are all done or closed is one row, which counts the tasks below it. When there are more rows than "
+                f"{MAP_SHOWN}, those that lead to a task left to do are listed first. « Waits for » names the tasks it needs, and how "
+                "they stand: the project's cutter publishes a task once what it needs is done.")
     else:
         note = "No task names a task it was cut from, nor tasks it needs: the tasks are one flat list, those left to do first."
     block.append(el("p", note + left_out(found["rows_left_out"], "Tasks"), class_="note"))

@@ -2661,13 +2661,25 @@ class TestAttention(Case):
         for broken in ({"parent": "toy-0009"}, {"needs": ["toy-0001"]}, {"needs": "toy-0002"}, {"kind": "guess"}):  # links the hive refuses
             files = self.make("--tasks", self.tasks([{**self.TASKS[0], **broken}, *self.TASKS[1:]]))
             self.assertEqual((self.summary(files)["attention"], self.summary(files)["map"]), (None, None), broken)
+            self.assertIn("page: the task file is not one the hive would run (task toy-0001: ", self.errors, "and the page says why")
+
+    def test_a_line_the_ledger_holds_twice_counts_once_here_too(self):
+        """The page reads each answer once (once()); the tally it gives the tasks that need attention reads the same lines."""
+        refused = {"type": "verdict", "at": "2026-11-12T10:00:00Z", "task": "toy-0002", "member_id": 77, "repo_id": 1, "sha": "e" * 40,
+                   "result": "refused", "reason": "judge_refused", "judged": True, "model": None, "detail": {}}
+        self.ledger(self.lines() + [refused] * 3)
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        self.assertEqual(self.summary(files)["attention"]["often"], [], "refused once, as the page counts it")
+        self.assertEqual(self.summary(files)["refusals"], [{"reason": "judge_refused", "count": 4}], "the three of toy-0001 and this one")
+        self.ledger(self.lines() + [refused, {**refused, "sha": "f" * 40}])
+        self.assertEqual([item["times"] for item in self.summary(self.make("--tasks", self.tasks(self.TASKS)))["attention"]["often"]], [2])
 
     def test_tasks_refused_or_run_out_often_and_the_runs_spent_without_an_answer(self):
         """Beside the stuck tasks: the other tasks left to do that ended twice or more by their candidates' or members'
         doing, whoever the members, with their refusals by reason; and the ledger's « error » marks by kind, with the tasks
         they fell on. All of it read from the hive's tally and what « health » adds up of it."""
         def refusal(n, task, reason, judged=True):
-            return {"type": "verdict", "at": f"2026-11-12T10:{n}0:00Z", "task": task, "member_id": 50 + n, "repo_id": 1, "sha": f"{n:x}" * 40,
+            return {"type": "verdict", "at": f"2026-11-12T10:{n}0:00Z", "task": task, "member_id": 50 + n, "repo_id": 1, "sha": f"{n + 10:x}" * 40,
                     "result": "refused", "reason": reason, "judged": judged, "model": None, "detail": {}}
         lines = self.lines() + [
             refusal(0, "toy-0002", "judge_refused"), refusal(1, "toy-0002", "path_outside_task", judged=False),
@@ -2753,7 +2765,7 @@ class TestMap(Case):
                          [("toy-0001", "open", 0, 0), ("toy-0002", "open", 0, 0), ("toy-0004", "dealt", 0, 0), ("toy-0003", "done", 0, 0),
                           ("toy-0005", "closed", 0, 0)])
         self.assertEqual((found["tasks"], found["done"], found["dealt"], found["open"], found["closed"], found["ready"], found["waiting"],
-                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (5, 1, 1, 2, 1, 2, 0, 0, 5, 0, 0))
+                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (5, 1, 1, 2, 1, 2, 0, 0, 0, 0, 0))
         self.assertIn("The map of the tasks", seen.heads)
         self.assertEqual(seen.row("toy-0004 Title of toy-0004"), ["toy-0004 Title of toy-0004", "being worked on"])
         self.assertIn("the tasks are one flat list, those left to do first", seen.said)
@@ -2775,16 +2787,40 @@ class TestMap(Case):
                           ("toy-0004", "done", 0, None, 1), ("toy-0008", "done", 0, None, 0)],
                          "the lineages with a task left to do first; a finished branch is one row that counts the rest")
         self.assertEqual((found["tasks"], found["done"], found["dealt"], found["open"], found["closed"], found["ready"], found["waiting"],
-                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (9, 4, 0, 3, 2, 2, 1, 4, 5, 2, 0))
+                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (9, 4, 0, 3, 2, 2, 1, 4, 2, 2, 0),
+                         "four tasks cut again, in the two lineages of toy-0001 and toy-0004")
         self.assertEqual(found["rows"][5]["needs"], [{"task": "toy-0009", "status": "open"}, {"task": "toy-0006", "status": "done"}])
         step = page.NBSP * 2 + page.CUT_SIGN
         self.assertEqual(seen.row(step + "toy-0009 Title of toy-0009"), [step + "toy-0009 Title of toy-0009", "open", "toy-0007", "none"])
         self.assertEqual(seen.row("toy-0003 Title of toy-0003 (probe)"), ["toy-0003 Title of toy-0003 (probe)", "open", "none", "toy-0009 open, toy-0006 done"])
         self.assertEqual(seen.row("toy-0004 Title of toy-0004 · and 1 below it, all done or closed")[1:], ["done", "none", "none"])
         self.assertIn('<span aria-hidden="true">' + step + "</span>", files["index.html"], "a screen reader reads the column, not the sign")
-        self.assertIn("Cut again from another task: 4, in 5 lineage(s); the deepest is 2 cut(s) below its lineage's first task. Open, with every "
-                      "task it needs done: 2; open, and waiting for a task it needs: 1.", seen.said)
+        self.assertIn("Cut again from another task: 4, in 2 lineage(s); the deepest is 2 cut(s) below its lineage's first task. Open, with every "
+                      "task it needs done: 2; open, and waiting for a task it needs: 1. (The deal does not read what a task needs yet: a task "
+                      "that waits may still be dealt.)", seen.said)
         self.assertNotIn("login", json.dumps(found), "no member is named")
+        files = self.make_map([task("toy-0001", closed=True), task("toy-0002", needs=["toy-0001"]), task("toy-0003", needs=["toy-0001"], closed=True)])
+        found = self.summary(files)["map"]
+        self.assertEqual((found["ready"], found["waiting"], found["on_closed"]), (0, 1, 1), "a task that needs a closed one waits for ever")
+        self.assertIn("open, and waiting for a task it needs: 1, of which 1 need a closed task, which will not be done.", self.harmless(files).said)
+
+    def test_the_frontier_of_a_long_lineage_is_listed_first(self):
+        """A chain of cuts, all done but the last, and another task left to do: more rows than the map lists. The rows that
+        lead to the tasks left to do come first; a row says how many tasks before it are not listed."""
+        chain = [task("toy-0001")] + [task(f"toy-{n:04d}", parent=f"toy-{n - 1:04d}") for n in range(2, 101)]
+        self.ledger([{"type": "verdict", "at": f"2026-11-11T{n // 60:02d}:{n % 60:02d}:00Z", "task": f"toy-{n:04d}", "member": "alice",
+                      "member_id": 101, "repo_id": 1, "sha": f"{n:040x}", "commit": f"{5000 + n:040x}", "result": "accepted", "judged": True,
+                      "model": None} for n in range(1, 100)])
+        files = self.make_map([*chain, task("toy-0200")])
+        seen = self.harmless(files)
+        found = self.summary(files)["map"]
+        listed = [row["task"] for row in found["rows"]]
+        self.assertEqual(len(listed), page.MAP_SHOWN)
+        self.assertEqual(listed[-3:], ["toy-0099", "toy-0100", "toy-0200"], "the open tip, the task it was cut from, the other task left to do")
+        self.assertEqual(listed[:page.MAP_SHOWN - 3], [f"toy-{n:04d}" for n in range(1, page.MAP_SHOWN - 2)], "then the others, in the tree's order")
+        self.assertEqual([row["after"] for row in found["rows"][-3:]], [99 - (page.MAP_SHOWN - 2), 0, 0])
+        self.assertEqual((found["rows_left_out"], found["open"], found["ready"]), (101 - page.MAP_SHOWN, 2, 2))
+        self.assertIn(f"toy-0099 Title of toy-0099 · {99 - (page.MAP_SHOWN - 2)} task(s) before it not listed", seen.said)
 
     def test_the_map_is_bounded_on_a_large_project(self):
         """A chain of cuts as long as the rows the map lists, and longer; a task that needs many: the map lists MAP_SHOWN
