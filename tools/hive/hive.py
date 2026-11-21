@@ -3603,7 +3603,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     itself declines is a failure of its candidate's, as when the judge fails on it. A push the hive cannot tell
     the fate of keeps its promise open: the next run looks. Returns (outcomes recorded, tip reached); raises
     HiveError, after recording, if a push did not land."""
-    planned, plan_ = read_plan(plan_, config)
+    plan_instant, plan_ = read_plan(plan_, config)
     if not same_ledger(ledger, plan_):
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is applied")
     counted = as_the_plan_counted(ledger, plan_)
@@ -3631,11 +3631,11 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     asks = bool(backlog) and identity is not None and quiet(plan_, ledger) and config["judge"]["kind"] in TIP_KINDS
     due = tip_work("finding the questions that were due", None, lambda: {
         task["id"]: task for task in tip_questions(repo, config, tasks, backlog, ledger.done(), tip, read_tip_answers(state_folder),
-                                                   integrations(ledger), planned, identity)}) if asks else None
+                                                   integrations(ledger), plan_instant, identity)}) if asks else None
     answers = read_verdicts(verdicts, config["judge"]["metrics"])
     began = {commit for commit in (started if isinstance(started, (list, tuple, set)) else ()) if is_sha(commit)}
     outcomes, _ = process(repo, tip, plan_["queue"], config, tasks, ledger,
-                          lambda entry, task, tip, tree, commit: answers.get(commit), planned, began)
+                          lambda entry, task, tip, tree, commit: answers.get(commit), plan_instant, began)
     accepted, run = [outcome for outcome in outcomes if outcome["result"] == "accepted"], plan_["key"]
     ledger.append([{**verdict_event(outcome, instant, "intent"), "run": run} for outcome in accepted])
     if accepted and checkpoint:

@@ -272,6 +272,10 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
   candidate takes no answer about the tip at all, so a candidate's code never writes one. The same unit, broken out in
   any judging job, can already lie about verdicts ([protocol.md](protocol.md), "Four jobs, each with one risk"): the
   judge's container is what stands between it and both. A volunteer's fork reaches the state by no other path.
+  A member who holds a task, or any candidate in the plan, keeps a run from being quiet: that only delays the proof,
+  and the architect's word (`--failing`) remains. But one who could both keep runs from being quiet and answer in the
+  quiet ones (a judging job taken over through the tip's own unit files) could choose when its two answers fall: the
+  two-runs rule does not stop that.
 - **What reads it.** `hive cut` and `hive cut-check` take the proof from the state they are given, for the commit of
   the branch the hive writes (where a volunteer's work starts). **An answer holds at a tip** when it is about the
   task's very line (the same SHA-256) and was given under the same judge, at that commit, or at an ancestor of it
@@ -287,13 +291,19 @@ nothing of the project: its machine may hold no Docker, and it holds the right t
   to the project's judge settings as its file says them now, and to the judge programs of the newest answer in the
   state: which commit of the hive the project's run uses, it cannot tell, and the newest answer comes from the latest
   run that asked. After the project changes the commit its caller names, the first quiet run sets aside every answer
-  given under the judge before; until then they stand. A project whose judge cannot answer reads no answer.
+  given under the judge before; until then they stand. A project whose judge cannot answer reads no answer. The cutter
+  works out the digest of the project's judge settings with its own copy of the hive, and the run with the commit the
+  project pins: if the two read the file's `judge` differently (a setting one fills in and the other does not), no
+  answer is carried until the pin moves. That fails safe, and it is why a proof may be refused after the hive changes
+  how it reads a project's file.
 - **`--failing`** stays the architect's manual way: the architect runs the project's check at the tip, in the judge's
   container, and gives their word. The gate prints it as before. A run of the judge that showed the tip passes the
   task wins over it.
 - **A line the tip passes already** waits (`shown_passing`): the task is done, or empty. It is asked again a day later.
   The architect who finds the judge wrong changes the line (its context, say: another line is another question, asked
-  at the next quiet run); one who finds the task done takes the line out of the backlog.
+  at the next quiet run); one who finds the task done takes the line out of the backlog. A `passing` ages only when a
+  quiet run asks again: the cutter's side never ages one, so where no run is quiet a wrong `passing` stays until the
+  architect changes the line.
 - **The proof is an extra.** Whatever fails in it (a backlog or a `tip.json` it cannot read, the judge, the state) is
   said in the job's log, in the tool's own words and the error's kind, and the run goes on without it: the members'
   candidates are judged, integrated and recorded as before.

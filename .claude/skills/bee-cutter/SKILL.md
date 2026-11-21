@@ -86,7 +86,8 @@ report its lines.
   saw it, six hours apart at least), `shown_passing` (a run of the judge showed the tip passes it already: done, or empty; it is asked
   again a day later, and the architect clears it at once by changing the line, or takes the line out of the backlog
   when the task is done) and `gate` (a line of the backlog the gate would refuse: the architect mends it), which you
-  report. You change no line of the backlog yourself.
+  report. You do not mend, clear or remove a line of the backlog that waits (`shown_passing`, `gate`): that is the
+  architect's. You still add your own new lines to the backlog, as "Writing tasks" says.
 - `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`), what is missing. **`starving`:
   nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
