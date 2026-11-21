@@ -5494,12 +5494,20 @@ def with_shares(summary):
 def project_health(repository, config, tallied, published, state):
     """What « health » says of one project, from its tally alone (tally): numbers, codes, and the project's own ids
     (its name and repository, its tasks', the two commits read), never a member's login or account number, nor any
-    text. By kind and by size of task: how many tasks, their deals, their acceptances, their refusals for the
-    candidate's doing (those for the hive's or the project's doing aside: HIVE_SIDE_REASONS), their deals run out at
-    the member's cost. The hours to accept are the tally's, one for each task accepted after a deal."""
-    summary = {"project": config["project"], "repository": repository, "published": published, "state": state,
-               "paused": config.get("paused") is True, "active_members": tallied["active_members"],
-               "tasks": {status: 0 for status in ("open", "dealt", "done", "closed")}, "left": tallied["left"],
+    text. What it adds up of the tally is tally_sums()'s."""
+    return with_shares({"project": config["project"], "repository": repository, "published": published, "state": state,
+                        "paused": config.get("paused") is True, "active_members": tallied["active_members"], **tally_sums(tallied)})
+
+
+def tally_sums(tallied):
+    """What one project's tally (tally) adds up to, for « health » and for the project's page (tools/hive/page.py): its
+    tasks by status, what is left to do and can be dealt now, the stuck tasks, whether it starves; its deals,
+    acceptances, refusals by reason, and deals run out at the member's cost or at nobody's; the ledger's `error` marks
+    by kind and the tasks they fell on; and by kind and by size of task: how many tasks, their deals, their
+    acceptances, their refusals for the candidate's doing (those for the hive's or the project's doing aside:
+    HIVE_SIDE_REASONS), their deals run out at the member's cost. The hours to accept are the tally's, one for each task
+    accepted after a deal, in order. Numbers, codes and the project's task ids alone."""
+    summary = {"tasks": {status: 0 for status in ("open", "dealt", "done", "closed")}, "left": tallied["left"],
                "dealable": tallied["dealable"], "areas": tallied["areas"], "starving": tallied["starving"], "stuck": list(tallied["stuck"]),
                "deals": 0, "accepted": 0, "refused": {}, "expired": 0, "expired_free": 0, "errors": {}, "errors_on": [],
                "by_kind": {}, "by_size": {}, "hours_to_accept": []}
@@ -5520,7 +5528,7 @@ def project_health(repository, config, tallied, published, state):
             for key, count in (("tasks", 1), ("deals", row["deals"]), ("accepted", row["accepted"]), ("refused", refused), ("expired", row["expired"])):
                 group[key] += count
     summary["hours_to_accept"].sort()
-    return with_shares(summary)
+    return summary
 
 
 def health_totals(summaries):

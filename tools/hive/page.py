@@ -12,7 +12,8 @@ show. The hive deals each open task to one member at a time; the page shows how 
 accepted, and how many dealt candidates wait for the judge (from the feed's deals):
 
   index.html              one page: what this is, the latest accepted contribution and how to take part; then
-                          progress, the tasks that need attention (with --tasks: the hive's tally), this week, the
+                          progress, the tasks that need attention and the map of the tasks (with --tasks: the hive's
+                          tally, the tree of cuts and what each task needs), this week, the
                           recent integrations, the members, the models, what was refused
                           (and, for the candidates refused for a figure, what the judge measured), the parts of the
                           project that asks preferred and what the hive did, three measures
@@ -146,6 +147,16 @@ PREFER_WORDS = {"not_offered": "the project does not offer preferences",
                 "no_free_task": "no task of that part was free for the member at its turn",
                 "one_free_task": "one task alone of that part was free, and a preference chooses no task"}
 PREFERS_SHOWN = 30  # the latest deals whose ask named a part, listed on index.html
+# The tasks that need attention (attention()): the rows each of its lists keeps, the rest counted; how many times a task
+# left to do must have ended by its candidates' or its members' doing (a refusal, a deal run out) to be listed; and what
+# each kind of the ledger's « error » marks says (hive.ERROR_KINDS; « unknown » for a kind the tally could not read).
+ATTENTION_SHOWN, OFTEN = 30, 2
+ERROR_WORDS = {"judge": "the judge failed on the candidate", "push": "the judge accepted it and the project's repository declined its commit",
+               "hive": "the hive's machine could not make the candidate's commit", "none": "the judge was started and gave no answer in the run",
+               "unknown": "a kind this page does not know"}
+# The map of the tasks (task_map()): the rows it lists, the needs it names on one row, and how many steps in a row is set.
+MAP_SHOWN, NEEDS_SHOWN, DEPTH_SHOWN = 60, 8, 6
+NBSP, CUT_SIGN = "\N{NO-BREAK SPACE}", "\N{BOX DRAWINGS LIGHT UP AND RIGHT} "  # a step in, and the sign of a cut, in a row of the map
 
 
 class PageError(Exception):
@@ -370,34 +381,164 @@ def read_tasks(path):
 
 
 def listed_tasks(path):
-    """The project's tasks as the hive reads them (hive.load_tasks), for its tally (attention), or None when the file
-    is not one the hive would read: the page then says nothing of the tasks that need attention, and shows the rest."""
+    """The project's tasks as the hive reads them (hive.tasks_of, and the links of their map checked: hive.check_links),
+    for its tally (attention, task_map), or None when the file is not one the hive would read: the page then says
+    nothing of the tasks that need attention nor of their map, and shows the rest. None too when counting them would cost
+    more than « health » spends on a project (hive.health): a task id longer than TASK_ID_MAX, or more than
+    hive.HEALTH_FILES_MOST entries in the tasks' files, whose square the tally's cost grows with (hive.rivals_of)."""
     try:
         with plain_file(path) as f:  # (as every file the page reads: a plain file under that name, no larger than the hive reads)
             data = f.read(hive.SETTINGS_BYTES + 1)
         if len(data) > hive.SETTINGS_BYTES:
             return None
-        return hive.tasks_of(data.decode("utf-8").split("\n"), str(path))
-    except (hive.HiveError, OSError, ValueError, TypeError, RecursionError):
+        tasks = hive.tasks_of(data.decode("utf-8").split("\n"), str(path))
+        hive.check_links(tasks)
+    except (hive.HiveError, OSError, ValueError, TypeError, RecursionError) as error:
+        why = str(error) if isinstance(error, hive.HiveError) else type(error).__name__
+        print(hive.safe_text(f"page: the task file is not one the hive would run ({why}): the tasks that need attention and their map "
+                             "are left out", 400), file=sys.stderr)
         return None
+    if any(len(task_id) > TASK_ID_MAX for task_id in tasks) or sum(len(task["files"]) for task in tasks.values()) > hive.HEALTH_FILES_MOST:
+        print(hive.safe_text(f"page: the task file holds a task id longer than {TASK_ID_MAX} characters, or names more than "
+                             f"{hive.HEALTH_FILES_MOST} files: the tasks that need attention and their map are left out"), file=sys.stderr)
+        return None
+    return tasks
 
 
-def attention(listed, lines, now, titles):
-    """What the page says of the tasks that need attention, from the hive's tally (hive.tally, docs/cutter.md), or None
-    when the tasks hold a value the tally cannot count (a tier that is no number): the page goes on without it. The
-    tasks that are stuck, each with how many members accepted elsewhere failed on it, its refusals by reason and the
-    deals on it that ran out at their member's cost; how many tasks are left to do, open, dealable now, and in how many
-    separate areas; and whether the project starves (nothing left to do). Numbers and task ids, with the feed's
-    titles: no member is named."""
+def counted(listed, lines, now):
+    """The hive's tally of the tasks as of `now` (hive.tally, docs/cutter.md), or None when the tasks hold a value it
+    cannot count: the page then goes on without the tasks that need attention and their map."""
     try:
-        tallied = hive.tally(listed, lines, now)
+        return hive.tally(listed, lines, now)
     except (ValueError, TypeError, KeyError, AttributeError, ArithmeticError):
         return None
-    stuck = [{"task": task_id, "title": titles.get(task_id, ""), "failures": row["established_failures"],
-              "refused": [{"reason": reason, "count": count} for reason, count in sorted(row["refused"].items())],
-              "expired": row["expired"]} for task_id, row in ((t, tallied["tasks"][t]) for t in tallied["stuck"])]
-    return {"stuck": stuck, "stuck_members": tallied["stuck_members"], "left": tallied["left"], "open": tallied["open"],
-            "dealable": tallied["dealable"], "areas": tallied["areas"], "starving": tallied["starving"]}
+
+
+def reasons(refused):
+    """[{"reason", "count"}] from a task's refusals by reason, in the alphabetical order of the reasons."""
+    return [{"reason": reason, "count": count} for reason, count in sorted(refused.items())]
+
+
+def attention(tallied, titles):
+    """What the page says of the tasks that need attention, from the hive's tally and what « health » adds up of it
+    (hive.tally_sums): nothing is counted here again. Numbers, codes and task ids, with the feed's titles: no member is
+    named.
+
+      stuck        the tasks that are stuck, each with how many members accepted elsewhere failed on it, its refusals
+                   by reason and the deals on it that ran out at their member's cost
+      often        the other tasks left to do (open or dealt) whose candidates were refused, or whose deals ran out at
+                   their member's cost, OFTEN times or more in all (`times`), whoever the members: their refusals by
+                   reason, those the hive's or the project's side caused (HIVE_SIDE) left out, and their deals run out
+      errors       the ledger's « error » marks by kind (a run spent on a candidate without an answer), in the order of
+                   ERROR_WORDS, and the tasks they fell on (errors_on)
+      left, open, dealable, areas, starving
+                   how many tasks are left to do, open, dealable now, and in how many separate areas; and whether the
+                   project starves (nothing left to do)
+
+    Each list keeps ATTENTION_SHOWN rows, the first by its own order, and counts the rest (<list>_left_out)."""
+    rows, sums = tallied["tasks"], hive.tally_sums(tallied)
+    stuck = [{"task": task_id, "title": titles.get(task_id, ""), "failures": rows[task_id]["established_failures"],
+              "refused": reasons(rows[task_id]["refused"]), "expired": rows[task_id]["expired"]} for task_id in tallied["stuck"]]
+    often, stuck_ids = [], set(tallied["stuck"])
+    for task_id, row in sorted(rows.items()):
+        refused = {reason: count for reason, count in row["refused"].items() if reason not in HIVE_SIDE}
+        times = sum(refused.values()) + row["expired"]
+        if row["status"] in ("open", "dealt") and task_id not in stuck_ids and times >= OFTEN:
+            often.append({"task": task_id, "title": titles.get(task_id, ""), "times": times, "refused": reasons(refused), "expired": row["expired"]})
+    often.sort(key=lambda item: -item["times"])  # (a stable sort: then by id)
+    return {"stuck": stuck[:ATTENTION_SHOWN], "stuck_left_out": max(0, len(stuck) - ATTENTION_SHOWN), "stuck_members": tallied["stuck_members"],
+            "often": often[:ATTENTION_SHOWN], "often_left_out": max(0, len(often) - ATTENTION_SHOWN), "often_least": OFTEN,
+            "errors": [{"kind": kind, "count": sums["errors"][kind]} for kind in ERROR_WORDS if kind in sums["errors"]],
+            "errors_on": sums["errors_on"][:ATTENTION_SHOWN], "errors_on_left_out": max(0, len(sums["errors_on"]) - ATTENTION_SHOWN),
+            "left": tallied["left"], "open": tallied["open"], "dealable": tallied["dealable"], "areas": tallied["areas"],
+            "starving": tallied["starving"]}
+
+
+def task_map(listed, tallied, titles):
+    """The map of the project's tasks (docs/cutter.md, "The map: links between tasks"), from the links its task file
+    gives them (`parent`: the task one was cut from; `needs`: the tasks to be done before it) and the status the tally
+    gives each (open, dealt, done, closed). Task ids, statuses, kinds and numbers, with the feed's titles.
+
+      tasks, done, dealt, open, closed   how many tasks, and how many of each status
+      ready, waiting, on_closed          the open tasks every task of whose needs is done, the others, and of those the
+                                         ones that need a closed task (which will not be done: the cutter's to mend).
+                                         The deal does not read `needs` yet: a waiting task may still be dealt
+      cut, lineages, deepest             the tasks cut from another; the lineages they are in (the tasks cut from none
+                                         that were cut again); and the most cuts between a lineage's first task and one
+                                         of its own
+      linked                             whether any task names a parent or needs another
+      rows                               the tasks in the order of the tree: each task cut from none first, followed by
+                                         the tasks cut from it, by id, and so on; the lineages that hold a task left to
+                                         do (open or dealt) first, by id, then the others. A branch whose tasks are all
+                                         done or closed is one row, its first task's, which counts the others
+                                         (`folded`). A row: the task, its title, status, depth (its cuts below the
+                                         lineage's first task), parent, kind, the first NEEDS_SHOWN of its needs with
+                                         their status (the rest counted), and how many tasks just before it in the
+                                         tree's order are not listed (`after`). MAP_SHOWN rows at most: when the tree
+                                         has more, the rows that lead to the frontier (a task left to do, the task it
+                                         was cut from, the first task of a lineage that holds one) are listed first, and
+                                         the others after them, in the tree's order, as long as there is room
+      rows_left_out                      the tasks neither listed nor counted in a listed row
+
+    A project whose tasks name no parent and need nothing gets the same rows, flat: one task a row, those left to do
+    first. The work follows the number of tasks and of their links, which listed_tasks() bounds; the tree is walked
+    without recursion (hive.check_links has shown it has no cycle)."""
+    rows = tallied["tasks"]
+    status = {task_id: rows[task_id]["status"] for task_id in listed}
+    children = {task_id: [] for task_id in listed}
+    for task_id in sorted(listed):
+        if listed[task_id].get("parent") is not None:
+            children[listed[task_id]["parent"]].append(task_id)
+    roots = [task_id for task_id in sorted(listed) if listed[task_id].get("parent") is None]
+    order, stack = [], list(reversed(roots))  # every task, each lineage from its first one: a parent before what was cut from it
+    while stack:
+        order.append(stack.pop())
+        stack.extend(reversed(children[order[-1]]))
+    below, finished, depth = {}, {}, {}
+    for task_id in reversed(order):  # (what was cut from a task, before it)
+        below[task_id] = sum(1 + below[child] for child in children[task_id])
+        finished[task_id] = status[task_id] in ("done", "closed") and all(finished[child] for child in children[task_id])
+    for task_id in order:
+        parent = listed[task_id].get("parent")
+        depth[task_id] = 0 if parent is None else depth[parent] + 1
+
+    tree = []  # (task, how many tasks its row counts below it): every row of the tree, in its order
+    for root in sorted(roots, key=lambda root: finished[root]):  # (a stable sort: by id within each)
+        stack = [root]
+        while stack:
+            task_id = stack.pop()
+            folded = below[task_id] if finished[task_id] else 0
+            tree.append((task_id, folded))
+            if not folded:
+                stack.extend(reversed(children[task_id]))
+    # More rows than the map lists: first those that lead to the frontier (a task left to do, the task it was cut from,
+    # the first task of its lineage), then the others in the tree's order, as many as there is room for; all in the
+    # tree's order, a row saying how many tasks before it are not listed.
+    kept = range(len(tree))
+    if len(tree) > MAP_SHOWN:
+        left = {task_id for task_id in listed if status[task_id] in ("open", "dealt")}
+        frontier = {task_id for task_id, _ in tree if task_id in left or any(child in left for child in children[task_id])
+                    or (listed[task_id].get("parent") is None and not finished[task_id])}
+        first = [n for n, (task_id, _) in enumerate(tree) if task_id in frontier][:MAP_SHOWN]
+        kept = sorted(first + [n for n, (task_id, _) in enumerate(tree) if task_id not in frontier][:MAP_SHOWN - len(first)])
+    shown, previous = [], -1
+    for n in kept:
+        task_id, folded = tree[n]
+        needs = listed[task_id].get("needs") or []
+        shown.append({"task": task_id, "title": titles.get(task_id, ""), "status": status[task_id], "depth": depth[task_id],
+                      "parent": listed[task_id].get("parent"), "kind": rows[task_id]["kind"],
+                      "needs": [{"task": other, "status": status[other]} for other in needs[:NEEDS_SHOWN]],
+                      "needs_left_out": max(0, len(needs) - NEEDS_SHOWN), "folded": folded,
+                      "after": sum(1 + count for _, count in tree[previous + 1:n])})
+        previous = n
+    opened = [task_id for task_id in listed if status[task_id] == "open"]
+    ready = [task_id for task_id in opened if all(status[other] == "done" for other in listed[task_id].get("needs") or [])]
+    return {"tasks": len(listed), **{name: sum(1 for task_id in listed if status[task_id] == name) for name in STATUSES},
+            "ready": len(ready), "waiting": len(opened) - len(ready),
+            "on_closed": sum(1 for task_id in opened if any(status[other] == "closed" for other in listed[task_id].get("needs") or [])),
+            "cut": len(listed) - len(roots), "lineages": sum(1 for root in roots if children[root]), "deepest": max(depth.values(), default=0),
+            "linked": any(task.get("parent") is not None or task.get("needs") for task in listed.values()),
+            "rows": shown, "rows_left_out": len(listed) - sum(1 + item["folded"] for item in shown)}
 
 
 PROJECT_BYTES = 1 << 20  # what the page reads of a project's file, at most
@@ -489,10 +630,11 @@ def read_json(folder, name):
         return None
 
 
-def read_ledger(folder, goals=None, proofs=None, tallied=None):
+def read_ledger(folder, goals=None, proofs=None, tally=False):
     """(the ledger's lines as the page uses them, in order (clean_event); how many lines the ledger holds; how many
-    of them are not JSON objects). `tallied`, a list, receives what the hive's tally reads of each line (hive.tally_line),
-    from the same reading. Unlike the hive, the page goes on when a line is broken: it shows what it can read, and says
+    of them are not JSON objects). With `tally`, each line the page uses also carries what the hive's tally reads of it
+    (hive.tally_line, under « tally »), from the same reading: the tally then counts the lines the page counts, each answer
+    once (once()) and none from the future. Unlike the hive, the page goes on when a line is broken: it shows what it can read, and says
     how many lines it could not. Each line is cleaned as it is read, and only what the page uses of it
     is kept: what the reading costs follows the number of lines, not what a line was filled with. The ledger is read
     only if it is a plain file under its own name (plain_file). `goals`, `proofs`: see clean_event."""
@@ -512,10 +654,7 @@ def read_ledger(folder, goals=None, proofs=None, tallied=None):
                     continue
                 event = clean_event(value, goals, proofs)
                 if event is not None:
-                    events.append(event)
-                counted = hive.tally_line(value) if tallied is not None else None
-                if counted is not None:
-                    tallied.append(counted)
+                    events.append({**event, "tally": hive.tally_line(value)} if tally else event)
     except FileNotFoundError:
         return [], 0, 0
     except OSError:
@@ -692,7 +831,8 @@ def rate(part, whole):
 def collect(state, now, tasks=None, project=None):
     """Everything the page shows, as plain data (it is also summary.json). Members are counted by account id and
     named by the login of their latest event; only members with an integration are named at all. `tasks` is the path
-    of the project's task file, or None: it says which figure each task asked for (read_goals).
+    of the project's task file, or None: it says which figure each task asked for (read_goals), and the hive's tally
+    of its tasks gives the tasks that need attention (attention) and their map (task_map).
     `project` is the path of the project's file of settings, or None: it says which proofs the project takes, and
     a card then leads with one of those measures only (read_proofs).
 
@@ -701,8 +841,8 @@ def collect(state, now, tasks=None, project=None):
     contributions and nothing else: what was refused is counted for the project and for a model (model_rows), and
     added up for no person, here or in any file (the public ledger still names the member of every answer)."""
     goals, asked = read_tasks(tasks) if tasks is not None else ({}, {})
-    listed, tallied = listed_tasks(tasks) if tasks is not None else None, []
-    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tallied)
+    listed = listed_tasks(tasks) if tasks is not None else None
+    usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tally=listed is not None)
     # A line dated after `now` says nothing yet: the page is made for that instant, and its latest contribution is never
     # one from the future. Then each answer is read once (once()). Both are said on the standard error and in the files.
     dated = [event for event in usable if event["at"] <= now]
@@ -839,7 +979,10 @@ def collect(state, now, tasks=None, project=None):
                    "lines_after_now": after, "repeated_lines": repeated},
     }
     data["trusted_base"] = read_base(state)
-    data["attention"] = attention(listed, tallied, now, titles) if listed is not None else None
+    # The hive's tally, once, for the two sections it gives, of the lines the page counts: each answer once, none from the future.
+    counts = counted(listed, [event["tally"] for event in events if event.get("tally") is not None], now) if listed is not None else None
+    data["attention"] = attention(counts, titles) if counts is not None else None
+    data["map"] = task_map(listed, counts, titles) if counts is not None else None
     data["stats_json"] = compare_stats(read_json(state, "stats.json"), models)
     data["_wins"] = wins  # for the cards; not part of summary.json
     return data
@@ -1009,6 +1152,7 @@ tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
 tbody th{font-weight:600}
 .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .soft{color:var(--ink2);font-weight:400}
+.nw{white-space:nowrap}
 .plain tbody th{font-weight:400;overflow-wrap:anywhere}
 .plain tr.asked th,.plain tr.asked td{font-weight:600}
 code{font:.88em ui-monospace,SFMono-Regular,Consolas,monospace}
@@ -1142,9 +1286,24 @@ MODELS_NOTE = (f"How many candidates of a model were judged, and its rate, are s
                "behind them: with fewer, they would be figures about those members.")
 
 
+def reasons_cell(refused):
+    """A task's refusals by reason, as the children of a cell: « judge_refused (3), goal_not_met (1) », or « none »."""
+    return [[el("code", r["reason"]), f" ({r['count']:,})", "" if r is refused[-1] else ", "] for r in refused] or "none"
+
+
+def codes(ids):
+    """Task ids, each in the fixed-width face, between commas."""
+    return [[el("code", task_id), "" if position == len(ids) - 1 else ", "] for position, task_id in enumerate(ids)]
+
+
+def left_out(count, what):
+    return f" {what}, not listed: {count:,}." if count else ""
+
+
 def attention_block(attention):
     """The section on the tasks that need attention (attention()): the starving alarm first, then four counters, then
-    the stuck tasks, and the rule that makes a task stuck."""
+    the stuck tasks and the rule that makes a task stuck, the other tasks refused or run out often, and the runs spent
+    without an answer, by kind."""
     block = []
     if attention["starving"]:
         block.append(el("p", el("strong", "Nothing is left to do: every task is done or closed. Volunteers who ask are dealt nothing "
@@ -1154,15 +1313,80 @@ def attention_block(attention):
                             tile("Dealable now", attention["dealable"], "no task sharing a file is dealt"),
                             tile("Separate areas", attention["areas"], "at least this many tasks can be held at once")], class_="tiles"))
     if attention["stuck"]:
-        rows = [[task_cell(item), item["failures"],
-                 [[el("code", r["reason"]), f" ({r['count']})", "" if r is item["refused"][-1] else ", "] for r in item["refused"]] or "none",
-                 item["expired"]] for item in attention["stuck"]]
+        rows = [[task_cell(item), item["failures"], reasons_cell(item["refused"]), item["expired"]] for item in attention["stuck"]]
         block.append(table([("Task", False), ("Members who failed", True), ("Refusals by reason", False), ("Deals that ran out", True)], rows))
     else:
         block.append(el("p", "No task is stuck.", class_="soft"))
     block.append(el("p", f"A task is stuck when {attention['stuck_members']} different members, each with a contribution accepted on "
                          "the project, failed on it: the judge examined their candidate and refused it, or their deal ran out. "
-                         "Such a task is to be cut again into smaller ones. No member is named.", class_="note"))
+                         "Such a task is to be cut again into smaller ones. No member is named."
+                         + left_out(attention["stuck_left_out"], "Stuck tasks"), class_="note"))
+    least = attention["often_least"]
+    block.append(el("p", el("strong", f"Refused or run out {least} times or more")))
+    if attention["often"]:
+        rows = [[task_cell(item), item["times"], reasons_cell(item["refused"]), item["expired"]] for item in attention["often"]]
+        block.append(table([("Task", False), ("Times", True), ("Refusals by reason", False), ("Deals that ran out", True)], rows))
+    else:
+        block.append(el("p", "No other task left to do was refused or ran out that often.", class_="soft"))
+    block.append(el("p", f"The tasks left to do, stuck ones aside, whose candidates were refused or whose deals ran out at their member's "
+                         f"cost {least} times or more in all, whoever the members, the most first. What the hive or the project ended at no "
+                         "cost to the member is not counted. No member is named." + left_out(attention["often_left_out"], "Tasks"), class_="note"))
+    block.append(el("p", el("strong", "Runs spent without an answer")))
+    if attention["errors"]:
+        last = attention["errors"][-1]
+        block.append(el("p", [[el("code", e["kind"]), f" ({e['count']:,}): {ERROR_WORDS[e['kind']]}", "." if e is last else "; "]
+                              for e in attention["errors"]]))
+        block.append(el("p", "On the tasks ", codes(attention["errors_on"]), "." + left_out(attention["errors_on_left_out"], "Other tasks"),
+                        class_="note"))
+    else:
+        block.append(el("p", "None: every run that took a candidate gave it an answer.", class_="soft"))
+    return block
+
+
+def task_status(status):
+    """A task's status in words, after the swatch of its part of the progress bar, on one line."""
+    return el("span", el("span", class_=f"sw s{STATUSES.index(status) + 1}"), STATUS_WORDS[status], class_="nw")
+
+
+def map_block(found):
+    """The section on the map of the tasks (task_map()): how many there are of each status; when the tasks are linked,
+    how many were cut again and how many wait for a task they need; then the tasks in the order of the tree, a step in
+    for each cut (a sign the page draws, which a screen reader skips: the « Cut from » column says it in words), and
+    what the order is. Flat when no task names a parent or needs another: the task and its status alone."""
+    statuses = ", ".join(f"{found[status]:,} {STATUS_WORDS[status]}" for status in STATUSES)
+    block = [el("p", f"Tasks: {found['tasks']:,} ({statuses}).")]
+    if found["linked"]:
+        block.append(el("p", (f"Cut again from another task: {found['cut']:,}, in {found['lineages']:,} lineage(s); the deepest is "
+                              f"{found['deepest']:,} cut(s) below its lineage's first task." if found["cut"] else "No task was cut again from another.")
+                             + f" Open, with every task it needs done: "
+                             f"{found['ready']:,}; open, and waiting for a task it needs: {found['waiting']:,}"
+                             + (f", of which {found['on_closed']:,} need a closed task, which will not be done" if found["on_closed"] else "")
+                             + ". (The deal does not read what a task needs yet: a task that waits may still be dealt.)"))
+    rows = []
+    for item in found["rows"]:
+        step = el("span", NBSP * 2 * (min(item["depth"], DEPTH_SHOWN) - 1) + CUT_SIGN, aria_hidden="true") if item["depth"] else None
+        task = [step, el("code", item["task"]), " ", el("span", item["title"], class_="soft"),
+                f" ({item['kind']})" if item["kind"] not in ("work", None) else None,
+                el("span", f" · and {item['folded']:,} below it, all done or closed", class_="soft") if item["folded"] else None,
+                el("span", f" · {item['after']:,} task(s) before it not listed", class_="soft") if item["after"] else None]
+        if not found["linked"]:
+            rows.append([task, task_status(item["status"])])
+            continue
+        needs = [[el("span", el("code", need["task"]), f" {STATUS_WORDS[need['status']]}", class_="nw"),
+                  ", " if need is not item["needs"][-1] or item["needs_left_out"] else ""]
+                 for need in item["needs"]] + ([f"and {item['needs_left_out']:,} more"] if item["needs_left_out"] else [])
+        rows.append([task, task_status(item["status"]), el("code", item["parent"]) if item["parent"] else el("span", "none", class_="soft"),
+                     needs or el("span", "none", class_="soft")])
+    head = [("Task", False), ("Status", False)] + ([("Cut from", False), ("Waits for", False)] if found["linked"] else [])
+    block.append(table(head, rows) if rows else el("p", "The task file holds no task.", class_="soft"))
+    if found["linked"]:
+        note = ("A task cut again from another is listed under it, a step in. The lineages that hold a task left to do come first; a "
+                "branch whose tasks are all done or closed is one row, which counts the tasks below it. When there are more rows than "
+                f"{MAP_SHOWN}, those that lead to a task left to do are listed first. « Waits for » names the tasks it needs, and how "
+                "they stand: the project's cutter publishes a task once what it needs is done.")
+    else:
+        note = "No task names a task it was cut from, nor tasks it needs: the tasks are one flat list, those left to do first."
+    block.append(el("p", note + left_out(found["rows_left_out"], "Tasks"), class_="note"))
     return block
 
 
@@ -1190,6 +1414,8 @@ def render_html(data, title, repo_url, join):
     sections.append(el("section", el("h2", "Progress"), progress))
     if data.get("attention") is not None:
         sections.append(el("section", el("h2", "Tasks that need attention"), attention_block(data["attention"])))
+    if data.get("map") is not None:
+        sections.append(el("section", el("h2", "The map of the tasks"), map_block(data["map"])))
 
     sections.append(el("section", el("h2", "This week"), el("div", [
         tile("Integrations", week["integrations"], "in the last 7 days"),

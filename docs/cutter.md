@@ -81,7 +81,13 @@ The rules that keep the ledger's history true:
 - **A task that is dealt, or whose candidate waits for the judge, is never closed or changed.**
 - `needs` names tasks of the same file, without a cycle. Until the deal reads it, the cutter publishes a task only
   once what it needs is done.
-- The project's page draws the map from these links: the tree of cuts, what can be dealt now, what is done.
+- The project's page draws the map from these links, given the project's task file (`tools/hive/page.py --tasks`):
+  the tree of cuts, each task under the one it was cut from, what each task waits for, and how each stands (open,
+  dealt, done, closed); a branch whose tasks are all done or closed is one row, and on a large map the rows that lead to
+  a task left to do come first. A task that needs a closed one is counted: it will wait for ever. Tasks with no links
+  are one flat list, those left to do first. Beside it, the tasks that need attention: the stuck ones, the others
+  refused or run out twice or more (refusals by reason), the runs spent without an answer by kind, and whether the
+  project starves. Numbers, codes and task ids, from the tally and what `health` adds up of it.
 
 ## The backlog and the charter
 
@@ -357,7 +363,8 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
 2. The tally (`hive.py tally`) and a section of the project's page for the tasks that need attention. **Done.**
 3. The fields `parent`, `needs` and `kind`, checked wherever a run reads the tasks; the gate (`hive.py cut-check`);
    and the cutter's settings in the project's file (`cutter`: `floors`, `changes`, `open`, `context_chars`),
-   described in `hive/settings.json` with their bounds, and read by no run. **Done.** (The page's tree of cuts: later.)
+   described in `hive/settings.json` with their bounds, and read by no run. **Done.** The page's tree of cuts: **done**
+   (21 November 2026).
 4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
    (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way (as of
    21 November 2026, one cycle on each project has been published, and some of its tasks dealt to a bee and

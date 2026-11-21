@@ -2159,9 +2159,9 @@ class TestFirstScreen(Case):
         self.assertEqual(seen.hrefs[:3], ["https://github.com/bob", f"wins/{sha(5002)}.html", "#join"])
         self.assertNotIn("carol", opening, "a refusal is not what the page opens on")
         # After it, the counters and the tables, in this order; the block on how to take part closes the page.
-        self.assertEqual(seen.heads, ["toy", "Progress", "Tasks that need attention", "This week", "Recent integrations", "Members", "Models",
-                                      "What was refused, and why", "Three measures", "How to take part"],
-                         "(the tasks that need attention come with the task file, after the progress)")
+        self.assertEqual(seen.heads, ["toy", "Progress", "Tasks that need attention", "The map of the tasks", "This week", "Recent integrations",
+                                      "Members", "Models", "What was refused, and why", "Three measures", "How to take part"],
+                         "(the tasks that need attention and their map come with the task file, after the progress)")
         self.assertTrue(seen.said.endswith("How to take part" + page.JOIN_WORDS + "How to joinMade from the project's public ledger, as of "
                                            f"{NOW}. No script, no tracker, nothing loaded from elsewhere."), seen.said)
         self.assertEqual(seen.ids.count("join"), 1)
@@ -2658,6 +2658,197 @@ class TestAttention(Case):
             files = self.make("--tasks", self.tasks([line, *self.TASKS[1:]]))
             self.assertIsNone(self.summary(files)["attention"], "the page goes on, without the section")
             self.assertIn("Progress", self.harmless(files).said)
+        for broken in ({"parent": "toy-0009"}, {"needs": ["toy-0001"]}, {"needs": "toy-0002"}, {"kind": "guess"}):  # links the hive refuses
+            files = self.make("--tasks", self.tasks([{**self.TASKS[0], **broken}, *self.TASKS[1:]]))
+            self.assertEqual((self.summary(files)["attention"], self.summary(files)["map"]), (None, None), broken)
+            self.assertIn("page: the task file is not one the hive would run (task toy-0001: ", self.errors, "and the page says why")
+
+    def test_a_line_the_ledger_holds_twice_counts_once_here_too(self):
+        """The page reads each answer once (once()); the tally it gives the tasks that need attention reads the same lines."""
+        refused = {"type": "verdict", "at": "2026-11-12T10:00:00Z", "task": "toy-0002", "member_id": 77, "repo_id": 1, "sha": "e" * 40,
+                   "result": "refused", "reason": "judge_refused", "judged": True, "model": None, "detail": {}}
+        self.ledger(self.lines() + [refused] * 3)
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        self.assertEqual(self.summary(files)["attention"]["often"], [], "refused once, as the page counts it")
+        self.assertEqual(self.summary(files)["refusals"], [{"reason": "judge_refused", "count": 4}], "the three of toy-0001 and this one")
+        self.ledger(self.lines() + [refused, {**refused, "sha": "f" * 40}])
+        self.assertEqual([item["times"] for item in self.summary(self.make("--tasks", self.tasks(self.TASKS)))["attention"]["often"]], [2])
+
+    def test_tasks_refused_or_run_out_often_and_the_runs_spent_without_an_answer(self):
+        """Beside the stuck tasks: the other tasks left to do that ended twice or more by their candidates' or members'
+        doing, whoever the members, with their refusals by reason; and the ledger's « error » marks by kind, with the tasks
+        they fell on. All of it read from the hive's tally and what « health » adds up of it."""
+        def refusal(n, task, reason, judged=True):
+            return {"type": "verdict", "at": f"2026-11-12T10:{n}0:00Z", "task": task, "member_id": 50 + n, "repo_id": 1, "sha": f"{n + 10:x}" * 40,
+                    "result": "refused", "reason": reason, "judged": judged, "model": None, "detail": {}}
+        lines = self.lines() + [
+            refusal(0, "toy-0002", "judge_refused"), refusal(1, "toy-0002", "path_outside_task", judged=False),
+            refusal(2, "toy-0002", "not_answered"),  # the hive's side: not counted
+            {"type": "expired", "at": "2026-11-12T11:30:00Z", "task": "toy-0002", "member_id": 60, "deal": "2026-11-12T08:30:00Z"},
+            {"type": "expired", "at": "2026-11-12T11:40:00Z", "task": "toy-0002", "member_id": 61, "deal": "2026-11-12T08:40:00Z", "fault": True},
+            refusal(3, "toy-0003", "judge_refused"), refusal(4, "toy-0003", "judge_refused")]  # done: not left to do
+        lines += [failure(n, "2026-11-12T11:50:00Z", None, 70 + n, kind) | {"task": task}
+                  for n, (kind, task) in enumerate((("judge", "toy-0002"), (None, "toy-0002"), ("push", "toy-0005"), ("weird", "toy-0001"), ("hive", "toy-0005")))]
+        self.ledger(lines)
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        seen = self.harmless(files)
+        attention = self.summary(files)["attention"]
+        self.assertEqual(attention["often"], [{"task": "toy-0002", "title": "Work in src", "times": 3, "expired": 1,
+                                               "refused": [{"reason": "judge_refused", "count": 1}, {"reason": "path_outside_task", "count": 1}]}],
+                         "toy-0001 is stuck (listed above); toy-0003, refused twice, is done")
+        self.assertEqual((attention["often_least"], attention["often_left_out"]), (page.OFTEN, 0))
+        self.assertEqual(attention["errors"], [{"kind": "judge", "count": 2}, {"kind": "push", "count": 1}, {"kind": "hive", "count": 1},
+                                               {"kind": "unknown", "count": 1}], "by kind, a line without one being the judge's")
+        self.assertEqual((attention["errors_on"], attention["errors_on_left_out"]), (["toy-0001", "toy-0002", "toy-0005"], 0))
+        self.assertIn("Refused or run out 2 times or more", seen.said)
+        self.assertEqual(seen.row("toy-0002 Work in src"), ["toy-0002 Work in src", "3", "judge_refused (1), path_outside_task (1)", "1"])
+        self.assertIn("judge (2): the judge failed on the candidate; push (1): ", seen.said)
+        self.assertIn("On the tasks toy-0001, toy-0002, toy-0005.", seen.said)
+        self.assertNotIn("login", json.dumps(attention), "no member is named")
+        self.ledger(self.lines())
+        said = self.harmless(self.make("--tasks", self.tasks(self.TASKS))).said
+        self.assertIn("No other task left to do was refused or ran out that often.", said)
+        self.assertIn("None: every run that took a candidate gave it an answer.", said)
+
+    def test_each_list_is_bounded_and_counts_the_rest(self):
+        tasks = [{"id": f"toy-{n:04d}", "title": f"T{n}", "files": [f"f{n}.c"]} for n in range(1, 41)]
+        lines = []
+        for n in range(1, 41):
+            for k in range(2):
+                lines.append({"type": "verdict", "at": f"2026-11-12T0{k}:00:00Z", "task": f"toy-{n:04d}", "member_id": 1000 + 2 * n + k,
+                              "repo_id": 1, "sha": f"{n * 2 + k:040x}", "result": "refused", "reason": "judge_refused", "judged": True, "detail": {}})
+            lines.append(failure(n, "2026-11-12T03:00:00Z", None, 5000 + n) | {"task": f"toy-{n:04d}", "sha": f"{9000 + n:040x}"})
+        self.ledger(lines)
+        files = self.make("--tasks", self.tasks(tasks))
+        self.harmless(files)
+        attention = self.summary(files)["attention"]
+        self.assertEqual((len(attention["often"]), attention["often_left_out"]), (page.ATTENTION_SHOWN, 40 - page.ATTENTION_SHOWN))
+        self.assertEqual((len(attention["errors_on"]), attention["errors_on_left_out"]), (page.ATTENTION_SHOWN, 40 - page.ATTENTION_SHOWN))
+        self.assertEqual(attention["often"][0]["task"], "toy-0001", "as many times each: by id")
+
+    def test_a_task_file_too_large_to_count_leaves_both_sections_out(self):
+        """What « health » refuses to count (more than hive.HEALTH_FILES_MOST entries in the tasks' files, whose square the
+        tally costs; a task id longer than TASK_ID_MAX), the page does not count either: it says so, and goes on."""
+        self.ledger(self.lines())
+        many = {"id": "toy-0001", "title": "Many", "files": [f"f{n}.c" for n in range(hive.HEALTH_FILES_MOST + 1)]}
+        for heavy in ([many], [{**self.TASKS[0], "id": "toy-" + "a" * page.TASK_ID_MAX + "-0001"}]):
+            files = self.make("--tasks", self.tasks(heavy))
+            self.assertEqual((self.summary(files)["attention"], self.summary(files)["map"]), (None, None))
+            self.assertIn("are left out", self.errors)
+            self.assertIn("Progress", self.harmless(files).said)
+        files = self.make("--tasks", self.tasks([{**many, "files": many["files"][:hive.HEALTH_FILES_MOST]}]))
+        self.assertIsNotNone(self.summary(files)["map"], "up to the bound, counted")
+
+
+class TestMap(Case):
+    """The map of the tasks: the tree of cuts (`parent`), what each task needs (`needs`) and how each stands, from the
+    task file and the hive's tally; flat for a project whose tasks have no links. Task ids, statuses and numbers."""
+
+    def accepted(self, n, task):
+        return {"type": "verdict", "at": f"2026-11-12T0{n}:30:00Z", "task": task, "member": f"login{n}", "member_id": n, "repo_id": n + 1000,
+                "sha": f"{n:x}" * 40, "commit": f"{n + 5:x}" * 40, "result": "accepted", "judged": True, "model": None}
+
+    def make_map(self, tasks):
+        """The page, given these tasks, with the feed's titles for them (« Title of <id> »)."""
+        self.put("feed.json", feed({line["id"]: "open" for line in tasks}))
+        return self.make("--tasks", self.tasks(tasks))
+
+    def test_tasks_without_links_are_one_flat_list_those_left_to_do_first(self):
+        self.ledger([self.accepted(1, "toy-0003"), dealt(2, "2026-11-12T05:00:00Z", "login2", 2, "toy-0004")])
+        tasks = [task(f"toy-{n:04d}") for n in range(1, 6)]
+        files = self.make_map([*tasks[:4], {**tasks[4], "closed": True}])
+        seen = self.harmless(files)
+        found = self.summary(files)["map"]
+        self.assertFalse(found["linked"])
+        self.assertEqual([(row["task"], row["status"], row["depth"], row["folded"]) for row in found["rows"]],
+                         [("toy-0001", "open", 0, 0), ("toy-0002", "open", 0, 0), ("toy-0004", "dealt", 0, 0), ("toy-0003", "done", 0, 0),
+                          ("toy-0005", "closed", 0, 0)])
+        self.assertEqual((found["tasks"], found["done"], found["dealt"], found["open"], found["closed"], found["ready"], found["waiting"],
+                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (5, 1, 1, 2, 1, 2, 0, 0, 0, 0, 0))
+        self.assertIn("The map of the tasks", seen.heads)
+        self.assertEqual(seen.row("toy-0004 Title of toy-0004"), ["toy-0004 Title of toy-0004", "being worked on"])
+        self.assertIn("the tasks are one flat list, those left to do first", seen.said)
+        self.assertNotIn("Cut from", seen.said, "no empty tree")
+        self.assertNotIn("lineage", seen.said)
+
+    def test_the_tree_of_cuts_and_what_each_task_waits_for(self):
+        tasks = [task("toy-0001", closed=True), task("toy-0006", parent="toy-0001"), task("toy-0007", parent="toy-0001", closed=True),
+                 task("toy-0009", parent="toy-0007"), task("toy-0002", needs=["toy-0006"]), task("toy-0003", needs=["toy-0009", "toy-0006"], kind="probe"),
+                 task("toy-0004", closed=True), task("toy-0005", parent="toy-0004"), task("toy-0008")]
+        self.ledger([self.accepted(n, t) for n, t in enumerate(("toy-0006", "toy-0004", "toy-0005", "toy-0008"), 1)])
+        files = self.make_map(tasks)
+        seen = self.harmless(files)
+        found = self.summary(files)["map"]
+        self.assertTrue(found["linked"])
+        self.assertEqual([(row["task"], row["status"], row["depth"], row["parent"], row["folded"]) for row in found["rows"]],
+                         [("toy-0001", "closed", 0, None, 0), ("toy-0006", "done", 1, "toy-0001", 0), ("toy-0007", "closed", 1, "toy-0001", 0),
+                          ("toy-0009", "open", 2, "toy-0007", 0), ("toy-0002", "open", 0, None, 0), ("toy-0003", "open", 0, None, 0),
+                          ("toy-0004", "done", 0, None, 1), ("toy-0008", "done", 0, None, 0)],
+                         "the lineages with a task left to do first; a finished branch is one row that counts the rest")
+        self.assertEqual((found["tasks"], found["done"], found["dealt"], found["open"], found["closed"], found["ready"], found["waiting"],
+                          found["cut"], found["lineages"], found["deepest"], found["rows_left_out"]), (9, 4, 0, 3, 2, 2, 1, 4, 2, 2, 0),
+                         "four tasks cut again, in the two lineages of toy-0001 and toy-0004")
+        self.assertEqual(found["rows"][5]["needs"], [{"task": "toy-0009", "status": "open"}, {"task": "toy-0006", "status": "done"}])
+        step = page.NBSP * 2 + page.CUT_SIGN
+        self.assertEqual(seen.row(step + "toy-0009 Title of toy-0009"), [step + "toy-0009 Title of toy-0009", "open", "toy-0007", "none"])
+        self.assertEqual(seen.row("toy-0003 Title of toy-0003 (probe)"), ["toy-0003 Title of toy-0003 (probe)", "open", "none", "toy-0009 open, toy-0006 done"])
+        self.assertEqual(seen.row("toy-0004 Title of toy-0004 · and 1 below it, all done or closed")[1:], ["done", "none", "none"])
+        self.assertIn('<span aria-hidden="true">' + step + "</span>", files["index.html"], "a screen reader reads the column, not the sign")
+        self.assertIn("Cut again from another task: 4, in 2 lineage(s); the deepest is 2 cut(s) below its lineage's first task. Open, with every "
+                      "task it needs done: 2; open, and waiting for a task it needs: 1. (The deal does not read what a task needs yet: a task "
+                      "that waits may still be dealt.)", seen.said)
+        self.assertNotIn("login", json.dumps(found), "no member is named")
+        files = self.make_map([task("toy-0001", closed=True), task("toy-0002", needs=["toy-0001"]), task("toy-0003", needs=["toy-0001"], closed=True)])
+        found = self.summary(files)["map"]
+        self.assertEqual((found["ready"], found["waiting"], found["on_closed"]), (0, 1, 1), "a task that needs a closed one waits for ever")
+        self.assertIn("open, and waiting for a task it needs: 1, of which 1 need a closed task, which will not be done.", self.harmless(files).said)
+
+    def test_the_frontier_of_a_long_lineage_is_listed_first(self):
+        """A chain of cuts, all done but the last, and another task left to do: more rows than the map lists. The rows that
+        lead to the tasks left to do come first; a row says how many tasks before it are not listed."""
+        chain = [task("toy-0001")] + [task(f"toy-{n:04d}", parent=f"toy-{n - 1:04d}") for n in range(2, 101)]
+        self.ledger([{"type": "verdict", "at": f"2026-11-11T{n // 60:02d}:{n % 60:02d}:00Z", "task": f"toy-{n:04d}", "member": "alice",
+                      "member_id": 101, "repo_id": 1, "sha": f"{n:040x}", "commit": f"{5000 + n:040x}", "result": "accepted", "judged": True,
+                      "model": None} for n in range(1, 100)])
+        files = self.make_map([*chain, task("toy-0200")])
+        seen = self.harmless(files)
+        found = self.summary(files)["map"]
+        listed = [row["task"] for row in found["rows"]]
+        self.assertEqual(len(listed), page.MAP_SHOWN)
+        self.assertEqual(listed[-3:], ["toy-0099", "toy-0100", "toy-0200"], "the open tip, the task it was cut from, the other task left to do")
+        self.assertEqual(listed[:page.MAP_SHOWN - 3], [f"toy-{n:04d}" for n in range(1, page.MAP_SHOWN - 2)], "then the others, in the tree's order")
+        self.assertEqual([row["after"] for row in found["rows"][-3:]], [99 - (page.MAP_SHOWN - 2), 0, 0])
+        self.assertEqual((found["rows_left_out"], found["open"], found["ready"]), (101 - page.MAP_SHOWN, 2, 2))
+        self.assertIn(f"toy-0099 Title of toy-0099 · {99 - (page.MAP_SHOWN - 2)} task(s) before it not listed", seen.said)
+
+    def test_the_map_is_bounded_on_a_large_project(self):
+        """A chain of cuts as long as the rows the map lists, and longer; a task that needs many: the map lists MAP_SHOWN
+        rows, sets no row further in than DEPTH_SHOWN steps, names NEEDS_SHOWN needs on a row, and counts the rest."""
+        chain = [task("toy-0001")] + [task(f"toy-{n:04d}", parent=f"toy-{n - 1:04d}") for n in range(2, 101)]
+        many = task("toy-0200", needs=[f"toy-{n:04d}" for n in range(1, 21)])
+        self.ledger([])
+        files = self.make_map([*chain, many])
+        seen = self.harmless(files)
+        found = self.summary(files)["map"]
+        self.assertEqual((len(found["rows"]), found["rows_left_out"], found["deepest"]), (page.MAP_SHOWN, 101 - page.MAP_SHOWN, 99))
+        self.assertEqual(found["rows"][-1]["task"], f"toy-{page.MAP_SHOWN:04d}", "the chain in its order, cut where the rows end")
+        deepest = page.NBSP * 2 * (page.DEPTH_SHOWN - 1) + page.CUT_SIGN
+        self.assertTrue(seen.row(deepest + f"toy-{page.MAP_SHOWN:04d} Title of toy-{page.MAP_SHOWN:04d}"), "no further in than DEPTH_SHOWN steps")
+        self.assertIn(f"Tasks, not listed: {101 - page.MAP_SHOWN}.", seen.said)
+        files = self.make_map([*chain[:25], many])
+        found = self.summary(files)["map"]
+        self.assertEqual(found["rows"][-1]["task"], "toy-0200")
+        self.assertEqual((len(found["rows"][-1]["needs"]), found["rows"][-1]["needs_left_out"]), (page.NEEDS_SHOWN, 20 - page.NEEDS_SHOWN))
+        self.assertIn(f"and {20 - page.NEEDS_SHOWN} more", self.harmless(files).said)
+
+    def test_a_hostile_title_in_the_feed_is_escaped_on_the_map(self):
+        self.ledger([])
+        self.put("feed.json", feed({"toy-0002": "open"}, titles={"toy-0002": '<script>alert(1)</script>"x\n'}))  # (the feed's titles are the project's own)
+        files = self.make("--tasks", self.tasks([task("toy-0001", closed=True), task("toy-0002", parent="toy-0001")]))
+        seen = self.harmless(files)
+        self.assertNotIn("<script", files["index.html"])
+        self.assertIn('<script>alert(1)</script>"x', seen.said, "shown as text")
 
 
 if __name__ == "__main__":
