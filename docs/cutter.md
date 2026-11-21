@@ -218,25 +218,32 @@ hive reads; it is sent nothing, and it posts nothing for anyone.
 - **Numbers it reads itself: `hive.py health`.** It reads the projects listed in this repository
   (`hive/projects.json`), each from `https://github.com/<owner>/<name>` with no account, and of each two public
   branches: the default one, for the project's settings and tasks, read as a run reads them, and `hive-state`, for
-  its ledger. One listing and one fetch per project, bounded in time and in bytes, into a temporary store of its own
-  that it removes afterwards. No token reaches git: the variables that name one are left out of its environment, with
-  the programs that would ask for one, and its home holds nothing. Nothing of the machine is sent, and nothing is
-  written elsewhere. It runs on the hive's side (Linux), wherever git can reach GitHub.
+  its ledger. One listing and one fetch of the two tips (no history) per project, bounded in time and in bytes, into
+  a temporary store of its own that it removes once the project is read. No token reaches git: git sees only a few
+  of the machine's variables (where programs are, the language, the time zone, the temporary folder, a bundle of
+  certificate authorities, and a proxy whose address names no user or password), the hive's own git settings, and a
+  home that holds nothing. Nothing of the machine is sent, and nothing is written elsewhere. It runs on the hive's
+  side (Linux), wherever git can reach GitHub.
   It adds up what the tally says of each project (above) and prints JSON. For each project: the two commits it read;
   its tasks by status; what is left to do, what can be dealt now and in how many separate areas; the stuck tasks, by
   id; whether it starves, whether it is paused; how many members are active (each project counts its own: an
   account active in two projects is two in the totals); its deals, acceptances, refusals by
   reason, and deals run out at the member's cost or at nobody's; the ledger's `error` marks by kind (`judge`: the
   judge did not answer; `hive`: the hive's machine; `push`: the project's repository declined the commit; `none`: the
-  judge started and gave no answer in the run) and the tasks they fell on; acceptance by kind and by size of task
-  (of the deals that ended by their members' doing, the share accepted); the hours from a deal to its acceptance, and
-  their median. Then the totals, each the sum of the projects', and the projects it could not read, each with a code.
-  It keeps only what the tally keeps of a ledger line: no login, no account number, no candidate's commit, no text a
-  volunteer wrote. Later, what the gate refused.
+  judge started and gave no answer in the run) and the tasks they fell on; acceptance by kind and by size of task;
+  the hours from a deal to its acceptance, and their median. Acceptance is counted by answer: of the candidates
+  answered and the deals run out at the member's cost, the share accepted. A refusal the protocol puts on the hive's
+  or the project's side (`not_answered`, `task_closed`) is left out; `judge_failed` and `push_refused`, which it
+  charges to the candidate, count; a candidate a guardian admitted after its refusal is one answer more. Then the
+  totals, each the sum of the projects', and the projects it could not read, each with a code: among them a project
+  whose name or a task's id is longer than 64 characters, or whose tasks name more than 2000 entries in their files
+  (the tally's cost grows with their square). It keeps only what the tally keeps of a ledger line: no login, no
+  account number, no candidate's commit, no text a volunteer wrote. Later, what the gate refused.
 - **What numbers do not say comes from the architect, by hand: `hive.py report`.** Three issue templates in this
   repository (`.github/ISSUE_TEMPLATE/`): a judge or machine error, an optimisation of the hive, feedback on the
   cutter. `hive.py report --template error|optimisation|cutter [--project <owner/name>]` prints one of them with its
-  numbers part filled from `health` alone, as a table. The architect reads it, writes their own words where it asks,
+  numbers part filled from `health` alone, as a table with a column for each project, under its repository. The
+  architect reads it, writes their own words where it asks,
   and posts it, or not: the hive opens no issue, calls no API and writes nothing for anyone.
 - **A weakness of the hive is reported privately, never in an issue** ([SECURITY.md](../SECURITY.md)). Turning on
   GitHub's private vulnerability reporting for this repository is the founder's setting.

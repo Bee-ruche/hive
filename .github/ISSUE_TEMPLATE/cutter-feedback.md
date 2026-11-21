@@ -15,9 +15,10 @@ task cut too large or too small, a goal no candidate reaches, a project left wit
 
 **What you expected instead.**
 
-**The numbers.** `python3 tools/hive/hive.py report --template cutter --project <owner/name>` prints this issue with
-the part below filled from the project's public branches: numbers, codes and ids, no member and no text a volunteer
-wrote. Read what it prints before you post it.
+**The numbers.** `python3 tools/hive/hive.py report --template cutter --project <owner/name>`, run on Linux (or in a
+Linux container) from a clone of this repository, prints this issue with the part below filled from the project's
+public branches: numbers, codes and ids, no member and no text a volunteer wrote. Read what it prints before you post
+it.
 
 <!-- numbers -->
 Not filled: run the command above, or leave this part out.

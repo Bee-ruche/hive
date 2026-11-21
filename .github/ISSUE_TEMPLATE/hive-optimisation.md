@@ -15,8 +15,9 @@ never in an issue: see SECURITY.md. -->
 issue changes nothing by itself.
 
 **The numbers.** `python3 tools/hive/hive.py report --template optimisation` (with `--project <owner/name>` for one
-project alone) prints this issue with the part below filled from the projects' public branches: numbers, codes and
-ids, no member and no text a volunteer wrote. Read what it prints before you post it.
+project alone), run on Linux (or in a Linux container) from a clone of this repository, prints this issue with the
+part below filled from the projects' public branches: numbers, codes and ids, no member and no text a volunteer
+wrote. Read what it prints before you post it.
 
 <!-- numbers -->
 Not filled: run the command above, or leave this part out.

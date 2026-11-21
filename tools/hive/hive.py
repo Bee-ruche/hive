@@ -1802,9 +1802,11 @@ class Unfetched(HiveError):
     """A fetch of a fork did not end well, for a reason the fetch does not tell: the fork, GitHub, or the network."""
 
 
-def fetch_bounded(repo, url, specs, most, allow_local=False):
+def fetch_bounded(repo, url, specs, most, allow_local=False, depth=None):
     """One « git fetch » of a fork's branches into the hive's clone, bounded in time and in bytes. Returns "got",
-    "failed" (git ended badly, or FETCH_SECONDS passed) or "heavy" (the fork sent more than `most` bytes).
+    "failed" (git ended badly, or FETCH_SECONDS passed) or "heavy" (the fork sent more than `most` bytes). `depth`:
+    how many commits of each branch to take, from its tip (health reads a project's two tips alone); by default, all
+    that the clone lacks.
 
     In bytes: what a fetch brings arrives as one file (a pack: fetch.unpackLimit=1), and no program of the fetch may
     write a file longer than `most` bytes: the kernel stops the one that tries. Whatever a fork holds, one fetch
@@ -1819,7 +1821,8 @@ def fetch_bounded(repo, url, specs, most, allow_local=False):
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     command = ["git", *GIT_BASE, "-c", "fetch.unpackLimit=1", "-c", "transfer.unpackLimit=1", "-C", str(repo),
-               "fetch", "--no-tags", "--no-recurse-submodules", "--no-auto-maintenance", "--quiet", url, *specs]
+               "fetch", "--no-tags", "--no-recurse-submodules", "--no-auto-maintenance", "--quiet",
+               *((f"--depth={int(depth)}",) if depth else ()), url, *specs]
     try:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    env={**isolated_environment(), **transport(allow_local)}, start_new_session=True, preexec_fn=bounds)
@@ -4932,10 +4935,14 @@ HEALTH_LIST_BYTES = 64 * HEAD_LINE_BYTES  # what is read at most of the listing 
 LEDGER_FILE = "ledger.jsonl"  # the ledger, at the root of a project's branch hive-state
 UNREAD_BECAUSE = ("unreachable", "no_state", "unfetched", "heavy", "settings", "ledger", "tasks")  # why a project was not read
 NO_WORD = "(none)"  # a task's size or kind the tally could not read (no word of a tasks file is spelt so: plain_word)
-# The variables a reader with no account does without: a token, a secret, a password or a credential by name, and the
-# programs or files git or its transport would ask one of. (The machine's git settings are never read: GIT_ISOLATED.)
-ANONYMOUS = re.compile(r"(?:GIT_ASKPASS|SSH_ASKPASS|GIT_SSH|GIT_SSH_COMMAND|GIT_PROXY_COMMAND|NETRC|CURL_HOME"
-                       r"|.*(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_?KEY).*)\Z", re.IGNORECASE)
+HEALTH_FILES_MOST = 2000  # the most entries all the tasks of one project may name in their files, for health to count them (rivals_of)
+ID_CHARS = 64  # the longest project name or task id health prints
+# The only variables of the machine's that the gits of « health » see (anonymous): where programs are, the language,
+# the time zone, the temporary folder, the hive's fixed instant, a bundle of certificate authorities, and a proxy whose
+# address names no user and no password (ANONYMOUS_PROXIES). No token, no password, no program that asks for one,
+# nothing that makes git write elsewhere (a trace) or run something else.
+ANONYMOUS_KEPT = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "HIVE_NOW", "SSL_CERT_FILE", "SSL_CERT_DIR")
+ANONYMOUS_PROXIES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")  # (in either letter case)
 HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free")  # a project's numbers that add up
 HEALTH_TABLES = ("tasks", "refused", "errors")  # a project's counts by status, by reason and by kind, which add up name by name
 GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired")  # what is counted of the tasks of one kind, or of one size
@@ -4968,7 +4975,7 @@ def read_projects(registry):
             and all(isinstance(name, str) and REPO_NAME.match(name) and name.split("/")[1].strip(".") and not name.lower().endswith(".git")
                     for name in projects)
             and len({name.lower() for name in projects}) == len(projects)):
-        raise HiveError(f"{PROJECTS_FILE}: the list of the projects' repositories (« projects »: owner/name, each once, "
+        raise HiveError(f"{PROJECTS_FILE}: the list of the projects' repositories (\"projects\": owner/name, each once, "
                         f"{PROJECTS_MOST} at most) cannot be read: nothing is read")
     return projects
 
@@ -4980,14 +4987,15 @@ def public_address(repository):
 
 def anonymous(home):
     """Makes this process's environment that of a reader with no account, for every git it starts from then on (each
-    takes os.environ as it starts: isolated_environment): no variable that names a token, a secret, a password or a
-    credential, no program that asks for one, and a home of its own that holds nothing (no .netrc, no
-    .git-credentials). Returns the environment as it was, which the caller puts back."""
+    takes os.environ as it starts, and adds the hive's own git settings: isolated_environment): the machine's
+    variables of ANONYMOUS_KEPT alone, a proxy only if its address names no user or password, and a home of its own
+    that holds nothing (no .netrc, no .git-credentials, no settings). Returns the environment as it was, which the
+    caller puts back."""
     saved = dict(os.environ)
-    for name in list(os.environ):
-        if ANONYMOUS.match(name):
-            del os.environ[name]
-    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home))
+    kept = {name: value for name, value in saved.items()
+            if name in ANONYMOUS_KEPT or (name.lower() in ANONYMOUS_PROXIES and "@" not in value)}
+    os.environ.clear()
+    os.environ.update(kept, HOME=str(home), XDG_CONFIG_HOME=str(home))
     return saved
 
 
@@ -4996,8 +5004,8 @@ def read_public_state(repository, folder, allow_local=False):
     address (public_address) into `folder`, a store of this command's own that the caller removes: the branch the
     project publishes, which its repository names as its default one, for its settings and tasks, read there as a
     run reads them (settings_on); and its branch hive-state, for its ledger. One listing (git ls-remote) and one
-    fetch, bounded in time and in bytes (fetch_bounded), from a store that holds nothing: nothing of this machine is
-    sent. Raises Unread, with a code, when the project cannot be read so."""
+    fetch of the two tips alone (no history), bounded in time and in bytes (fetch_bounded), from a store that holds
+    nothing: nothing of this machine is sent. Raises Unread, with a code, when the project cannot be read so."""
     url, published, state = public_address(repository), "refs/health/published", "refs/health/state"
     folder.mkdir(parents=True)
     git(folder, "init", "--quiet", "--bare")
@@ -5013,7 +5021,7 @@ def read_public_state(repository, folder, allow_local=False):
     if not any(line.partition("\t")[2] == f"refs/heads/{STATE_BRANCH}" and is_sha(line.partition("\t")[0]) for line in text.splitlines()):
         raise Unread("no_state")
     fetched = fetch_bounded(folder, url, [f"+refs/heads/{found[0]}:{published}", f"+refs/heads/{STATE_BRANCH}:{state}"],
-                            HEALTH_FETCH_BYTES, allow_local)
+                            HEALTH_FETCH_BYTES, allow_local, depth=1)
     if fetched != "got":
         raise Unread("heavy" if fetched == "heavy" else "unfetched")
     commits = [git(folder, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).stdout.strip() for ref in (published, state)]
@@ -5042,9 +5050,11 @@ def middle(values):
 
 
 def acceptance(group):
-    """The share of a group's deals that ended in an acceptance, of those that ended by their members' doing: a
-    candidate answered (for no doing of the hive's or the project's: HIVE_SIDE_REASONS), or a deal run out at its
-    member's cost. None while none did."""
+    """The share of acceptances among a group's endings by its members' doing, counted by answer: each candidate the
+    hive answered, accepted or refused (a refusal the protocol puts on the hive's or the project's side,
+    HIVE_SIDE_REASONS, left out; judge_failed and push_refused, which it charges to the candidate, counted), and each
+    deal run out at its member's cost. A candidate a guardian admitted after its refusal is one answer more. None
+    while there was none."""
     ended = group["accepted"] + group["refused"] + group["expired"]
     return round(group["accepted"] / ended, 3) if ended else None
 
@@ -5093,8 +5103,8 @@ def project_health(repository, config, tallied, published, state):
 
 def health_totals(summaries):
     """The totals of the projects' summaries: each number, each count by name and each group's counts, the sum of the
-    projects'; the stuck tasks counted; the projects that starve, and those paused, named; the hours to accept of all
-    of them together. The shares are worked out of the sums, never averaged."""
+    projects'; the stuck tasks counted; the projects that starve, and those paused, named by their repositories; the
+    hours to accept of all of them together. The shares are worked out of the sums, never averaged."""
     totals = {"projects": len(summaries), "stuck": 0, "starving": [], "paused": [], "by_kind": {}, "by_size": {}, "hours_to_accept": [],
               **dict.fromkeys(HEALTH_SUMS, 0), **{table: {} for table in HEALTH_TABLES}}
     for summary in summaries:
@@ -5109,8 +5119,8 @@ def health_totals(summaries):
                 for key in GROUP_SUMS:
                     total[key] += group[key]
         totals["stuck"] += len(summary["stuck"])
-        totals["starving"] += [summary["project"]] if summary["starving"] else []
-        totals["paused"] += [summary["project"]] if summary["paused"] else []
+        totals["starving"] += [summary["repository"]] if summary["starving"] else []
+        totals["paused"] += [summary["repository"]] if summary["paused"] else []
         totals["hours_to_accept"] += summary["hours_to_accept"]
     totals["hours_to_accept"].sort()
     return with_shares(totals)
@@ -5119,11 +5129,19 @@ def health_totals(summaries):
 def health(projects, read, instant):
     """What the listed projects' public state says of the hive at an instant: a summary of each project read
     (project_health), the projects that could not be read with a code, and the totals of those read (health_totals).
-    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), or raises Unread."""
+    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), or raises Unread.
+
+    A project whose name, or a task's id, is longer than ID_CHARS, or whose tasks name more than HEALTH_FILES_MOST
+    entries in their files, is not read: the tally's cost grows with the square of those entries (rivals_of), and
+    no project holds up the others."""
     summaries, unread = [], []
     for repository in projects:
         try:
             config, tasks, ledger, published, state = read(repository)
+            if len(config["project"]) > ID_CHARS:
+                raise Unread("settings")
+            if any(len(task_id) > ID_CHARS for task_id in tasks) or sum(len(task["files"]) for task in tasks.values()) > HEALTH_FILES_MOST:
+                raise Unread("tasks")
             try:
                 active = len(active_members(ledger, instant, config))
             except (KeyError, TypeError, AttributeError, ValueError):  # (a line of the ledger that is not as the hive writes it)
@@ -5142,7 +5160,8 @@ def health(projects, read, instant):
 def health_of(args):
     """The health of the projects the hive's repository lists (or of the one --project names, which must be listed),
     each read from its public address with no account (anonymous, read_public_state), in a temporary folder removed
-    afterwards. Writes nothing else, and says on the error output which projects could not be read."""
+    afterwards. Writes nothing else, and says on the error output which projects could not be read; when none could,
+    that is an error, and nothing is printed."""
     projects = read_projects(args.registry)
     if args.project is not None:
         if args.project not in projects:
@@ -5150,15 +5169,25 @@ def health_of(args):
         projects = [args.project]
     instant, places = now(), iter(range(len(projects)))
     with tempfile.TemporaryDirectory(prefix="hive-health-") as scratch:
+
+        def read_and_drop(repository):  # (what a project's store held is in memory once read: the store goes at once)
+            folder = Path(scratch) / str(next(places))
+            try:
+                return read_public_state(repository, folder)
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+
         (Path(scratch) / "home").mkdir()
         saved = anonymous(Path(scratch) / "home")
         try:
-            result = health(projects, lambda repository: read_public_state(repository, Path(scratch) / str(next(places))), instant)
+            result = health(projects, read_and_drop, instant)
         finally:
             os.environ.clear()
             os.environ.update(saved)
     for row in result["unread"]:
         log(f"health: {row['repository']} not read ({row['because']})")
+    if not result["projects"]:
+        raise HiveError("no listed project could be read: nothing is printed")
     return result
 
 
@@ -5229,9 +5258,10 @@ def report_rows(template, summaries):
 
 def report_numbers(template, result):
     """The numbers part of an issue template, as Markdown: a table of what health says, a column for each project
-    read (and one for all of them, when there are several), the rows the template asks for (report_rows); then the
-    projects that could not be read. Every cell is a number, a code, an id or a commit of health's."""
-    columns = [(summary["project"], summary) for summary in result["projects"]]
+    read, under its repository as the hive's list names it (and one for all of them, when there are several), the
+    rows the template asks for (report_rows); then the projects that could not be read. Every cell is a number, a
+    code, an id or a commit of health's."""
+    columns = [(summary["repository"], summary) for summary in result["projects"]]
     columns += [("all projects", result["totals"])] if len(columns) > 1 else []
     lines = [f"Read by `hive.py health` at {result['as_of']} from each project's public branches: numbers and ids only.", ""]
     if columns:
