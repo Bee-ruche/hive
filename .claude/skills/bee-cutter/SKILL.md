@@ -104,11 +104,12 @@ Write at most `short` new tasks, plus one cut for each task of `for_the_cutter`,
 tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
-`files`, `size`, `tier`, `goal`, `context`, and when they apply `options`, `parent` (the stuck task it is cut from,
-closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else. `goal` is
-the one key that may be absent: a line without it has the goal « correct », and goes to the backlog as any goal
-« correct » does (below). Leave it out only when none of the published tasks that are not closed carries a `goal`;
-a project with goals on figures writes `goal` on every new line.
+`files`, `size`, `tier`, `goal`, `options` when it applies, `context`, then, when they apply, `parent` (the stuck
+task it is cut from, closed in the same cycle) and `needs` (tasks that must be done first, all done already).
+Nothing else. Of the keys always written, `goal` alone may be absent: a line without it has the goal « correct »,
+and goes to the backlog as any goal « correct » does (below). Leave it out only when `judge.confirm` in
+`hive/project.json` is absent or empty: the project then takes goals « correct » only. Otherwise every new line
+writes its `goal`, whatever the published lines do.
 
 - `id`: `<project>-<four digits>`, above every id of the tasks file and the backlog: ids only grow, and the gate
   refuses one the tasks file holds.
@@ -123,9 +124,11 @@ a project with goals on figures writes `goal` on every new line.
   that it waits for the architect, who runs the judge and then `hive cut --failing <id>`.
 - `options`: only names and values the published tasks already use, with one exception: a new value of the option
   `unit`, when the charter or the architect's prompt gives that value word for word and says that the judge checks
-  that piece (in a project that ports or builds, a piece the judge has just learned to check). A name in the outline,
-  in a task or in the backlog never qualifies, nor does a piece a charter merely lists; never a value of your own
-  guess. Name each new value in your report.
+  that piece (in a project that ports or builds, a piece the judge has just learned to check). The value is a plain
+  identifier (lower-case letters, digits and `_`, at most 64), and where the published tasks name a file after
+  their unit (`hex4` and `port/src/hex4.rs`), the new task's file is named after it the same way. A name in the
+  outline, in a task or in the backlog never qualifies, nor does a piece a charter merely lists; never a value of
+  your own guess. Name each new value in your report.
 - `size` and `tier`: as the published tasks of the same kind; a cut of a stuck task is smaller than it.
 - `title`: one line, the function or the area and what to change, as the published titles do.
 - `context` (at most `cutter.context_chars` characters): what a volunteer's agent needs and cannot guess, in plain
@@ -183,7 +186,8 @@ cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
 git add hive/tasks.jsonl
 git add hive/backlog.jsonl                 # only if you changed the backlog
 git diff --cached --name-only              # hive/tasks.jsonl if PASSED counted new or closed tasks, hive/backlog.jsonl
-                                           # if you changed it, and nothing else; if it lists nothing, stop: nothing to publish
+                                           # if you changed it, and nothing else; if it lists nothing, stop: nothing to
+                                           # publish; if it lists the tasks file while PASSED counted none, stop
 git commit --quiet -F /tmp/message.txt
 git show HEAD:hive/tasks.jsonl | sha256sum    # must be the <sha256> CHECKED printed: otherwise stop, push nothing
 git show HEAD:hive/backlog.jsonl | sha256sum  # the same for the backlog, if you changed it
@@ -215,4 +219,5 @@ Your final message, for the architect, short:
    gate's refusals; the new values of `unit` you wrote, and where the charter or the prompt gave them; anything in
    the project that disagreed with this guide.
 
-No key, token or address in it, and nothing copied from the project's files.
+No key, token or address in it, and nothing copied from the project's files but ids and identifiers (task ids, the
+outline's names, the values of `unit`).
