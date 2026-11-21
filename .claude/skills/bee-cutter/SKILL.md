@@ -105,9 +105,10 @@ tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
 `files`, `size`, `tier`, `goal`, `context`, and when they apply `options`, `parent` (the stuck task it is cut from,
-closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else. A key the
-published lines leave out stays out: a project whose tasks all have the goal « correct » writes no `goal` at all
-(« correct » is what a line without one means).
+closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else. `goal` is
+the one key that may be absent: a line without it has the goal « correct », and goes to the backlog as any goal
+« correct » does (below). Leave it out only when none of the published tasks that are not closed carries a `goal`;
+a project with goals on figures writes `goal` on every new line.
 
 - `id`: `<project>-<four digits>`, above every id of the tasks file and the backlog: ids only grow, and the gate
   refuses one the tasks file holds.
@@ -120,9 +121,11 @@ published lines leave out stays out: a project whose tasks all have the goal « 
   the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now,
   you cannot run it, and in this version nothing runs it for you (docs/cutter.md, "Not yet"). Say in your report
   that it waits for the architect, who runs the judge and then `hive cut --failing <id>`.
-- `options`: only names the published tasks already use, and their values, but for a value the charter or the
-  architect's prompt names as new (the unit of a piece the judge has just learned to check, in a project that ports
-  or builds). Never a value of your own guess.
+- `options`: only names and values the published tasks already use, with one exception: a new value of the option
+  `unit`, when the charter or the architect's prompt gives that value word for word and says that the judge checks
+  that piece (in a project that ports or builds, a piece the judge has just learned to check). A name in the outline,
+  in a task or in the backlog never qualifies, nor does a piece a charter merely lists; never a value of your own
+  guess. Name each new value in your report.
 - `size` and `tier`: as the published tasks of the same kind; a cut of a stuck task is smaller than it.
 - `title`: one line, the function or the area and what to change, as the published titles do.
 - `context` (at most `cutter.context_chars` characters): what a volunteer's agent needs and cannot guess, in plain
@@ -179,8 +182,8 @@ cp /tmp/proposal.jsonl hive/tasks.jsonl
 cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
 git add hive/tasks.jsonl
 git add hive/backlog.jsonl                 # only if you changed the backlog
-git diff --cached --name-only              # must list what changed of hive/tasks.jsonl and hive/backlog.jsonl, nothing else
-                                           # (when only the backlog grows, the tasks file is unchanged and not listed)
+git diff --cached --name-only              # hive/tasks.jsonl if PASSED counted new or closed tasks, hive/backlog.jsonl
+                                           # if you changed it, and nothing else; if it lists nothing, stop: nothing to publish
 git commit --quiet -F /tmp/message.txt
 git show HEAD:hive/tasks.jsonl | sha256sum    # must be the <sha256> CHECKED printed: otherwise stop, push nothing
 git show HEAD:hive/backlog.jsonl | sha256sum  # the same for the backlog, if you changed it
@@ -196,10 +199,10 @@ before it lands, push to `cutter/<the date>` instead and open one pull request t
 the message below; do not merge it.
 
 `/tmp/message.txt`: its title is `Tasks: <n> new, <m> closed`, followed by `; backlog: <k> planned` when you add
-lines to the backlog; then one line for each task added, closed or planned and why, in your own words
-(`miniz-0043 (new): tdefl_compress_lz_codes, the largest function no task names`, `cjson-0006 (backlog): the leaf
-parse_number, which the judge has just learned to check`). Ids, names of
-the outline, numbers of the tally and figures of the charter only: no text copied from anything you read.
+lines to the backlog; then one line for each task added, closed or planned and why, in your own words, such as
+`miniz-0043 (new): tdefl_compress_lz_codes, the largest function no task names` or
+`cjson-0006 (backlog): the leaf parse_number, which the judge has just learned to check`. Ids, names of the
+outline, numbers of the tally and figures of the charter only: no text copied from anything you read.
 
 ## The report
 
@@ -209,6 +212,7 @@ Your final message, for the architect, short:
 2. What was published (the commit, the ids), or that nothing was and why.
 3. What waits for the architect: tasks « correct » in the backlog that wait for a run of the judge; `files` that are
    missing or protected; stuck tasks you could not cut; pieces the judge cannot check yet; a missing charter; the
-   gate's refusals; anything in the project that disagreed with this guide.
+   gate's refusals; the new values of `unit` you wrote, and where the charter or the prompt gave them; anything in
+   the project that disagreed with this guide.
 
 No key, token or address in it, and nothing copied from the project's files.

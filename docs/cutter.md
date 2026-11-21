@@ -7,7 +7,7 @@ map, closes the tasks that do not move and cuts them again, and publishes the ne
 project's trusted base, like its guardians; what volunteers push never steers it except through the judge's
 numbers.
 
-**Status (20 November 2026): the tally, the gate, the deterministic cutter, the outline and the AI cutter's guide are
+**Status (21 November 2026): the tally, the gate, the deterministic cutter, the outline and the AI cutter's guide are
 built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
 20 November 2026; the research behind the design is summed up in "Grounds".
 
