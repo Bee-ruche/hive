@@ -73,7 +73,7 @@ Nothing of the tip and nothing of the candidate runs on the judge's machine itse
 3. **The figure repeats.** The tip and the candidate each encode the data twice, in containers of their own; each
    one's two messages must be the same bytes. The tip decodes its message once and the candidate twice; each
    decoding must be the data. A candidate whose message changes (bytes the kernel draws, the clock, an address) is
-   refused; a tip whose message changes is a failure to judge, the tip's own doing (below, "When the tip is at
+   refused; a tip whose message changes is a failure to judge, on the tip's side (below, "When the tip is at
    fault"). Two runs do not prove that a thousand would agree: they make a figure that
    moves fail loudly, soon (below).
 4. **A phase is native code, and is given nothing to call.** Whatever a program's language promises, the kind takes
@@ -114,8 +114,9 @@ For the tip's tree and the candidate's tree, written out by the base:
    tip's program, in a container of the manifest's image that holds the tip's skeleton and the tip's program.
 4. **The tip's figure.** The tip's program encodes the data twice and decodes once (rules 1 and 3). Its total is
    measured in this judgement, as the candidate's is: a gain is never a difference between two machines. **The tip
-   against itself** (`--tip-itself`) stops here, answered 0. Nothing of the candidate's has been built or run yet:
-   a failure of the tip in these steps is the tip's alone (below, "When the tip is at fault").
+   against itself** (`--tip-itself`) stops here, answered 0. Nothing of the candidate's has been built or run yet
+   (below, "When the tip is at fault"). A step of the tip's (its build, one of its phases) that fails in a way its
+   bytes do not decide is run once more before the tip is said to be at fault.
 5. **The candidate's build**, as the tip's, with the candidate's program; then **the candidate encodes, twice**
    (rule 3).
 6. **The candidate decodes, twice** (rule 1); each result is read no further than the data's length plus one byte.
@@ -159,7 +160,11 @@ the clock is ended with its shell and counted with it.
 | stopped by the clock, processor time within the bound | the machine did not give it a processor | 2 |
 | killed before the clock, another signal, a status that is not 0 | the candidate's | 1 |
 | the container ended by the kernel with the launcher in it (status 137, no line), and Docker's own record says it was for memory (`OOMKilled`) | the candidate's | 1 |
-| status 137 and no line without that record (the host short of memory, Docker restarted, a run cancelled) | the machine's | 2 |
+| status 137 and no line without that record (Docker restarted, a run cancelled) | the machine's | 2 |
+
+The same measurements of the tip's own build or phases are failures on the tip's side (2: below, "When the tip is
+at fault"), and those its bytes do not decide (past its processor time, a signal, the memory record) are run once
+more first; the two that are no one's doing stay the machine's.
 
 The fourth line is the only doubt. Behind the gate a phase cannot wait: no call that sleeps, polls with a delay or
 waits on anything is let through, and no signal that would stop it (it may send itself SIGABRT alone). A phase
@@ -173,8 +178,8 @@ something when compiled). If a project's build script ever runs anything of the 
 that waits becomes a candidate's free retry, and that project must bound it otherwise.
 
 The **tip's own program** is given a quarter more processor time than a candidate (`bound + bound / 4`): a program
-accepted within the bound stays judgeable on a machine a quarter slower. Past that, the judge fails (2) and the
-project's lead sees it: the machine, or the bound, is what must change.
+accepted within the bound stays judgeable on a machine a quarter slower. Past that, twice in a row, the judge fails
+(2) and the project's lead sees it: the machine, or the bound, is what must change.
 
 **What a project tells its workers.** Processor time varies between machines and between runs of one machine
 (the processor's model, its neighbours): a tenth or two. A project sets its bounds far from what its tip takes, and
@@ -188,8 +193,12 @@ it). The gate marks the program as the process the kernel ends first when memory
 so that the launcher survives to say so (« ended by signal 9 »). On a host that ends a container's whole group
 instead, the container ends with status 137 and no measurement; the kind then takes it for the program's memory only
 if Docker's own record of the container says the kernel ended it for its memory (`OOMKilled`, which the hive's
-`container.Docker.launch` hands back from that record as `oom_killed`), and for the machine's otherwise. Which of the two a hosted
-runner does is to be seen at the first runs there.
+`container.Docker.launch` hands back from that record as `oom_killed`), and for the machine's otherwise. Whether that
+record is also set when the host as a whole runs short of memory and its kernel ends a process of the container is
+**not established**: with the newer control groups the kernel counts, in a group's own events, every process of it
+ended for memory, whatever ran short. A host short of memory may then read as the program's (for the tip's own
+phases, one of the failures run once more). Which of the two ends a hosted runner gives is to be seen at the first
+runs there.
 
 **The data is not in the judge's memory while a decoder runs.** Before each decoding the judge lets the data go
 and keeps its length and SHA-256 alone; what comes back is held to those two. The data is read again (and held to
@@ -287,28 +296,48 @@ own clock, and no call that reads any of them is let through.
 
 ## When the tip is at fault
 
-A failure of the tip's own build or phases in a judgement (its build fails or passes its bound, one of its phases
-fails, is killed or passes its bound, its two encodings differ, its decoding does not give the data back) is a
-failure to judge (2), and the judge says it is the tip's own doing: « the tip's own doing (not the candidate's) » in
-the reason, and `"fault": "tip"` in the report it writes. It happens before anything of the candidate's is built or
-run, so nothing of the candidate's can bring it about.
+When the tip's own build or phases fail in a judgement (its build fails or passes its bound, one of its phases
+fails, is killed or passes its bound, its two encodings differ, its decoding does not give the data back), the
+judgement is a failure to judge (2), and the judge says the failure is on the tip's side: « on the tip's side (not
+the candidate's) » in the reason, and `"fault": "tip"` in the report it writes. That is **taken as the tip's**; it
+does not prove the tip's code wrong. Some of those failures may be the machine's: a kill for memory (above, the
+memory record), processor time stretched past the tip's bound by a slow or crowded machine, a fault of the hardware.
+
+So a step of the tip's that fails in a way its bytes do not decide (ended by a signal, past its processor time, its
+container ended by the kernel for its memory, a build stopped at its clock with its time used) is **run once more**
+first. If the second run passes, the judgement goes on with it, and the judge's log says the first failed (« the
+tip's own step failed once and is run once more », with the first failure's words: a line a person can search for).
+If it fails again, the failure is on the tip's side. What the tip's bytes decide is not run again: an exit status
+that is not 0, a build that leaves no program, a phase that leaves no file, two encodings that differ (rule 3 keeps
+its meaning), a decoding that is not the data. A candidate's steps are never run twice.
+
+By then nothing of the candidate's has been built or run in that judgement, so nothing of that candidate's brings
+it about within it. Two things are shared beyond the judgement: the machine, with the run's earlier judgements; and
+the tip itself, which moves within a run: a program accepted earlier in the run is the tip the later candidates are
+judged against.
 
 The hive takes that answer as it takes a judge that fails on the tip itself ([protocol.md](protocol.md), "How a
 candidate is judged and integrated"): the run stops judging, the candidate it was on is not charged, the log says the
-judge found the tip at fault and for which task, and the run ends as a failure, so that a person sees it. A project
-whose tip wavers (a program that fails one of its own runs one time in some, on purpose or not: rule 3 tests
-determinism, it does not enforce it) therefore stalls, loudly, from the first judgement that meets the failure: its
-candidates wait, and nobody pays for them. **The architect recovers** by one revert of the commit that brought the
-program in, on the hive's branch; the next run judges against the tip before it.
+judge found the fault on the tip's side and for which task, and the run ends as a failure, so that a person sees it.
+A project whose tip wavers (a program that fails one of its own runs one time in some, on purpose or not: rule 3
+tests determinism, it does not enforce it) therefore stalls, loudly, from the first judgement that meets such a
+failure: its candidates wait, and nobody pays for them. **The architect recovers** by one revert of the commit that
+brought the program in, on the hive's branch; the next run judges against the tip before it. A failure that was the
+machine's costs the run, and the next run on a sound machine judges again.
 
 ## What a run costs
 
 A candidate's judgement: the launcher's build, two builds and **seven passes over the data** (the tip's two
 encodings and one decoding, the candidate's two encodings and two decodings), each in its own container, plus the
-host's reading and comparing (the data a few times). Its worst case, which the manifest must fit in
-`judge.timeout_seconds`, is every container at its clock: `70 + 2 × (build clock + 15 + 10) + 4 × (encode clock + 10)
-+ 3 × (decode clock + 10) + 60` seconds. The tip against itself: one build and three passes. A project keeps that
-worst case well under its judgement's time: a bound edited up to the edge turns every judgement into a 2.
+host's reading and comparing (the data a few times). A step of the tip's run once more ("When the tip is at
+fault") adds a build or a pass; the report's `builds` and `runs` count every one started. Its worst case, which the
+manifest must fit in `judge.timeout_seconds`, is every container at its clock and every step of the tip's run twice:
+`70 + 3 × (build clock + 15 + 10) + 6 × (encode clock + 10) + 4 × (decode clock + 10) + 60` seconds. The tip
+against itself: one build and three passes, two builds and six at most. A project keeps that worst case well under
+its judgement's time: a bound edited up to the edge turns every judgement into a 2.
+
+Every judgement measures the tip's whole figure before the candidate's build, so a candidate that does not even
+build costs the tip's figure all the same. A tip at fault costs one measured tip in every run until it is mended.
 
 ## For the base
 

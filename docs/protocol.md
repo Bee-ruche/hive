@@ -340,11 +340,12 @@ the hive runs those git commands with an empty attribute source.
   fails on a candidate, the hive asks it about the project's own tip against itself. If that fails too, the machine
   is down: the run stops judging and no candidate pays for the breakdown. If it passes, the failure is counted
   against the deal, whose candidate is judged again at the next run, three times at most. A judge may also say, in
-  its answer, that its failure is the tip's own doing (`"fault": "tip"`: a kind that measures the tip in the same
+  its answer, that its failure is on the tip's side (`"fault": "tip"`: a kind that measures the tip in the same
   judgement as the candidate, before anything of the candidate's runs, takes it from the report its judge wrote;
-  the relay kind does): the hive then does as when the judge fails on the tip itself, without asking it: the run
-  stops judging, the candidate it was on pays nothing, and the log says that the judge found the tip at fault, and
-  for which task. The field is read on a failure to judge alone, in that one spelling; a kind that never writes it
+  the relay kind does, once the tip's own build or phases failed, and is taken as the tip's, not as proof that its
+  code is wrong): the hive then does as when the judge fails on the tip itself, without asking it: the run stops
+  judging, the candidate it was on pays nothing, and the log says that the judge found the fault on the tip's side,
+  and for which task. The field is read on a failure to judge alone, in that one spelling; a kind that never writes it
   is answered as before. A run whose judge failed on the project's own tip, or found it at fault, ends as a failure
   once everything it could decide is written, so that a person sees it: the machine may be down, or the tip itself
   may no longer pass the project's check. A project whose tip is at fault stalls, its candidates waiting, until its

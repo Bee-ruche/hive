@@ -3180,8 +3180,8 @@ def with_history(repo, folder, commits):
             raise HiveError(f"judge.history: commit {commit[:12]} could not be copied for the judge")
 
 
-# What a judge's answer says when its failure to judge (code 2) is the project's tip's own doing, as the judge's own
-# report says it (a kind reads it from the report its judge wrote, never from anything a candidate writes): the judging
+# What a judge's answer says when its failure to judge (code 2) is on the project's tip's side (its own build or
+# phases failed: taken as the tip's, not proof that its code is wrong), as the judge's own report says it (a kind reads it from the report its judge wrote, never from anything a candidate writes): the judging
 # then stops as when the judge fails on the tip itself, and the candidate it was on is not charged (judging).
 TIP_FAULT = "tip"
 
@@ -3193,7 +3193,7 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
     A failure is the candidate's doing only if the machine works and the tip is sound: when the judge fails on a
     candidate, it is asked about the project's own tip against itself. If that fails too, the machine is down:
     nothing is answered, nothing more is judged in this run, and no candidate is refused for the breakdown. The same
-    holds, without the question, when the judge's own answer says the failure is the tip's doing (`"fault": "tip"`,
+    holds, without the question, when the judge's own answer says the failure is on the tip's side (`"fault": "tip"`,
     which a kind takes from the report its judge wrote: TIP_FAULT).
 
     The judging has a total time allowed: no judgement is started that could end after `deadline` (on the
@@ -3247,7 +3247,7 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
                 if save:
                     save(verdicts, started)
             if at_fault:
-                log(f"the judge found the project's tip at fault, for task {safe_text(task['id'], 40)}: nothing more is judged in this run")
+                log(f"the judge found the fault on the tip's side, for task {safe_text(task['id'], 40)}: nothing more is judged in this run")
             else:
                 log("the judge fails on the project's own tip: nothing more is judged in this run")
             return None

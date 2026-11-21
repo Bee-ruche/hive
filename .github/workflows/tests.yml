@@ -1,10 +1,11 @@
-# Tests of the hive's tooling, in two jobs on two machines: the judges' meta-tests build images and run containers,
-# and need a machine's disk of their own. First the hive protocol's (docs/protocol.md): tools/hive/test_hive.py,
+# Tests of the hive's tooling, in three jobs, each on a machine of its own: the judges' meta-tests build images and
+# run containers, and need a machine's disk of their own. The hive protocol's (docs/protocol.md): tools/hive/test_hive.py,
 # test_schedule.py, test_page.py and test_artifact.py, on local git repositories and archives the tests make, without
-# network. Then the judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project
-# and its malicious variants (test_judge.py), the judge's second kind on its own toy project, alone and through the
-# hive's own judging (test_reference.py), and the third kind on its own toy project (test_relay.py), in a job of its own. The variants' code runs only in the judge's containers (without network,
-# read-only). Read-only: no secret, no write, nothing of a pull request runs with more than a read token.
+# network. The judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project and
+# its malicious variants (test_judge.py), and the judge's second kind on its own toy project, alone and through the
+# hive's own judging (test_reference.py). The third kind's, on its own toy project (test_relay.py). The variants' code
+# runs only in the judge's containers (without network, read-only). Read-only: no secret, no write, nothing of a pull
+# request runs with more than a read token.
 name: Tests
 
 on:

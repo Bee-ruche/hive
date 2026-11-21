@@ -97,9 +97,43 @@ STATE = {}                   # what the report says of a judgement that stops: t
 
 
 class TipFault(JudgeError):
-    """A failure to judge that is the TIP's own doing: its build, one of its phases, its two encodings that differ,
-    its decoding that does not give the data back. Still a 2 (the candidate is not judged), and said as such in the
-    reason (« the tip's own doing ») and in the report (`"fault": "tip"`), so that a report can be searched for it."""
+    """A failure to judge on the TIP's side: its build, one of its phases, its two encodings that differ, its decoding
+    that does not give the data back. Still a 2 (the candidate is not judged), and said as such in the reason (« on the
+    tip's side ») and in the report (`"fault": "tip"`), so that a report can be searched for it. It is taken as
+    the tip's; it does not prove the tip's code wrong (a kill for memory, processor time stretched past the tip's
+    bound, a fault of the hardware may be the machine's): those failures are run once more first (Wavered)."""
+
+
+class Wavered(TipFault):
+    """A failure of the tip's own build or phase that its bytes do not decide: ended by a signal, past its processor
+    time, its container ended by the kernel for its memory, a build stopped at its clock with its time used. The host
+    may be the cause (short of memory, a stalled processor): the same step is run once more before the tip is said to
+    be at fault (once_more). What its bytes decide (an exit status, two encodings that differ, a decoding that is not
+    the data, no file left) is not run again: the tip's two encodings keep meaning what they mean."""
+
+
+# The line the log holds when a step of the tip's failed once and was run again: a person can search for it.
+ONCE_MORE = "the tip's own step failed once and is run once more"
+
+
+def undecided(blame, text):
+    """`blame`'s failure, for a cause the program's bytes do not decide: for the tip, Wavered (run once more); for a
+    candidate, the same refusal as any other (a candidate's step is never run twice)."""
+    return Wavered(text) if isinstance(blame, type) and issubclass(blame, TipFault) else blame(text)
+
+
+def once_more(step):
+    """A step of the tip's (its build, one of its phases), run once more when it fails in a way its bytes do not decide
+    (Wavered): if the second run passes, the judgement goes on with it, and the log says the first failed (ONCE_MORE);
+    if it fails again, the tip is at fault. A step that fails in a way its bytes decide is not run again."""
+    try:
+        return step()
+    except Wavered as first:
+        log(f"{ONCE_MORE}: {clean(str(first), 400)}")
+    try:
+        return step()
+    except Wavered as second:
+        raise TipFault(f"{second} (run twice: it failed the first time too)") from None
 
 
 def wall_of(seconds):
@@ -163,11 +197,12 @@ def check_manifest(raw):
 
 def budget(manifest):
     """The worst case of a candidate's whole judgement, in seconds: every container at its clock. The launcher's
-    build and two more (the tip's, the candidate's), four encodings (two each) and three decodings (the tip's one,
-    the candidate's two), and the host's own work on the data."""
-    builds = LAUNCHER_SECONDS + OVERHEAD + 2 * (wall_of(manifest["build_seconds"]) + REAPER + OVERHEAD)
-    encodings = 4 * (wall_of(manifest["encode_seconds"]) + OVERHEAD)
-    decodings = 3 * (wall_of(manifest["decode_seconds"]) + OVERHEAD)
+    build; the tip's build, its two encodings and its one decoding, each of them run twice (once_more: a first
+    failure its bytes do not decide, at the clock, then a second run, to the clock); the candidate's build, two
+    encodings and two decodings; and the host's own work on the data. Three builds, six encodings, four decodings."""
+    builds = LAUNCHER_SECONDS + OVERHEAD + 3 * (wall_of(manifest["build_seconds"]) + REAPER + OVERHEAD)
+    encodings = 6 * (wall_of(manifest["encode_seconds"]) + OVERHEAD)
+    decodings = 4 * (wall_of(manifest["decode_seconds"]) + OVERHEAD)
     return builds + encodings + decodings + DATA_SECONDS
 
 
@@ -446,8 +481,9 @@ def measured(ran, token, label, blame, what):
     the command never saw). Anything else is the judge's own failure: the command cannot write there. One case
     aside: a container that ended with status 137 and no line, which Docker's own record says the kernel ended for
     its memory (`oom_killed`, which container.Docker.launch hands back from that record): a host that ends a
-    container's whole group when it passes its memory ended the launcher with it, and that is `blame`'s. A 137
-    without that record (the host short of memory, Docker restarted, a run cancelled) is the machine's."""
+    container's whole group when it passes its memory ended the launcher with it, and that is `blame`'s (for the
+    tip, run once more: undecided). A 137 without that record (Docker restarted, a run cancelled) is the machine's.
+    Whether a host short of memory as a whole sets that record too is not established (docs/relay-judge.md, "Memory")."""
     lines = [line for line in ran.stdout.decode("utf-8", "replace").splitlines() if line.strip()]
     try:
         m = json.loads(lines[0]) if ran.returncode == 0 and len(lines) == 1 else None
@@ -457,30 +493,33 @@ def measured(ran, token, label, blame, what):
     if not isinstance(m, dict) or m.get("token") != token or m.get("label") != label \
             or any(type(m.get(key)) not in (int, float) for key in numbers):
         if ran.returncode == 137 and not lines and getattr(ran, "oom_killed", False) is True:
-            raise blame(f"{what}: its container was ended by the kernel for its memory, the judge's launcher with it")
+            raise undecided(blame, f"{what}: its container was ended by the kernel for its memory, the judge's launcher with it")
         raise JudgeError(f"{what}: the judge's launcher gave no measurement (its code: {ran.returncode})")
     return m
 
 
 def outcome(m, cpu_most, wall, blame, what, said=b""):
     """What a measurement means, of a phase or of a build. Past its processor time, ended by a signal, or a status
-    that is not 0: `blame`'s (Refusal: the candidate's doing; JudgeError: the tip's). Stopped by the clock while it
+    that is not 0: `blame`'s (Refusal: the candidate's doing; TipFault: the tip's side, where the first three are run
+    once more before it is said: undecided). Stopped by the clock while it
     had NOT used its processor time: behind the gate a phase has no call that waits and no signal that stops it, so
     the machine did not give it a processor; a build may also wait on its own processes. Neither is held against
     anyone: a failure to judge, after which the hive asks about the tip itself."""
     cpu, said = m["user_s"] + m["system_s"], " ".join(clean(said, 400).split())  # (what the program said: one line of it)
+    # A signal, the processor time, the memory: what the bytes do not decide alone (undecided: the tip's are run once
+    # more). An exit status that is not 0: what they decide.
     if m["signal"] == signal.SIGKILL and m["wall_s"] >= wall - 1:
         if cpu > cpu_most:
-            raise blame(f"{what}: stopped after {cpu:.1f} s of processor time; its bound is {cpu_most} s")
+            raise undecided(blame, f"{what}: stopped after {cpu:.1f} s of processor time; its bound is {cpu_most} s")
         raise JudgeError(f"{what}: stopped by the clock at {wall} s with {cpu:.1f} s of processor time used, within its bound of "
                          f"{cpu_most} s: the machine gave it no processor, or it waits for something; the judge cannot say which")
     if m["signal"]:
         killed = " (killed: past its memory bound, most likely)" if m["signal"] == signal.SIGKILL else ""
-        raise blame(f"{what}: ended by signal {m['signal']}{killed}. {said}")
+        raise undecided(blame, f"{what}: ended by signal {m['signal']}{killed}. {said}")
     if m["code"]:
         raise blame(f"{what}: exit status {m['code']}. {said}")
     if cpu > cpu_most:
-        raise blame(f"{what}: took {cpu:.1f} s of processor time; its bound is {cpu_most} s")
+        raise undecided(blame, f"{what}: took {cpu:.1f} s of processor time; its bound is {cpu_most} s")
 
 
 def how_it_differs(back, data):
@@ -499,6 +538,7 @@ class Judgement:
         memory = f"{manifest['memory_mb']}m"
         self.docker, self.bare = container.Docker(image, memory=memory), container.Docker(bare_image(), memory=memory)
         self.manifest, self.work, self.count = manifest, work, 0
+        self.builds = self.runs = 0  # every build and every phase started, a step of the tip's run once more included
         self.launcher = launcher_of(self.docker, work)
 
     def folder(self, name):
@@ -535,6 +575,7 @@ class Judgement:
         """A program as the tip's own script builds it from `sources`: the bytes of /out/run, read by the host. Those
         bytes are what the program weighs and what every phase is given a copy of. The build's bound is processor
         time, all its processes together, as a phase's is."""
+        self.builds += 1
         launcher = self.launcher_in(self.folder("launcher"))  # (a copy of its own: no folder is given to two containers)
         container.fixed_times(launcher)
         with bounded_folder(self.folder("out"), self.manifest["output_mb"]) as out:
@@ -559,6 +600,7 @@ class Judgement:
         everything the container sees, has room for `most` bytes of output and no more, and is unmounted when the
         phase ends. Returns the bytes the phase left, read by the host, and the launcher's measurement."""
         name, wanted = PHASES[phase]
+        self.runs += 1
         root = self.folder("phase")
         os.mkdir(root)
         room = megabytes(most + len(given) + len(program) + sum(len(binary) for binary in self.launcher.values()))
@@ -625,14 +667,18 @@ def judge(args, work):
 
     STATE["step"] = 3  # the tip's build: given the tip's skeleton and its program, and not the data
     judgement = Judgement(image_of(manifest), manifest, work)
-    tip_program = judgement.build(sources_of(args.tip, manifest, tip_files, judgement.folder("tip-sources")), TipFault, "the tip's build")
+    # Each step of the tip's is run once more if it fails in a way its bytes do not decide (once_more), and only then
+    # taken for the tip's fault.
+    tip_program = once_more(lambda: judgement.build(sources_of(args.tip, manifest, tip_files, judgement.folder("tip-sources")),
+                                                    TipFault, "the tip's build"))
 
-    # The tip's whole figure comes first, before anything of the candidate's is built or run: a failure of the tip (TipFault)
-    # is then the tip's alone, and the base may take it for that (it stops judging, and charges no candidate).
+    # The tip's whole figure comes first, before anything of the candidate's is built or run: a failure on the tip's side
+    # (TipFault) then has nothing of this candidate's in it, and the base may take it for that (it stops judging, and
+    # charges no candidate).
     STATE["step"] = 4  # the tip's own figure, measured in this judgement as the candidate's is
     encode_most, decode_most = manifest["encode_seconds"], manifest["decode_seconds"]
-    tip_message, tip_time = judgement.encode(tip_program, data, tip_bound(encode_most), TipFault, "the tip's first encoding")
-    again, tip_again = judgement.encode(tip_program, data, tip_bound(encode_most), TipFault, "the tip's second encoding")
+    tip_message, tip_time = once_more(lambda: judgement.encode(tip_program, data, tip_bound(encode_most), TipFault, "the tip's first encoding"))
+    again, tip_again = once_more(lambda: judgement.encode(tip_program, data, tip_bound(encode_most), TipFault, "the tip's second encoding"))
     if again != tip_message:  # R3 holds for the tip too: a tip whose figure moved would hand the next candidate a gain it did not make
         raise TipFault(f"the tip's own two encodings of the data are not the same bytes ({len(tip_message)} and {len(again)} bytes): "
                          "the project's program does not repeat, and nothing can be measured against it")
@@ -641,7 +687,7 @@ def judge(args, work):
     del data  # (no copy of the data in the judge while a decoder runs: its length and fingerprint only)
     # The tip decodes once, in every judgement: a tip whose decoder stopped working (another compiler, another machine)
     # is seen at the first judgement after, not when somebody asks.
-    back, back_time = judgement.decode(tip_program, tip_message, size, tip_bound(decode_most), TipFault, "the tip's decoding")
+    back, back_time = once_more(lambda: judgement.decode(tip_program, tip_message, size, tip_bound(decode_most), TipFault, "the tip's decoding"))
     if not gives_back(back, size, fingerprint):
         raise TipFault("the tip's own program does not give the data back: " + how_it_differs(back, the_data(args.tip, manifest)))
     del back
@@ -650,7 +696,8 @@ def judge(args, work):
     if args.tip_itself:  # does the machine work, and the project's own tip: that was all of it
         return {"message_bytes": len(tip_message), "program_bytes": tip_weight, "total_bytes": tip_total, "tip_total_bytes": tip_total,
                 "gain_total_bytes": 0.0, "sure_total_bytes": 0, "encode_seconds": seconds_of(tip_time, tip_again), "decode_seconds": seconds_of(back_time),
-                "encode_memory_kb": max(tip_time["maxrss_kb"], tip_again["maxrss_kb"]), "decode_memory_kb": back_time["maxrss_kb"], "builds": 1, "runs": 3}
+                "encode_memory_kb": max(tip_time["maxrss_kb"], tip_again["maxrss_kb"]), "decode_memory_kb": back_time["maxrss_kb"],
+                "builds": judgement.builds, "runs": judgement.runs}
     del tip_message
 
     STATE["step"] = 5  # the candidate's build (the tip's skeleton, its program, not the data); then R3: the same data twice
@@ -684,7 +731,7 @@ def judge(args, work):
             "sure_total_bytes": 1 if total < tip_total else 0,
             "encode_seconds": seconds_of(first, second), "decode_seconds": seconds_of(*times),
             "encode_memory_kb": max(first["maxrss_kb"], second["maxrss_kb"]), "decode_memory_kb": max(m["maxrss_kb"] for m in times),
-            "builds": 2, "runs": 7}
+            "builds": judgement.builds, "runs": judgement.runs}
 
 
 def write_report(path, report):
@@ -756,7 +803,7 @@ if __name__ == "__main__":
     except Refusal as refusal:
         sys.exit(stop(1, f"judge: REFUSED: {clean(str(refusal), 2000)}", where))
     except TipFault as error:
-        sys.exit(stop(2, f"judge: failure to judge, the tip's own doing (not the candidate's): {clean(str(error), 2000)}", where, "tip"))
+        sys.exit(stop(2, f"judge: failure to judge, on the tip's side (not the candidate's): {clean(str(error), 2000)}", where, "tip"))
     except JudgeError as error:
         sys.exit(stop(2, f"judge: failure to judge: {clean(str(error), 2000)}", where))
     except Exception:  # noqa: BLE001 — a defect of the judge itself: never a success, never a raw trace

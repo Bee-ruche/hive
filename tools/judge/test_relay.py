@@ -344,11 +344,13 @@ X32 = program(encode="syscall(0x40000000 | SYS_getpid); return store(in, n, out,
 ENTRY_32 = program(encode='long r; __asm__ volatile ("int $0x80" : "=a"(r) : "a"(20L) : "memory"); (void)r; return store(in, n, out, cap);')
 # The processor's time-stamp counter, read with no call: behind the gate it faults (SIGSEGV, 11).
 # The coarse clocks of the kernel's mapped time read no counter: the page the kernel updates at each tick, read as plain
-# memory. Right only if that clock reads AND moves across a busy loop: it pins the fact that a tick clock is left.
-TICK_CLOCK_MOVES = program(encode="struct timespec a, b; volatile unsigned long i; "
-                           "if (clock_gettime(CLOCK_MONOTONIC_COARSE, &a)) return (size_t)-1; for (i = 0; i < 600000000UL; i++) { } "
-                           "if (clock_gettime(CLOCK_MONOTONIC_COARSE, &b)) return (size_t)-1; "
-                           "if (a.tv_sec == b.tv_sec && a.tv_nsec == b.tv_nsec) return (size_t)-1; return store(in, n, out, cap);")
+# memory. Right only if that clock reads AND moves while the program runs: it pins the fact that a tick clock is left.
+# It reads until the clock moves (one tick, a few milliseconds of the machine's time), not for a fixed count of turns,
+# so that a slow machine does not bring it near its bound; it gives up, wrong, after a hundred million reads.
+TICK_CLOCK_MOVES = program(encode="struct timespec a, b; unsigned long i; "
+                           "if (clock_gettime(CLOCK_MONOTONIC_COARSE, &a)) return (size_t)-1; "
+                           "for (i = 0; i < 100000000UL; i++) { if (clock_gettime(CLOCK_MONOTONIC_COARSE, &b)) return (size_t)-1; "
+                           "if (b.tv_sec != a.tv_sec || b.tv_nsec != a.tv_nsec) return store(in, n, out, cap); } return (size_t)-1;")
 COUNTER = program(encode="unsigned int low, high; size_t k = store(in, n, out, cap - 8); __asm__ volatile (\"rdtsc\" : \"=a\"(low), \"=d\"(high)); "
                   "if (k == (size_t)-1) return k; memcpy(out + k, &low, 4); memcpy(out + k + 4, &high, 4); return k + 8;",
                   decode="return n < 8 ? (size_t)-1 : store(in, n - 8, out, cap);")
@@ -493,10 +495,12 @@ class TestTheManifest(Base):
         self.assertEqual((clock, relay.tip_bound(4), relay.wall_of(300), relay.tip_bound(300)), (11, 5, 455, 375),
                          "a phase's clock is half as much again as its processor time; the tip's own program is given a quarter more")
         self.assertEqual(relay.budget(manifest),
-                         relay.LAUNCHER_SECONDS + relay.OVERHEAD + 2 * (relay.wall_of(60) + relay.REAPER + relay.OVERHEAD) + 7 * (clock + relay.OVERHEAD)
+                         relay.LAUNCHER_SECONDS + relay.OVERHEAD + 3 * (relay.wall_of(60) + relay.REAPER + relay.OVERHEAD) + 10 * (clock + relay.OVERHEAD)
                          + relay.DATA_SECONDS,
-                         "the launcher's build and two more, each to its clock and the launcher's wait after it; four encodings (two each) and "
-                         "three decodings (the tip's one, the candidate's two)")
+                         "the launcher's build and three more (the tip's, run twice at most, and the candidate's), each to its clock and the "
+                         "launcher's wait after it; six encodings (the tip's two, each run twice at most, the candidate's two) and four decodings "
+                         "(the tip's one, run twice at most, the candidate's two)")
+        self.assertLess(relay.budget(manifest), 1200, "the toy's worst case fits the time the base gives it in test_through_the_base")
         with mock.patch.object(relay, "the_data") as data, self.assertRaisesRegex(JudgeError, r"add up to \d+ s, above the 100 s"):
             relay.judge(mock.Mock(tip=str(TOY), task_file=None, budget=100, tip_itself=True), str(self.root))
         data.assert_not_called()
@@ -667,6 +671,17 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
             with self.assertRaisesRegex(JudgeError, "the judge cannot say which") as raised:
                 relay.outcome(ended(signal=9, user_s=0.3, system_s=0.1, wall_s=11.02), 4, 11, blame, "the phase")
             self.assertIs(type(raised.exception), JudgeError)
+        # on the tip's side: what its bytes do not decide (its time, a signal) is Wavered, run once more; an exit status is not
+        for name, m, again in (("past its time and ended", ended(user_s=4.0, system_s=0.01), True),
+                               ("stopped by the clock, its time used", ended(signal=9, user_s=10.5, wall_s=11.0), True),
+                               ("killed before the clock", ended(signal=9, wall_s=2.0), True), ("it aborts", ended(signal=6), True),
+                               ("it fails", ended(code=3), False)):
+            with self.subTest(tip=name), self.assertRaises(relay.TipFault) as raised:
+                relay.outcome(m, 4, 11, relay.TipFault, "the tip's phase")
+            self.assertIs(type(raised.exception), relay.Wavered if again else relay.TipFault)
+        with self.assertRaises(JudgeError) as raised:  # and the machine's doubt stays the machine's, on the tip's side too
+            relay.outcome(ended(signal=9, user_s=0.3, system_s=0.1, wall_s=11.02), 4, 11, relay.TipFault, "the tip's phase")
+        self.assertIs(type(raised.exception), JudgeError)
 
     def test_the_launchers_line_is_the_only_measurement(self):
         def ran(code, out):
@@ -682,11 +697,11 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
                 answer.oom_killed = oom_killed
             return answer
 
-        for blame in (Refusal, JudgeError):
+        for blame, kind in ((Refusal, Refusal), (JudgeError, JudgeError), (relay.TipFault, relay.Wavered)):
             with self.assertRaisesRegex(blame, "its container was ended by the kernel for its memory") as raised:
                 relay.measured(killed(True), "t" * 32, "encode", blame, "the phase")
-            self.assertIs(type(raised.exception), blame)
-        # the same without that record (the host short of memory, Docker restarted, a run cancelled): the machine's
+            self.assertIs(type(raised.exception), kind, "the tip's is run once more")
+        # the same without that record (Docker restarted, a run cancelled): the machine's
         for record in (False, None, "true", 1):
             with self.subTest(oom_killed=record), self.assertRaises(JudgeError) as raised:
                 relay.measured(killed(record), "t" * 32, "encode", Refusal, "the phase")
@@ -717,6 +732,131 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
         self.assertEqual(image.call_args[0][0]["image"], "common")
         bare.assert_called_once_with()  # the empty image the phases run in, made at the image step too
         kept.assert_not_called()  # the toy's data is its tip's own file: nothing to fetch
+
+
+def unpairs(message):
+    """The data the toy's tip gives back for its message (pairs, read back)."""
+    return b"".join(bytes([message[i + 1]]) * message[i] for i in range(0, len(message), 2))
+
+
+class TestAStepOfTheTipsRunOnceMore(Base):
+    """A step of the tip's (its build, one of its phases) that fails in a way its bytes do not decide is run once more
+    before the failure is said to be on the tip's side; what its bytes decide is not, and a candidate's steps never
+    are. Docker's launch alone is played here, and the memory file systems are plain folders: the judgement's steps,
+    the launcher's line and what it means are the kind's own."""
+
+    PROGRAM = b"\x7fELF: the toy's program, as a build leaves it"
+
+    def judge_with(self, ends, candidate=False):
+        """One judgement of the toy, every container played: the n-th container of a step (« build », « encode »,
+        « decode », counted from 1 over the whole judgement) ends as `ends` says: {step: {n: the launcher's figures
+        changed, or « memory » (status 137, no line, Docker's record of a kill for memory), or « another message »}};
+        the others do what the toy's program does. Returns (the figures, or the error raised; what the judge logged;
+        how many containers of each step were started)."""
+        started = {"build": 0, "encode": 0, "decode": 0}
+
+        def launch(docker, command, mounts, pids=2, entry=None, timeout_seconds=3600):
+            lines = entry.decode().split("\n")
+            token, words = lines[0], lines[2].split("\t")[2:]
+            step = "build" if "--build" in words else words[-1]
+            started[step] += 1
+            folders = {target: host for host, target, _ in mounts}
+            end = ends.get(step, {}).get(started[step], {})
+            if end == "memory":
+                ran = subprocess.CompletedProcess(command, 137, b"", b"")
+                ran.oom_killed = True
+                return ran
+            if step == "build":
+                Path(folders["/out"], "run").write_bytes(self.PROGRAM)
+            else:
+                name, wanted = relay.PHASES[step]
+                given = Path(folders["/in"], name).read_bytes()
+                left = bytearray(pairs(given) if step == "encode" else unpairs(given))
+                if end == "another message":
+                    left[-1] ^= 1  # (the same length: another message, or data with its last byte changed)
+                Path(folders["/out"], wanted).write_bytes(bytes(left))
+            line = {"token": token, "label": "run", "code": 0, "signal": 0, "user_s": 0.2, "system_s": 0.0, "wall_s": 0.3, "maxrss_kb": 1000,
+                    **(end if isinstance(end, dict) else {})}
+            return subprocess.CompletedProcess(command, 0, json.dumps(line).encode() + b"\n", b"")
+
+        def mount_point(*command):  # a plain folder for a memory file system: emptied where it would be unmounted
+            if command[0] == "umount":
+                shutil.rmtree(command[-1])
+                os.mkdir(command[-1])
+
+        tip = write_tree(self.root / f"tip-{len(list(self.root.iterdir()))}")
+        other = write_tree(self.root / f"candidate-{len(list(self.root.iterdir()))}") if candidate else None
+        work = self.root / f"work-{len(list(self.root.iterdir()))}"
+        work.mkdir()
+        args = mock.Mock(tip=str(tip), candidate=str(other) if other else None, task_file=None, budget=3600, tip_itself=not candidate)
+        said = io.StringIO()
+        with mock.patch.object(relay.container.Docker, "launch", launch), mock.patch.object(relay.container, "mount_point", mount_point), \
+                mock.patch.object(relay, "image_of", return_value="sha256:" + "0" * 64), \
+                mock.patch.object(relay, "bare_image", return_value="sha256:" + "1" * 64), \
+                mock.patch.object(relay, "launcher_of", return_value={"chrono": b"launcher", "gate": b"gate"}), contextlib.redirect_stderr(said):
+            try:
+                result = relay.judge(args, str(work))
+            except (JudgeError, Refusal) as error:
+                result = error
+        return result, said.getvalue(), started
+
+    def test_a_failure_its_bytes_do_not_decide_is_run_once_more_and_the_judgement_goes_on(self):
+        clock = relay.wall_of(MANIFEST["build_seconds"])
+        for name, ends, said, builds, runs in (
+                ("the build stopped at its clock, its time used", {"build": {1: {"signal": 9, "user_s": 80.0, "wall_s": clock}}},
+                 r"the tip's build: stopped after 80\.0 s of processor time; its bound is 60 s", 2, 3),
+                ("the first encoding ended by a signal", {"encode": {1: {"signal": 9, "wall_s": 1.0}}},
+                 r"the tip's first encoding: ended by signal 9 \(killed: past its memory bound, most likely\)", 1, 4),
+                ("the second encoding past its processor time", {"encode": {2: {"user_s": 6.0}}},
+                 r"the tip's second encoding: took 6\.0 s of processor time; its bound is 5 s", 1, 4),
+                ("the decoding's container ended for its memory", {"decode": {1: "memory"}},
+                 r"the tip's decoding: its container was ended by the kernel for its memory", 1, 4)):
+            with self.subTest(failed=name):
+                figures, log, _ = self.judge_with(ends)
+                self.assertIsInstance(figures, dict, figures)
+                self.assertEqual((figures["total_bytes"], figures["builds"], figures["runs"]), (len(pairs(DATA)) + len(self.PROGRAM), builds, runs),
+                                 "the judgement goes on with the second run, and counts both")
+                self.assertEqual(log.count(relay.ONCE_MORE), 1, log)
+                self.assertRegex(log, re.escape(relay.ONCE_MORE) + ": " + said)
+        # the same with a candidate: judged as if nothing had happened, the tip's step that was run twice counted
+        figures, log, _ = self.judge_with({"encode": {1: {"signal": 11, "wall_s": 1.0}}}, candidate=True)
+        self.assertEqual((figures["sure_total_bytes"], figures["builds"], figures["runs"]), (0, 2, 8), figures)
+        self.assertIn(relay.ONCE_MORE, log)
+
+    def test_the_same_failure_twice_is_on_the_tips_side(self):
+        for name, ends, said, started_then in (
+                ("the first encoding killed twice", {"encode": {1: {"signal": 9, "wall_s": 1.0}, 2: {"signal": 9, "wall_s": 1.0}}},
+                 "the tip's first encoding: ended by signal 9", {"build": 1, "encode": 2, "decode": 0}),
+                ("the build past its time, then killed for memory", {"build": {1: {"user_s": 70.0}, 2: "memory"}},
+                 "the tip's build: its container was ended by the kernel for its memory", {"build": 2, "encode": 0, "decode": 0})):
+            with self.subTest(failed=name):
+                error, log, started = self.judge_with(ends, candidate=True)
+                self.assertIs(type(error), relay.TipFault, error)
+                self.assertIn(said, str(error))
+                self.assertIn("run twice", str(error))
+                self.assertEqual(log.count(relay.ONCE_MORE), 1, log)
+                self.assertEqual(started, started_then, "the step twice, and nothing after it")
+
+    def test_what_its_bytes_decide_is_not_run_again_and_a_candidates_step_never_is(self):
+        for name, ends, said, started_then in (
+                ("an exit status", {"encode": {1: {"code": 3}}}, "the tip's first encoding: exit status 3", {"build": 1, "encode": 1, "decode": 0}),
+                ("a build that fails", {"build": {1: {"code": 1}}}, "the tip's build: exit status 1", {"build": 1, "encode": 0, "decode": 0}),
+                ("two encodings that differ", {"encode": {2: "another message"}}, "the tip's own two encodings of the data are not the same bytes",
+                 {"build": 1, "encode": 2, "decode": 0}),
+                ("a decoding that is not the data", {"decode": {1: "another message"}}, "the tip's own program does not give the data back",
+                 {"build": 1, "encode": 2, "decode": 1})):
+            with self.subTest(failed=name):
+                error, log, started = self.judge_with(ends, candidate=True)
+                self.assertIs(type(error), relay.TipFault, error)
+                self.assertIn(said, str(error))
+                self.assertNotIn(relay.ONCE_MORE, log)
+                self.assertEqual(started, started_then)
+        # the candidate's first encoding killed: refused at once, never run again
+        error, log, started = self.judge_with({"encode": {3: {"signal": 9, "wall_s": 1.0}}}, candidate=True)
+        self.assertIs(type(error), Refusal, error)
+        self.assertIn("the candidate's first encoding: ended by signal 9", str(error))
+        self.assertNotIn(relay.ONCE_MORE, log)
+        self.assertEqual(started, {"build": 2, "encode": 3, "decode": 1})
 
 
 @unittest.skipUnless(CONTAINERS, "the whole judge: BEE_JUDGE_INTEGRATION=1 and Docker")
@@ -976,18 +1116,31 @@ class TestTheJudgeInContainers(Base):
         build that waits), the machine's doubt (2). The tip's own, the project's (2)."""
         hooked = write_tree(self.root / "hooked", {"bee/relay/build": BUILD_WITH_A_HOOK,
                                                    "bee/relay/project.json": json.dumps({**MANIFEST, "build_seconds": 5})})
-        started = time.monotonic()
-        code, report, err = self.judge(self.candidate({"codec/build.sh": BURNS_IN_A_CHILD}, hooked), tip=hooked)
-        self.assertEqual(code, 1, err)
-        self.assertRegex(report["reason"], r"the candidate's build: stopped after \d+\.\d s of processor time; its bound is 5 s")
-        self.assertLess(time.monotonic() - started, 60 + relay.wall_of(5) + relay.REAPER, "ended at its clock, not at the container's")
+        # run HERE, so that the build's own container is timed, and nothing else of the judgement (whose length is the machine's)
+        timed, took = relay.Judgement.timed, {}
+
+        def clocked(judgement, *arguments, **named):
+            started = time.monotonic()
+            try:
+                return timed(judgement, *arguments, **named)
+            finally:
+                took[arguments[-1] if "what" not in named else named["what"]] = time.monotonic() - started
+
+        burner = self.candidate({"codec/build.sh": BURNS_IN_A_CHILD}, hooked)
+        with mock.patch.object(relay.Judgement, "timed", clocked), \
+                self.assertRaisesRegex(Refusal, r"the candidate's build: stopped after \d+\.\d s of processor time; its bound is 5 s"):
+            relay.main(["--tip", str(hooked), "--candidate", str(burner), "--workdir", str(self.root / "work")])
+        # ended at the gate's clock (12 s), not at the launcher's, fifteen seconds later, nor at the container's after that
+        self.assertGreater(took["the candidate's build"], relay.wall_of(5) - 1)
+        self.assertLess(took["the candidate's build"], relay.wall_of(5) + relay.REAPER, "ended at its clock, not at the launcher's or the container's")
         code, report, err = self.judge(self.candidate({"codec/build.sh": WAITS_IN_A_CHILD}, hooked), tip=hooked)
         self.assertEqual(code, 2, err)
         self.assertRegex(report["reason"], r"the candidate's build: stopped by the clock at 12 s with \d+\.\d s of processor time used")
         burning = write_tree(self.root / "burning", {"codec/build.sh": BURNS_IN_A_CHILD}, source=hooked)
         code, report, err = self.judge(tip=burning)
         self.assertEqual(code, 2, err)
-        self.assertRegex(report["reason"], r"the tip's build: stopped after")
+        self.assertRegex(report["reason"], r"the tip's build: stopped after .*run twice")
+        self.assertEqual(err.count(relay.ONCE_MORE), 1, "the tip's build past its time is run once more before it is said")
         # an honest build through the same hook is right, and its processes are all counted, not left running
         self.answered(BETTER, 0, tip=hooked)
         self.refused(BUILD_BLOWS_UP, r"the candidate's build: (exit status|ended by signal|stopped after)")
@@ -1042,10 +1195,12 @@ class TestTheJudgeInContainers(Base):
                     code, report, err = self.judge(candidate, tip=tip)
                     self.assertEqual(code, 2, err)
                     self.assertRegex(report["reason"], said)
-                    # the tip's build and phases: said to be the tip's own doing, in words a report can be searched for
+                    # the tip's build and phases: said to be on the tip's side, in words a report can be searched for
                     tips_own = not name.startswith(("data", "bounds"))
-                    self.assertEqual(("the tip's own doing (not the candidate's)" in report["reason"], report.get("fault")),
+                    self.assertEqual(("on the tip's side (not the candidate's)" in report["reason"], report.get("fault")),
                                      (tips_own, "tip" if tips_own else None), report["reason"])
+                    # past its time is run once more first; what the tip's bytes decide is not
+                    self.assertEqual(relay.ONCE_MORE in err, name == "a program past its time", err)
         code, report, err = self.judge(self.candidate({"codec/codec.c": BETTER}), files=["bee/relay/main.c"])
         self.assertEqual(code, 2, err)
         self.assertRegex(report["reason"], "the task lists a path that is not the program's")
