@@ -283,7 +283,8 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
    and the cutter's settings in the project's file (`cutter`: `floors`, `changes`, `open`, `context_chars`),
    described in `hive/settings.json` with their bounds, and read by no run. **Done.** (The page's tree of cuts: later.)
 4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
-   (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way. First,
-   since both test projects starve: every one of their tasks is done or closed (their tallies of 20 November 2026).
+   (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way (as of
+   21 November 2026, one cycle on each project has been published, and some of its tasks dealt to a bee and
+   judged; the projects' ledgers, on their branch `hive-state`, hold the details).
 5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`. **Done.**
    (GitHub's private vulnerability reporting, which `SECURITY.md` sends weaknesses to, is the founder's to turn on.)
