@@ -256,6 +256,10 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
    and the cutter's settings in the project's file (`cutter`: `floors`, `changes`, `open`, `context_chars`),
    described in `hive/settings.json` with their bounds, and read by no run. **Done.** (The page's tree of cuts: later.)
 4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
-   (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way. First,
-   since both test projects starve: every one of their tasks is done or closed (their tallies of 20 November 2026).
+   (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way. On
+   20 November 2026 both projects starved; a cycle on each has since been published (miniz-0043 to 0049; cjson-0006
+   to 0008, through the backlog and `hive cut --failing` once the judge learned three new leaves), and its tasks
+   dealt to a bee and judged (miniz-0045 and cjson-0008 accepted first). What the trial taught the guide: a project with goals « correct » only writes no `goal`; a
+   port names a new unit in `options` only when the charter or the architect says the judge checks it; a cycle may
+   change the backlog alone.
 5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`.

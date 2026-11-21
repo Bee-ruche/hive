@@ -105,7 +105,9 @@ tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
 `files`, `size`, `tier`, `goal`, `context`, and when they apply `options`, `parent` (the stuck task it is cut from,
-closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else.
+closed in the same cycle) and `needs` (tasks that must be done first, all done already). Nothing else. A key the
+published lines leave out stays out: a project whose tasks all have the goal « correct » writes no `goal` at all
+(« correct » is what a line without one means).
 
 - `id`: `<project>-<four digits>`, above every id of the tasks file and the backlog: ids only grow, and the gate
   refuses one the tasks file holds.
@@ -118,7 +120,9 @@ closed in the same cycle) and `needs` (tasks that must be done first, all done a
   the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now,
   you cannot run it, and in this version nothing runs it for you (docs/cutter.md, "Not yet"). Say in your report
   that it waits for the architect, who runs the judge and then `hive cut --failing <id>`.
-- `options`: only names and values the published tasks already use.
+- `options`: only names the published tasks already use, and their values, but for a value the charter or the
+  architect's prompt names as new (the unit of a piece the judge has just learned to check, in a project that ports
+  or builds). Never a value of your own guess.
 - `size` and `tier`: as the published tasks of the same kind; a cut of a stuck task is smaller than it.
 - `title`: one line, the function or the area and what to change, as the published titles do.
 - `context` (at most `cutter.context_chars` characters): what a volunteer's agent needs and cannot guess, in plain
@@ -175,7 +179,8 @@ cp /tmp/proposal.jsonl hive/tasks.jsonl
 cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
 git add hive/tasks.jsonl
 git add hive/backlog.jsonl                 # only if you changed the backlog
-git diff --cached --name-only              # must list hive/tasks.jsonl, and hive/backlog.jsonl if you changed it: nothing else
+git diff --cached --name-only              # must list what changed of hive/tasks.jsonl and hive/backlog.jsonl, nothing else
+                                           # (when only the backlog grows, the tasks file is unchanged and not listed)
 git commit --quiet -F /tmp/message.txt
 git show HEAD:hive/tasks.jsonl | sha256sum    # must be the <sha256> CHECKED printed: otherwise stop, push nothing
 git show HEAD:hive/backlog.jsonl | sha256sum  # the same for the backlog, if you changed it
@@ -190,8 +195,10 @@ declined, stop: the next cycle starts again from the new tip. If the charter ask
 before it lands, push to `cutter/<the date>` instead and open one pull request to `<published>`, whose body is
 the message below; do not merge it.
 
-`/tmp/message.txt`: its title is `Tasks: <n> new, <m> closed`; then one line for each task added or closed and why,
-in your own words (`miniz-0043 (new): tdefl_compress_lz_codes, the largest function no task names`). Ids, names of
+`/tmp/message.txt`: its title is `Tasks: <n> new, <m> closed`, followed by `; backlog: <k> planned` when you add
+lines to the backlog; then one line for each task added, closed or planned and why, in your own words
+(`miniz-0043 (new): tdefl_compress_lz_codes, the largest function no task names`, `cjson-0006 (backlog): the leaf
+parse_number, which the judge has just learned to check`). Ids, names of
 the outline, numbers of the tally and figures of the charter only: no text copied from anything you read.
 
 ## The report
