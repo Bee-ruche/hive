@@ -13687,14 +13687,20 @@ class TestHealth(unittest.TestCase):
         and the other projects are read all the same."""
         ledger, instant = hive.Ledger(self.tmp.name), hive.parse_iso(self.at("20:00:00"))
         many = lambda count, name="t": {f"{name}-{i:04d}": {"id": f"{name}-{i:04d}", "title": "t", "files": [f"f{i}.c"]} for i in range(count)}  # noqa: E731
-        named = lambda name: {"project": name, "members": {"active_days": 30}}  # noqa: E731
+        named = lambda name, only=None, banned=(): {"project": name, "members": {"active_days": 30, "only": only, "banned": list(banned)}}  # noqa: E731
+        half = hive.HEALTH_ACCOUNTS_MOST // 2
         projects = {"o/most": (named("most"), many(hive.HEALTH_FILES_MOST)), "o/more": (named("more"), many(hive.HEALTH_FILES_MOST + 1)),
                     "o/long": (named("x" * (hive.ID_CHARS + 1)), many(1)), "o/id": (named("id"), many(1, "y" * (hive.ID_CHARS - 4))),
-                    "o/fine": (named("x" * hive.ID_CHARS), many(1, "y" * (hive.ID_CHARS - 5)))}
+                    "o/fine": (named("x" * hive.ID_CHARS), many(1, "y" * (hive.ID_CHARS - 5))),
+                    "o/accounts": (named("accounts", list(range(half)), range(half, 2 * half)), many(1)),
+                    "o/banned": (named("banned", None, range(hive.HEALTH_ACCOUNTS_MOST + 1)), many(1)),
+                    "o/invited": (named("invited", list(range(half + 1)), range(half)), many(1))}
         said = hive.health(list(projects), lambda repository: (*projects[repository], ledger, "a" * 40, "b" * 40), instant)
         self.assertEqual(said["unread"], [{"repository": "o/more", "because": "tasks"}, {"repository": "o/long", "because": "settings"},
-                                          {"repository": "o/id", "because": "tasks"}])
-        self.assertEqual([p["repository"] for p in said["projects"]], ["o/most", "o/fine"])
+                                          {"repository": "o/id", "because": "tasks"}, {"repository": "o/banned", "because": "settings"},
+                                          {"repository": "o/invited", "because": "settings"}],
+                         "more accounts named than health counts members against (barred)")
+        self.assertEqual([p["repository"] for p in said["projects"]], ["o/most", "o/fine", "o/accounts"])
         self.assertEqual(said["projects"][0]["tasks"]["open"], hive.HEALTH_FILES_MOST)
 
     def test_the_report_holds_numbers_and_ids_alone(self):
@@ -13919,14 +13925,18 @@ class TestTheHealthCommand(Base):
                   "GIT_SSH": "/bin/echo", "GIT_SSH_COMMAND": "echo", "GIT_PROXY_COMMAND": "echo", "GIT_SSL_KEY": "/k.pem", "GIT_TRACE": str(trace),
                   "GIT_EXEC_PATH": "/nowhere", "HTTPS_PROXY": "http://user:pw@proxy.invalid:3128", "http_proxy": "http://proxy.invalid:3128",
                   "HOME": str(home)}
-        started, real = [], subprocess.Popen
+        started, real, real_fetch, beside = [], subprocess.Popen, hive.fetch_bounded, []
 
         def spy(command, *args, **kwargs):
             started.append((list(command), dict(kwargs.get("env") or {})))
             return real(command, *args, **kwargs)
 
+        def fetch(repo, *args, **kwargs):  # (what the command's scratch folder holds as each project is fetched)
+            beside.append(sorted(entry.name for entry in Path(repo).parent.iterdir()))
+            return real_fetch(repo, *args, **kwargs)
+
         with mock.patch.dict(os.environ, secret), mock.patch.object(subprocess, "Popen", side_effect=spy), \
-                mock.patch.object(hive, "fetch_bounded", wraps=hive.fetch_bounded) as fetched:
+                mock.patch.object(hive, "fetch_bounded", side_effect=fetch) as fetched:
             self.health()
             self.assertEqual({name: os.environ.get(name) for name in secret}, secret, "the environment is put back")
             with mock.patch.object(hive, "read_public_state", side_effect=hive.HiveError("git init failed")), self.assertRaises(SystemExit):
@@ -13950,6 +13960,7 @@ class TestTheHealthCommand(Base):
             self.assertEqual(env["GIT_CONFIG_GLOBAL"], os.devnull)
         self.assertEqual([(call.args[4], call.kwargs) for call in fetched.call_args_list], [(False, {"depth": 1})] * 2,
                          "a fetch of the two tips alone, by https alone outside the tests")
+        self.assertEqual(beside, [["0", "home"], ["1", "home"]], "a project's store is removed once it is read, before the next is fetched")
         self.assertFalse(trace.exists(), "no trace written")
         self.assertFalse(list(Path(tempfile.gettempdir()).glob("hive-health-*")), "its store is removed")
         with mock.patch.object(hive, "public_address", return_value=str(self.w.upstream)):

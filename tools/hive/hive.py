@@ -4936,6 +4936,7 @@ LEDGER_FILE = "ledger.jsonl"  # the ledger, at the root of a project's branch hi
 UNREAD_BECAUSE = ("unreachable", "no_state", "unfetched", "heavy", "settings", "ledger", "tasks")  # why a project was not read
 NO_WORD = "(none)"  # a task's size or kind the tally could not read (no word of a tasks file is spelt so: plain_word)
 HEALTH_FILES_MOST = 2000  # the most entries all the tasks of one project may name in their files, for health to count them (rivals_of)
+HEALTH_ACCOUNTS_MOST = 1000  # the most accounts a project's file may name in members.only and members.banned together, for health (barred)
 ID_CHARS = 64  # the longest project name or task id health prints
 # The only variables of the machine's that the gits of « health » see (anonymous): where programs are, the language,
 # the time zone, the temporary folder, the hive's fixed instant, a bundle of certificate authorities, and a proxy whose
@@ -5131,14 +5132,16 @@ def health(projects, read, instant):
     (project_health), the projects that could not be read with a code, and the totals of those read (health_totals).
     `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), or raises Unread.
 
-    A project whose name, or a task's id, is longer than ID_CHARS, or whose tasks name more than HEALTH_FILES_MOST
-    entries in their files, is not read: the tally's cost grows with the square of those entries (rivals_of), and
-    no project holds up the others."""
+    A project whose name, or a task's id, is longer than ID_CHARS, whose file names more than HEALTH_ACCOUNTS_MOST
+    accounts in members.only and members.banned, or whose tasks name more than HEALTH_FILES_MOST entries in their
+    files, is not read: the tally's cost grows with the square of those entries (rivals_of), and the count of active
+    members with the accounts named times the members (barred). No project holds up the others."""
     summaries, unread = [], []
     for repository in projects:
         try:
             config, tasks, ledger, published, state = read(repository)
-            if len(config["project"]) > ID_CHARS:
+            members = config.get("members") or {}
+            if len(config["project"]) > ID_CHARS or len(members.get("only") or ()) + len(members.get("banned") or ()) > HEALTH_ACCOUNTS_MOST:
                 raise Unread("settings")
             if any(len(task_id) > ID_CHARS for task_id in tasks) or sum(len(task["files"]) for task in tasks.values()) > HEALTH_FILES_MOST:
                 raise Unread("tasks")

@@ -236,8 +236,9 @@ hive reads; it is sent nothing, and it posts nothing for anyone.
   or the project's side (`not_answered`, `task_closed`) is left out; `judge_failed` and `push_refused`, which it
   charges to the candidate, count; a candidate a guardian admitted after its refusal is one answer more. Then the
   totals, each the sum of the projects', and the projects it could not read, each with a code: among them a project
-  whose name or a task's id is longer than 64 characters, or whose tasks name more than 2000 entries in their files
-  (the tally's cost grows with their square). It keeps only what the tally keeps of a ledger line: no login, no
+  whose name or a task's id is longer than 64 characters, whose file names more than 1000 accounts as its members or
+  banned, or whose tasks name more than 2000 entries in their files (what the tally costs grows with the square of
+  those, or with the accounts named times the members). It keeps only what the tally keeps of a ledger line: no login, no
   account number, no candidate's commit, no text a volunteer wrote. Later, what the gate refused.
 - **What numbers do not say comes from the architect, by hand: `hive.py report`.** Three issue templates in this
   repository (`.github/ISSUE_TEMPLATE/`): a judge or machine error, an optimisation of the hive, feedback on the
