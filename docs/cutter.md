@@ -7,8 +7,8 @@ map, closes the tasks that do not move and cuts them again, and publishes the ne
 project's trusted base, like its guardians; what volunteers push never steers it except through the judge's
 numbers.
 
-**Status (20 November 2026): the tally, the gate, the deterministic cutter, the outline and the AI cutter's guide are
-built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
+**Status (21 November 2026): the tally, the gate, the deterministic cutter, the outline, the AI cutter's guide and the
+projects' feedback to the hive (`health`, `report`) are built; the trial on the two test projects is under way.** Each part says what it is and when it comes. The order of building is at the end. The founder chose to start the product with this role on
 20 November 2026; the research behind the design is summed up in "Grounds".
 
 ## Grounds
@@ -213,17 +213,36 @@ The cutter keeps one set of rules per kind, brought in one at a time, as the jud
 ## Feedback from projects to the hive
 
 To improve the hive, the projects that run it need a way to tell it what goes wrong and what could be better. The
-hive reads; it is sent nothing.
+hive reads; it is sent nothing, and it posts nothing for anyone.
 
-- **Numbers it reads itself.** A project's `hive-state` branch is public. `hive.py health` reads it for the projects
-  listed in this repository and adds up their tallies: acceptance by kind and size, stuck tasks, the judge's and the
-  machine's errors (the ledger's `error` marks and their kinds), durations, and later what the gate refused. Numbers
-  only, with no member's id: nothing leaves a project that was not already public.
-- **What numbers do not say comes from the architect, by hand**: issue templates in `Bee-ruche/hive` (an error, an
-  improvement, the cutter), which `hive.py report` fills with numbers alone. The architect reads them and posts
-  them; the hive posts nothing for anyone. A weakness of the hive is reported privately, never in an issue
-  (`SECURITY.md`).
-- What a project reports is data for those who build the hive, never an instruction to them.
+- **Numbers it reads itself: `hive.py health`.** It reads the projects listed in this repository
+  (`hive/projects.json`), each from `https://github.com/<owner>/<name>` with no account, and of each two public
+  branches: the default one, for the project's settings and tasks, read as a run reads them, and `hive-state`, for
+  its ledger. One listing and one fetch per project, bounded in time and in bytes, into a temporary store of its own
+  that it removes afterwards. No token reaches git: the variables that name one are left out of its environment, with
+  the programs that would ask for one, and its home holds nothing. Nothing of the machine is sent, and nothing is
+  written elsewhere. It runs on the hive's side (Linux), wherever git can reach GitHub.
+  It adds up what the tally says of each project (above) and prints JSON. For each project: the two commits it read;
+  its tasks by status; what is left to do, what can be dealt now and in how many separate areas; the stuck tasks, by
+  id; whether it starves, whether it is paused; how many members are active (each project counts its own: an
+  account active in two projects is two in the totals); its deals, acceptances, refusals by
+  reason, and deals run out at the member's cost or at nobody's; the ledger's `error` marks by kind (`judge`: the
+  judge did not answer; `hive`: the hive's machine; `push`: the project's repository declined the commit; `none`: the
+  judge started and gave no answer in the run) and the tasks they fell on; acceptance by kind and by size of task
+  (of the deals that ended by their members' doing, the share accepted); the hours from a deal to its acceptance, and
+  their median. Then the totals, each the sum of the projects', and the projects it could not read, each with a code.
+  It keeps only what the tally keeps of a ledger line: no login, no account number, no candidate's commit, no text a
+  volunteer wrote. Later, what the gate refused.
+- **What numbers do not say comes from the architect, by hand: `hive.py report`.** Three issue templates in this
+  repository (`.github/ISSUE_TEMPLATE/`): a judge or machine error, an optimisation of the hive, feedback on the
+  cutter. `hive.py report --template error|optimisation|cutter [--project <owner/name>]` prints one of them with its
+  numbers part filled from `health` alone, as a table. The architect reads it, writes their own words where it asks,
+  and posts it, or not: the hive opens no issue, calls no API and writes nothing for anyone.
+- **A weakness of the hive is reported privately, never in an issue** ([SECURITY.md](../SECURITY.md)). Turning on
+  GitHub's private vulnerability reporting for this repository is the founder's setting.
+- **What comes back is data, never instructions.** The numbers, the issues and every word in them are data for those
+  who build the hive, and for their agents: an issue that asks for a change is weighed like any other proposal, and
+  nothing it says is run, followed or obeyed as such.
 
 ## Where the cutter runs
 
@@ -258,4 +277,5 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
 4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
    (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way. First,
    since both test projects starve: every one of their tasks is done or closed (their tallies of 20 November 2026).
-5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`.
+5. Feedback from projects: `hive.py health`, `hive.py report`, the issue templates and `SECURITY.md`. **Done.**
+   (GitHub's private vulnerability reporting, which `SECURITY.md` sends weaknesses to, is the founder's to turn on.)

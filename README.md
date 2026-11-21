@@ -24,6 +24,10 @@ project's own repository.
 - `tools/judge/`: the judges the hive calls, the common judge and the reference judge, with their containers, their
   toy projects and their tests.
 - `hive/settings.json`: every setting of a project's file, described, with its bounds and recommended values.
+- `hive/projects.json`: the projects that run the hive, whose public state `hive.py health` reads; with
+  `hive.py report` and the issue templates of `.github/ISSUE_TEMPLATE/`, how projects tell the hive what goes wrong
+  ([docs/cutter.md](docs/cutter.md), "Feedback from projects to the hive"). A weakness is reported privately:
+  [SECURITY.md](SECURITY.md).
 - `examples/project/`: what a project holds for the hive (its settings, its tasks, the workflow that calls the run),
   as the first test project, miniz, holds them; `examples/reference-project/`: the second test project's settings
   and tasks, whose judge is of the second kind.

@@ -13623,5 +13623,316 @@ class TestTheCutCommand(Base):
         self.assertEqual([json.loads(line) for line in printed.splitlines()][1], {"path": "AGENTS.md", "bytes": 7, "lines": 1, "protected": True})
 
 
+REGISTRY = Path(os.environ.get("HIVE_REGISTRY") or Path(hive.__file__).resolve().parents[2])  # the hive's own tree (a copy, in the tests' run)
+
+
+class TestHealth(unittest.TestCase):
+    """What « health » says of one project, from its tally (hive.project_health), and what « report » makes of it,
+    on ledger lines written by hand (docs/cutter.md, "Feedback from projects to the hive")."""
+    setUp, deal, end, expired, at = TestLedger.setUp, TestLedger.deal, TestLedger.end, TestLedger.expired, staticmethod(TestLedger.at)
+    judged = TestTally.judged
+    TASKS = {**TestTally.TASKS, "toy-0004": {**TestTally.TASKS["toy-0004"], "size": "M"}, "toy-0005": {**TestTally.TASKS["toy-0005"], "kind": "probe"}}
+
+    def summary(self, *lines, config=None):
+        tallied = hive.tally(self.TASKS, [line for line in map(hive.tally_line, lines) if line is not None], hive.parse_iso(self.at("20:00:00")), active=2)
+        return hive.project_health("Bee-ruche/toy", config or {"project": "toy", "paused": False}, tallied, "a" * 40, "b" * 40)
+
+    def error(self, member, task, dealt, clock, **more):
+        return {"type": "error", "member_id": member, "task": task, "deal": self.at(dealt), "at": self.at(clock), "sha": "e" * 40, "run": "r" * 32, **more}
+
+    def lines(self):
+        t4 = "toy-0004"
+        return [self.deal(1, "toy-0001", "10:00:00"), self.judged(1, "toy-0001", "10:00:00", "10:30:00"),
+                self.deal(2, t4, "11:00:00"), self.judged(2, t4, "11:00:00", "11:30:00", "goal_not_met"),
+                self.deal(3, t4, "12:00:00"), self.error(3, t4, "12:00:00", "12:10:00", kind="judge"), self.error(3, t4, "12:00:00", "12:20:00", kind="hive"),
+                self.judged(3, t4, "12:00:00", "12:30:00", "not_answered", judged=False),
+                self.deal(2, t4, "13:00:00"), self.expired(2, t4, "13:00:00", "17:00:01"),
+                self.deal(4, "toy-0005", "14:00:00"), self.expired(4, "toy-0005", "14:00:00", "18:00:01", fault=True)]
+
+    def test_a_projects_numbers_by_kind_and_size_its_errors_and_durations(self):
+        summary = self.summary(*self.lines())
+        self.assertEqual(summary["by_size"], {"S": {"tasks": 4, "deals": 2, "accepted": 1, "refused": 0, "expired": 0, "acceptance": 1.0},
+                                              "M": {"tasks": 1, "deals": 3, "accepted": 0, "refused": 1, "expired": 1, "acceptance": 0.0}},
+                         "a refusal for the hive's own doing (not_answered) and a deal run out at nobody's cost end nothing of the member's")
+        self.assertEqual(summary["by_kind"], {"work": {"tasks": 4, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "acceptance": 0.333},
+                                              "probe": {"tasks": 1, "deals": 1, "accepted": 0, "refused": 0, "expired": 0, "acceptance": None}})
+        self.assertEqual((summary["errors"], summary["errors_on"], summary["refused"]),
+                         ({"judge": 1, "hive": 1}, ["toy-0004"], {"goal_not_met": 1, "not_answered": 1}))
+        self.assertEqual((summary["deals"], summary["accepted"], summary["expired"], summary["expired_free"], summary["active_members"]), (5, 1, 1, 1, 2))
+        self.assertEqual((summary["hours_to_accept"], summary["median_hours_to_accept"]), ([0.5], 0.5))
+        self.assertEqual((summary["tasks"], summary["left"], summary["starving"], summary["stuck"]),
+                         ({"open": 3, "dealt": 0, "done": 1, "closed": 1}, 3, False, []))
+        self.assertEqual((summary["project"], summary["repository"], summary["published"], summary["state"], summary["paused"]),
+                         ("toy", "Bee-ruche/toy", "a" * 40, "b" * 40, False))
+        self.assertEqual(hive.middle([1.0, 2.0, 4.0, 9.0]), 3.0)
+        self.assertIsNone(self.summary()["median_hours_to_accept"], "no acceptance yet: no median")
+
+    def test_the_totals_add_the_projects_up(self):
+        one, other = self.summary(*self.lines()), self.summary(self.deal(5, "toy-0004", "09:00:00"), self.judged(5, "toy-0004", "09:00:00", "11:00:00"),
+                                                               config={"project": "port", "paused": True})
+        totals = hive.health_totals([one, other])
+        self.assertEqual((totals["projects"], totals["deals"], totals["accepted"], totals["refused"], totals["errors"]),
+                         (2, 6, 2, {"goal_not_met": 1, "not_answered": 1}, {"judge": 1, "hive": 1}))
+        self.assertEqual(totals["by_size"]["M"], {"tasks": 2, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "acceptance": 0.333},
+                         "a share worked out of the sums, never an average of the projects' shares")
+        self.assertEqual((totals["hours_to_accept"], totals["median_hours_to_accept"], totals["paused"], totals["starving"]), ([0.5, 2.0], 1.2, ["port"], []))
+        self.assertEqual(hive.health_totals([])["projects"], 0)
+
+    def test_the_report_holds_numbers_and_ids_alone(self):
+        summary = self.summary(*self.lines())
+        result = {"as_of": "2026-11-12T20:00:00Z", "projects": [summary], "unread": [{"repository": "Bee-ruche/gone", "because": "unreachable"}],
+                  "totals": hive.health_totals([summary])}
+        text = hive.report_numbers("error", result)
+        self.assertIn("| | toy |\n| --- | --- |\n", text, "one project: one column, and no column for all of them")
+        self.assertIn("| error marks, kind judge (the judge did not answer) | 1 |\n", text)
+        self.assertIn("| tasks with error marks | toy-0004 |\n", text)
+        self.assertTrue(text.endswith("\nNot read: Bee-ruche/gone (unreachable).\n"), text)
+        optimisation = hive.report_numbers("optimisation", result)
+        self.assertIn("| acceptance, kind work | 0.333 (1 of 3) |\n", optimisation)
+        self.assertIn("| acceptance, kind probe | - |\n", optimisation, "no deal of a probe ended: no share")
+        self.assertIn("| refused, not_answered | 1 |\n", optimisation)
+        cutter = hive.report_numbers("cutter", {**result, "projects": [summary, summary], "unread": []})
+        self.assertIn("| | toy | toy | all projects |\n", cutter)
+        self.assertIn("| stuck tasks | - | - | 0 |\n", cutter)
+        self.assertEqual(hive.report_cell("toy-0001|\x1b[31m"), "toy-0001??[31m", "a value of health's, made plain all the same")
+
+    def test_the_list_of_projects(self):
+        folder = Path(self.tmp.name)
+        (folder / "hive").mkdir()
+        for listed in ({"projects": ["Bee-ruche/a", "Bee-ruche/b"]}, {"about": "x", "projects": ["o/r.x"]}):
+            (folder / hive.PROJECTS_FILE).write_text(json.dumps(listed))
+            self.assertEqual(hive.read_projects(folder), listed["projects"])
+        for broken in ({"projects": []}, {"projects": ["Bee-ruche/a", "bee-ruche/A"]}, {"projects": ["Bee-ruche"]}, {"projects": ["Bee-ruche/a.git"]},
+                       {"projects": ["Bee-ruche/.."]}, {"projects": ["-x/a"]}, {"projects": [7]}, {"projects": "Bee-ruche/a"}, ["Bee-ruche/a"],
+                       {"projects": [f"o/r{i}" for i in range(hive.PROJECTS_MOST + 1)]}):
+            (folder / hive.PROJECTS_FILE).write_text(json.dumps(broken))
+            with self.subTest(broken=str(broken)[:60]), self.assertRaisesRegex(hive.HiveError, r"\Ahive/projects\.json: "):
+                hive.read_projects(folder)
+        (folder / hive.PROJECTS_FILE).write_text("{not json")
+        self.assertRaises(hive.HiveError, hive.read_projects, folder)
+        self.assertEqual(hive.read_projects(REGISTRY), ["Bee-ruche/minizBee", "Bee-ruche/cjsonRustBee"], "the hive's own list: its two test projects")
+
+    def test_the_hives_issue_templates_each_hold_one_part_for_the_numbers(self):
+        for template, name in hive.REPORT_TEMPLATES.items():
+            text = (REGISTRY / hive.TEMPLATES_FOLDER / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+            with self.subTest(template):
+                body = hive.template_body(text, name)
+                self.assertRegex(text, r"\A---\nname: [^\n]+\nabout: [^\n]+\ntitle: \"[^\"\n]+\"\n---\n")
+                self.assertIn(f"hive.py report --template {template}", body)
+                self.assertIn("SECURITY.md", body, "a weakness never goes to an issue")
+        for broken in ("no front matter\n<!-- numbers -->\n<!-- end of numbers -->\n", "---\nname: x\n---\nnothing to fill\n",
+                       "---\nname: x\n---\n<!-- end of numbers -->\n<!-- numbers -->\n", "---\nname: x\n---\n<!-- numbers -->\n<!-- numbers -->\n<!-- end of numbers -->\n"):
+            self.assertRaises(hive.HiveError, hive.template_body, broken, "x.md")
+        self.assertIn("private vulnerability reporting", (REGISTRY / "SECURITY.md").read_text(encoding="utf-8"))
+
+
+class TestTheHealthCommand(Base):
+    """« health » and « report » as the command line runs them, on projects whose repositories are folders of this
+    machine here: their published branch and their branch hive-state, read with no account (docs/cutter.md)."""
+    deal, end, expired, at = TestLedger.deal, TestLedger.end, TestLedger.expired, staticmethod(TestLedger.at)
+    judged, proven = TestTally.judged, TestTally.proven
+
+    def setUp(self):
+        super().setUp()
+        self.v = World(Path(self.tmp.name) / "second", {"judge": {"metrics": ["cases_compared"]}}, project="port", beside=self.w, tasks=PORT_TASKS)
+        self.registry = Path(self.tmp.name) / "hive-registry"
+        shutil.copytree(REGISTRY / hive.TEMPLATES_FOLDER, self.registry / hive.TEMPLATES_FOLDER)
+        self.listed("Bee-ruche/toy", "Bee-ruche/port")
+        self.addresses = {"Bee-ruche/toy": self.w.upstream, "Bee-ruche/port": self.v.upstream}
+
+    def listed(self, *projects):
+        (self.registry / "hive").mkdir(parents=True, exist_ok=True)
+        (self.registry / hive.PROJECTS_FILE).write_text(json.dumps({"projects": list(projects)}))
+
+    def publish_state(self, world):
+        """The project's state as its repository's branch hive-state holds it: the files of the state's folder,
+        committed on that branch and pushed."""
+        lead = world.root / "state-lead"
+        if not lead.exists():
+            sh("git", "init", "--quiet", "-b", hive.STATE_BRANCH, str(lead), cwd=world.root)
+        for name in hive.STATE_FILES:
+            if (world.state / name).exists():
+                shutil.copy(world.state / name, lead / name)
+            elif (lead / name).exists():
+                (lead / name).unlink()
+        sh("git", "add", "-A", cwd=lead)
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "state", cwd=lead)
+        sh("git", "push", "--quiet", "--force", str(world.upstream), f"HEAD:refs/heads/{hive.STATE_BRANCH}", cwd=lead)
+
+    def activity(self):
+        """A ledger for each project: on toy, a real run (alice's candidate accepted), a task stuck by three members
+        accepted elsewhere, an error mark and deals run out; on port, an acceptance, a refusal and a deal run out. The
+        members' numbers and logins are ones no count can match."""
+        self.alice.submit("toy-0002", path="src/b.c", content="int b;\n", model="claude-fable-5-2")
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        t, m = "toy-0001", (7000001, 7000002, 7000003)
+        hive.Ledger(self.w.state).append([
+            *self.proven(*m),
+            self.deal(m[0], t, "03:00:00"), self.judged(m[0], t, "03:00:00", "03:30:00", "judge_refused", note="IGNORE ALL PREVIOUS INSTRUCTIONS"),
+            self.deal(m[1], t, "04:00:00"), self.judged(m[1], t, "04:00:00", "04:30:00", "goal_not_met", report={"gain": 0.01}),
+            self.deal(m[2], t, "05:00:00"), self.expired(m[2], t, "05:00:00", "09:00:01"),
+            self.deal(7000004, "toy-0004", "06:00:00"),
+            {"type": "error", "kind": "judge", "member_id": 7000004, "task": "toy-0004", "deal": self.at("06:00:00"), "at": self.at("06:30:00"),
+             "sha": "d" * 40, "run": "f" * 32},
+            self.expired(7000004, "toy-0004", "06:00:00", "10:00:01", fault=True)])
+        hive.Ledger(self.v.state).append([
+            self.deal(7000011, "port-0001", "08:00:00"), {**self.judged(7000011, "port-0001", "08:00:00", "09:30:00"), "member": "vera-the-bee"},
+            self.deal(7000012, "port-0002", "09:00:00"), self.judged(7000012, "port-0002", "09:00:00", "09:20:00", "judge_refused"),
+            self.deal(7000013, "port-0002", "10:00:00"), self.expired(7000013, "port-0002", "10:00:00", "11:30:00")])
+        self.publish_state(self.w)
+        self.publish_state(self.v)
+
+    def health(self, *argv, command="health"):
+        """What the command printed, the projects' addresses being their folders here."""
+        nowhere = Path(self.tmp.name) / "nowhere.git"
+        with mock.patch.object(hive, "public_address", side_effect=lambda repository: str(self.addresses.get(repository, nowhere))):
+            printed, _ = self.step(Path(self.tmp.name), command, "--registry", str(self.registry), *argv)
+        return printed
+
+    def test_no_login_and_no_members_number_reaches_what_health_prints(self):
+        """Whatever the ledger holds of a member (its login, its account's and its fork's numbers, a guardian's, a
+        candidate's commit, a model, a note), « health » prints none of it: numbers, codes and the projects' own ids."""
+        self.activity()
+        printed = self.health()
+        said = json.loads(printed)
+        logins, numbers, texts = set(), set(), set()
+        for world in (self.w, self.v):
+            for event in hive.Ledger(world.state).events:
+                logins |= {event[key] for key in ("member", "guardian") if isinstance(event.get(key), str)}
+                numbers |= {event[key] for key in ("member_id", "repo_id", "guardian_id") if type(event.get(key)) is int}
+                texts |= {event[key] for key in ("sha", "commit", "model", "note", "ruling") if isinstance(event.get(key), str)}
+        self.assertTrue({"alice", "vera-the-bee"} <= logins and {101, 7000001} <= numbers and "claude-fable-5-2" in texts, (logins, numbers, texts))
+        for value in logins | texts:
+            self.assertNotIn(value, printed)
+        found = []
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    found.append(key)
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+            else:
+                found.append(value)
+        walk(said)
+        self.assertFalse(numbers & {value for value in found if type(value) is int}, "no member's number, anywhere")
+        allowed = re.compile(r"[a-z_]+|\(none\)|[A-Z]|[0-9a-f]{40}|Bee-ruche/(?:toy|port)|(?:toy|port)(?:-[0-9]{4})?|2026-11-12T12:00:00Z")
+        self.assertEqual([value for value in found if isinstance(value, str) and not allowed.fullmatch(value)], [],
+                         "every string is a code of the hive's, a size, a commit read, or the projects' and their tasks' own ids")
+        self.assertEqual({project["published"] for project in said["projects"]},
+                         {sh("git", "rev-parse", "stable", cwd=world.upstream).stdout.strip() for world in (self.w, self.v)})
+
+    def test_the_totals_are_the_sum_of_the_projects(self):
+        self.activity()
+        said = json.loads(self.health())
+        projects, totals = said["projects"], said["totals"]
+        self.assertEqual(([p["project"] for p in projects], said["unread"]), (["toy", "port"], []))
+        toy, port = projects
+        self.assertEqual((toy["stuck"], toy["errors"], toy["errors_on"], toy["accepted"], port["accepted"], port["refused"], port["expired"]),
+                         (["toy-0001"], {"judge": 1}, ["toy-0004"], 4, 1, {"judge_refused": 1}, 1), "each project's own ledger")
+        for key in hive.HEALTH_SUMS:
+            self.assertEqual(totals[key], sum(p[key] for p in projects), key)
+        for table in hive.HEALTH_TABLES:
+            names = {name for p in projects for name in p[table]}
+            self.assertEqual(totals[table], {name: sum(p[table].get(name, 0) for p in projects) for name in names}, table)
+        for table in ("by_kind", "by_size"):
+            names = {name for p in projects for name in p[table]}
+            self.assertEqual(set(totals[table]), names)
+            for name in names:
+                for key in hive.GROUP_SUMS:
+                    self.assertEqual(totals[table][name][key], sum(p[table].get(name, {}).get(key, 0) for p in projects), (table, name, key))
+                self.assertEqual(totals[table][name]["acceptance"], hive.acceptance(totals[table][name]))
+        self.assertEqual((totals["projects"], totals["stuck"], totals["starving"], totals["paused"]),
+                         (2, sum(len(p["stuck"]) for p in projects), [p["project"] for p in projects if p["starving"]], []))
+        self.assertEqual(totals["hours_to_accept"], sorted(toy["hours_to_accept"] + port["hours_to_accept"]))
+        self.assertEqual(totals["median_hours_to_accept"], hive.middle(totals["hours_to_accept"]))
+        self.assertGreater(totals["deals"], toy["deals"] > 0)
+
+    def test_what_cannot_be_read_is_named_with_a_code_and_the_rest_is_read(self):
+        self.activity()
+        self.addresses["Bee-ruche/toy2"] = self.w.upstream  # its settings name another repository: Bee-ruche/toy
+        bare = World(Path(self.tmp.name) / "third", project="bare", beside=self.w)  # no branch hive-state yet
+        self.addresses["Bee-ruche/bare"] = bare.upstream
+        self.listed("Bee-ruche/toy", "Bee-ruche/gone", "Bee-ruche/toy2", "Bee-ruche/bare")
+        said = json.loads(self.health())
+        self.assertEqual(said["unread"], [{"repository": "Bee-ruche/gone", "because": "unreachable"}, {"repository": "Bee-ruche/toy2", "because": "settings"},
+                                          {"repository": "Bee-ruche/bare", "because": "no_state"}])
+        self.assertEqual(([p["project"] for p in said["projects"]], said["totals"]["projects"]), (["toy"], 1))
+        bare.state.mkdir()
+        (bare.state / "ledger.jsonl").write_text('{"type": "deal"}\n[[[\n{"type": "deal"}\n')
+        self.publish_state(bare)
+        self.assertEqual(json.loads(self.health("--project", "Bee-ruche/bare"))["unread"], [{"repository": "Bee-ruche/bare", "because": "ledger"}],
+                         "a ledger that is not JSON lines is not read")
+        (bare.state / "ledger.jsonl").write_text('{"type": "deal", "task": "toy-0001", "member_id": 1, "at": "2026-11-12T10:00:00Z"}\n')
+        self.publish_state(bare)
+        self.assertEqual(json.loads(self.health("--project", "Bee-ruche/bare"))["unread"], [{"repository": "Bee-ruche/bare", "because": "ledger"}],
+                         "nor a ledger whose lines are not as the hive writes them")
+        (bare.state / "ledger.jsonl").unlink()
+        self.publish_state(bare)
+        empty = json.loads(self.health("--project", "Bee-ruche/bare"))
+        self.assertEqual((empty["unread"], empty["projects"][0]["deals"], empty["projects"][0]["tasks"]["open"]), ([], 0, 4),
+                         "no ledger yet: a project before its first run")
+        with self.assertRaises(SystemExit) as stopped:
+            self.health("--project", "Bee-ruche/unlisted")
+        self.assertEqual(stopped.exception.code, 2, "only a listed project is read")
+
+    def test_health_reads_with_no_account_and_writes_nothing(self):
+        """Every git it starts reads: a listing, a fetch from the project's own address, and its own store. None sees
+        a variable that names a token or a secret, a program that asks for a password, or a home that holds anything;
+        and the machine's environment is as it was afterwards."""
+        self.activity()
+        home = Path(self.tmp.name) / "home"
+        home.mkdir()
+        (home / ".netrc").write_text("machine github.com login x password y\n")
+        secret = {"GH_TOKEN": "t0ken", "GITHUB_TOKEN": "t0ken", "MY_API_KEY": "k", "GIT_ASKPASS": "/bin/echo", "SSH_ASKPASS": "/bin/echo", "HOME": str(home)}
+        started, real = [], subprocess.Popen
+
+        def spy(command, *args, **kwargs):
+            started.append((list(command), dict(kwargs.get("env") or {})))
+            return real(command, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, secret), mock.patch.object(subprocess, "Popen", side_effect=spy):
+            self.health()
+            self.assertEqual({name: os.environ.get(name) for name in secret}, secret, "the environment is put back")
+        self.assertTrue(started)
+        reads, addresses = {"init", "ls-remote", "fetch", "rev-parse", "ls-tree", "cat-file"}, {str(w.upstream) for w in (self.w, self.v)}
+        for command, env in started:
+            self.assertEqual(command[0], "git")
+            verb = next(word for word in command[command.index("-C") + 2:] if not word.startswith("-"))
+            self.assertIn(verb, reads, command)
+            if verb in ("ls-remote", "fetch"):
+                self.assertTrue(set(command) & addresses, command)
+            self.assertFalse([name for name in env if re.search(r"TOKEN|SECRET|PASSWORD|API_?KEY|ASKPASS", name, re.I)], command)
+            self.assertNotEqual(env["HOME"], str(home))
+            self.assertTrue(Path(env["HOME"]).name == "home" and Path(env["HOME"]).parent.name.startswith("hive-health-"), env["HOME"])
+            self.assertEqual(env["GIT_CONFIG_GLOBAL"], os.devnull)
+        self.assertFalse(list(Path(tempfile.gettempdir()).glob("hive-health-*")), "its store is removed")
+
+    def test_the_report_fills_a_template_with_healths_numbers_and_posts_nothing(self):
+        self.activity()
+        printed = self.health("--template", "error", "--project", "Bee-ruche/toy", command="report")
+        template = (REGISTRY / hive.TEMPLATES_FOLDER / "judge-or-machine-error.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+        head, numbers = printed.split("\n", 1)
+        self.assertRegex(head, r"\A<!-- hive\.py report --template error: the issue template judge-or-machine-error\.md, its numbers filled by "
+                               r"hive\.py health at 2026-11-12T12:00:00Z\. Nothing was posted: .* -->\Z")
+        before, _, rest = hive.template_body(template, "x").partition(hive.NUMBERS_START)
+        self.assertTrue(numbers.startswith(before + hive.NUMBERS_START + "\n") and numbers.endswith(hive.NUMBERS_END + rest.partition(hive.NUMBERS_END)[2]),
+                        "the template's own text, as it is, around the numbers")
+        self.assertIn("| | toy |\n", numbers)
+        self.assertIn("| error marks, kind judge (the judge did not answer) | 1 |\n", numbers)
+        self.assertIn("| tasks with error marks | toy-0004 |\n", numbers)
+        self.assertNotIn("alice", printed)
+        self.assertNotIn("7000004", printed)
+        both = self.health("--template", "cutter", command="report")
+        self.assertIn("| | toy | port | all projects |\n", both)
+        self.assertIn("| stuck tasks | toy-0001 | - | 1 |\n", both)
+        for argv in (("--template", "posting"), ("--template", "error", "--project", "Bee-ruche/unlisted")):
+            with self.subTest(argv), self.assertRaises(SystemExit) as stopped:
+                self.health(*argv, command="report")
+            self.assertEqual(stopped.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

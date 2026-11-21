@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A weakness of the hive, reported privately
+    url: https://github.com/Bee-ruche/hive/security/policy
+    about: A way past the judge, its container, a sandbox or the hive's rules is never reported in an issue. Read how to report it.
