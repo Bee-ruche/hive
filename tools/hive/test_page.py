@@ -886,9 +886,14 @@ class TestRefusals(Case):
                      verdict(2, "2026-11-02T09:00:00Z", "carol", 103, "toy-0002", "refused", reason="goal_not_met", report=self.SHORT),
                      verdict(3, "2026-11-03T09:00:00Z", "dave", 104, "toy-0001", "refused", reason="judge_refused", probe=1)])
         self.put("feed.json", feed({"toy-0001": "done", "toy-0002": "open"}))
+        # stats.json as the hive writes it of these lines (hive.build_stats): the answer apart, not judged
+        self.put("stats.json", {"protocol": hive.PROTOCOL, "generated_at": "2026-11-12T12:00:00Z", "members": {},
+                                "models": {"undeclared": {"judged": 2, "accepted": 0, "answered": 1}}})
         files = self.make("--tasks", goals)
         data, seen = self.summary(files), self.harmless(files)
-        self.assertEqual({key: data["totals"][key] for key in ("verdicts", "refused", "answered")}, {"verdicts": 3, "refused": 2, "answered": 1})
+        self.assertEqual({key: data["totals"][key] for key in ("verdicts", "judged", "refused", "answered")},
+                         {"verdicts": 3, "judged": 2, "refused": 2, "answered": 1}, "judged counts what was judged to be accepted")
+        self.assertEqual(data["stats_json"], "agrees", "the page and stats.json count an answer the same way")
         self.assertEqual(data["refusals"], [{"reason": "goal_not_met", "count": 1}, {"reason": "judge_refused", "count": 1}],
                          "the answer is no refusal; a line refused by the judge is one, whatever it says")
         self.assertEqual([item["task"] for item in data["short_of_a_figure"]], ["toy-0002"])

@@ -152,10 +152,12 @@ HIVE_SIDE_REASONS = ("not_answered", "task_closed")  # the hive's or the project
 # is what the judge measured. A member's candidate for a probe that the judge found correct, within every requirement
 # of the project, and short of the task's goal (ANSWER_REASONS) is refused, as any such candidate is, and its line
 # keeps the judge's figures and says « probe »: how many answers, from distinct members, the probe asks. That line is
-# an ANSWER (probe_answer): it costs its member no wait, earns nothing (it is no acceptance), and the probe is done
-# once it has as many answers from distinct members as it asks. A hive at an older commit reads the same line as the
-# ordinary refusal it also is.
-ANSWER_REASONS = ("goal_not_met", "not_proven")
+# an ANSWER (probe_answer): it costs its member no wait and earns nothing (it is no acceptance). The probe is done once
+# it has as many answers as it asks from distinct ESTABLISHED members (each with an acceptance of its own on the
+# project before its answer: Ledger.done); an answer from another member is recorded, and completes nothing. A
+# candidate short of its proof alone (not_proven) reached the goal: a working idea, not an answer, and on a probe it is
+# what it is on any task. A hive at an older commit reads the same line as the ordinary refusal it also is.
+ANSWER_REASONS = ("goal_not_met",)
 PROBE_ANSWERS_MOST = 5  # the most answers a probe may ask (its « answers », 1 by default)
 ACTIONS = ("ready", "submit")
 # A ruling's marker (read_ruling): a guardian's, in the guardian's own fork. It is no member's marker: read_marker knows
@@ -1077,14 +1079,21 @@ class Ledger:
                      and e.get("at") == at), None)
 
     def done(self):
-        """The tasks done: those with an accepted candidate, and the probes answered by as many distinct members as they
-        ask (probe_answer; the count the latest answer's line gives)."""
+        """The tasks done: those with an accepted candidate, and the probes answered by as many distinct ESTABLISHED
+        members as they ask (probe_answer; the count the latest answer's line gives). A member is established for an
+        answer when a candidate of its own was accepted on the project before it (an acceptance dated earlier, as the
+        tally and the hint count): an answer that tries nothing costs its author nothing, so an account with no
+        acceptance completes no probe, and closes no question for everyone. Its answer is recorded all the same."""
         accepted = {e["task"] for e in self.events if e.get("type") == "verdict" and e.get("result") == "accepted"}
+        first = established_since(self.events)
         answered = {}
         for e in self.events:
             asked = probe_answer(e)
             if asked is not None:
-                answered[e.get("task")] = (answered.get(e.get("task"), (set(), asked))[0] | {e.get("member_id")}, asked)
+                members = answered.get(e.get("task"), (set(), asked))[0]
+                if e.get("member_id") in first and first[e.get("member_id")] < e.get("at", ""):
+                    members = members | {e.get("member_id")}
+                answered[e.get("task")] = (members, asked)
         return accepted | {task for task, (members, asked) in answered.items() if len(members) >= asked}
 
     def answered(self, member_id):
@@ -3012,6 +3021,16 @@ def goal_met(task, report):
     return goal.get("kind") == "correct" or (goal.get("kind") == "metric" and condition_met(goal, report))
 
 
+def established_since(events):
+    """{account number: the instant of its first accepted candidate on the project}, from ledger lines: who is
+    established, and since when (Ledger.done; the tally reads its own lines the same way)."""
+    first = {}
+    for e in events:
+        if e.get("type") == "verdict" and e.get("result") == "accepted" and isinstance(e.get("at"), str):
+            first[e.get("member_id")] = min(first.get(e.get("member_id"), e["at"]), e["at"])
+    return first
+
+
 def answers_asked(task):
     """How many answers a task asks as a probe, from distinct members, before it is done: its « answers » (1 by
     default) for a task of the kind « probe », and 0 for any other (check_links holds the field to its bounds)."""
@@ -3142,9 +3161,11 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
             if not all(requirement_met(condition, verdict["report"], waived) for condition in config["judge"]["require"]):
                 raise Refusal("requirement_not_met")
             if not goal_met(task, verdict["report"]):
+                if short_of_a_proof_alone(task, verdict["report"], config):
+                    raise Refusal("not_proven")  # (the goal reached, the proof short: on a probe as on any task, no answer)
                 if answers_asked(task) and not admit:  # a probe's answer: what the judge measured is what the probe asked
                     outcome["probe"] = answers_asked(task)
-                raise Refusal("not_proven" if short_of_a_proof_alone(task, verdict["report"], config) else "goal_not_met")
+                raise Refusal("goal_not_met")
             outcome["result"] = "accepted"
             done.add(entry["task"])
             tip = commit
@@ -3153,10 +3174,9 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
             # after one of them is accepted.
             halt = entry["declined"]
         except Refusal as refusal:
+            # (A probe this answer completes is done from the next run, as Ledger.done reads the ledger then: a task has
+            # one candidate in a run, and a guardian's ruling on it later in this run is judged as if it were not.)
             outcome.update(result="refused", reason=refusal.reason, detail=clean_detail(refusal.detail))
-            if outcome.get("probe") and len({e.get("member_id") for e in ledger.events if probe_answer(e) is not None
-                                             and e.get("task") == entry["task"]} | {member_id}) >= outcome["probe"]:
-                done.add(entry["task"])  # (the probe's last answer: done, as Ledger.done will say once it is written)
         except HiveError as error:
             log(f"{entry['sha'][:12]}: {error}")
             # A failure to derive is the candidate's doing only if the hive's machine works: it is asked to derive the
@@ -3858,7 +3878,9 @@ def build_stats(ledger):
     accepted: the model is what each worker declared, a statistic, not a proof. A member has what was accepted, and
     nothing else: how many of a person's candidates were judged would say how many were refused, and this file names
     only members with accepted work. Members are counted by their account's id, under the login of their latest
-    accepted answer."""
+    accepted answer. A probe's answer (probe_answer) is counted apart, under « answered » (and only where there is
+    one): « judged » counts what was judged to be accepted, so that accepted over judged is the share it says. The
+    project's page counts the same."""
     members, models = {}, {}
     for event in ledger.events:
         if event.get("type") != "verdict" or not event.get("judged"):
@@ -3866,6 +3888,9 @@ def build_stats(ledger):
         accepted = event.get("result") == "accepted"
         row = models.setdefault(event.get("model") if isinstance(event.get("model"), str) and MODEL.match(event["model"])
                                 else "undeclared", {"judged": 0, "accepted": 0})
+        if probe_answer(event) is not None:
+            row["answered"] = row.get("answered", 0) + 1
+            continue
         row["judged"] += 1
         row["accepted"] += accepted
         if accepted and type(event.get("member_id")) is int and isinstance(event.get("member"), str) and LOGIN.match(event["member"]):
@@ -3943,8 +3968,12 @@ def tally(tasks, lines, instant, active=None):
     of the figure its goal is on, beside the goal's own bound (`best`); and the hours from the deal to its acceptance.
     For a probe, also: how many answers it asks (`answers_asked`); its answers, each with its instant, its reason, the
     judge's figures and whether its member had an acceptance on the project before it (`answers`); and how many
-    distinct members answered, and of them how many had (`answered_by`, `answered_by_established`). A probe's answer
-    (probe_answer) is no refusal and no failure; the probe is done once as many distinct members answered as it asks.
+    distinct members answered, and of them how many had (`answered_by`, `answered_by_established`); how many answers
+    it still needs from established members (`answers_needed`), and how many established members have not answered it
+    (`answerers_left`). A probe's answer (probe_answer) is no refusal and no failure; the probe is done once as many
+    distinct established members answered as it asks (Ledger.done). A probe left to do that fewer established members
+    can still answer than it needs is SHORT OF MEMBERS (`short_of_members`): the members the project has can no longer
+    complete it, and it would stay open for ever; on a project's first day, before any acceptance, every probe is.
 
     A task is STUCK when STUCK_MEMBERS distinct members, each with a candidate accepted on the project, failed on it:
     the judge examined their candidate and refused it (FAILING_REASONS), or their deal on it ran out at their cost.
@@ -4027,12 +4056,20 @@ def tally(tasks, lines, instant, active=None):
                     best["value"] = value
     for task_id, row in rows.items():
         live = latest.get(task_id, {}).get("live", False)
-        if "answers" in row:  # as Ledger.done counts: distinct members, against what the latest answer's line asks
+        if "answers" in row:  # distinct members who answered, and of them those established when they did
             row["answered_by"], row["answered_by_established"] = len(answered.get(task_id, {})), sum(answered.get(task_id, {}).values())
-        answered_enough = task_id in asked and len(answered.get(task_id, {})) >= asked[task_id]
+        # As Ledger.done counts: distinct established members, against what the latest answer's line asks.
+        answered_enough = task_id in asked and sum(answered.get(task_id, {}).values()) >= asked[task_id]
         row["status"] = "done" if row["accepted"] or answered_enough else "closed" if tasks[task_id].get("closed") else "dealt" if live else "open"
         row["members"], row["established_failures"] = len(holders[task_id]), sum(member in first and first[member] < at for member, at in failed[task_id].items())
+        if "answers" in row:
+            # Who could still complete it: the established members who have not answered it (a member is never dealt a
+            # probe it answered). Fewer than the answers it still needs, and it can no longer be done by the members the
+            # project has: « short_of_members », for the cutter to close.
+            row["answerers_left"] = len(set(first) - set(answered.get(task_id, {})))
+            row["answers_needed"] = max(0, asked.get(task_id, row["answers_asked"]) - sum(answered.get(task_id, {}).values()))
     left = {task_id for task_id, row in rows.items() if row["status"] in ("open", "dealt")}
+    short = sorted(task_id for task_id in left if "answers" in rows[task_id] and rows[task_id]["answerers_left"] < rows[task_id]["answers_needed"])
     rivals = rivals_of(tasks)
     dealable = [task_id for task_id in left if rows[task_id]["status"] == "open"
                 and all(rows[other]["status"] != "dealt" for other in rivals[task_id])]
@@ -4047,7 +4084,7 @@ def tally(tasks, lines, instant, active=None):
                 seen.add(current)
                 todo.extend(other for other in rivals[current] if other in left)
     stuck = sorted(task_id for task_id in left if rows[task_id]["established_failures"] >= STUCK_MEMBERS)
-    return {"as_of": until, "stuck_members": STUCK_MEMBERS, "tasks": rows, "stuck": stuck, "left": len(left),
+    return {"as_of": until, "stuck_members": STUCK_MEMBERS, "tasks": rows, "stuck": stuck, "short_of_members": short, "left": len(left),
             "open": sum(rows[task_id]["status"] == "open" for task_id in left), "dealable": len(dealable), "areas": areas,
             "starving": not left, "active_members": active}
 
@@ -5667,7 +5704,7 @@ ANONYMOUS_KEPT = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "HIVE_NOW", "SSL_C
 ANONYMOUS_PROXIES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")  # (in either letter case)
 HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free")  # a project's numbers that add up
 HEALTH_TABLES = ("tasks", "refused", "errors")  # a project's counts by status, by reason and by kind, which add up name by name
-GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired")  # what is counted of the tasks of one kind, or of one size
+GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired", "answered")  # what is counted of the tasks of one kind, or of one size
 TEMPLATES_FOLDER = ".github/ISSUE_TEMPLATE"
 REPORT_TEMPLATES = {"error": "judge-or-machine-error.md", "optimisation": "hive-optimisation.md", "cutter": "cutter-feedback.md"}
 NUMBERS_START, NUMBERS_END = "<!-- numbers -->", "<!-- end of numbers -->"  # the part of a template that « report » fills
@@ -5776,7 +5813,8 @@ def acceptance(group):
     hive answered, accepted or refused (a refusal the protocol puts on the hive's or the project's side,
     HIVE_SIDE_REASONS, left out; judge_failed and push_refused, which it charges to the candidate, counted), and each
     deal run out at its member's cost. A candidate a guardian admitted after its refusal is one answer more. None
-    while there was none."""
+    while there was none. A probe's answer is no ending here (neither accepted nor refused): the group counts its
+    answers apart (`answered`), and its acceptance is the share it measures, of what was meant to be accepted."""
     ended = group["accepted"] + group["refused"] + group["expired"]
     return round(group["accepted"] / ended, 3) if ended else None
 
@@ -5809,6 +5847,7 @@ def tally_sums(tallied):
     accepted after a deal, in order. Numbers, codes and the project's task ids alone."""
     summary = {"tasks": {status: 0 for status in ("open", "dealt", "done", "closed")}, "left": tallied["left"],
                "dealable": tallied["dealable"], "areas": tallied["areas"], "starving": tallied["starving"], "stuck": list(tallied["stuck"]),
+               "short_of_members": list(tallied["short_of_members"]),
                "deals": 0, "accepted": 0, "refused": {}, "expired": 0, "expired_free": 0, "errors": {}, "errors_on": [],
                "by_kind": {}, "by_size": {}, "hours_to_accept": []}
     for task_id, row in sorted(tallied["tasks"].items()):
@@ -5825,7 +5864,8 @@ def tally_sums(tallied):
         refused = sum(count for reason, count in row["refused"].items() if reason not in HIVE_SIDE_REASONS)
         for table, name in (("by_kind", row["kind"]), ("by_size", row["size"])):
             group = summary[table].setdefault(name or NO_WORD, dict.fromkeys(GROUP_SUMS, 0))
-            for key, count in (("tasks", 1), ("deals", row["deals"]), ("accepted", row["accepted"]), ("refused", refused), ("expired", row["expired"])):
+            for key, count in (("tasks", 1), ("deals", row["deals"]), ("accepted", row["accepted"]), ("refused", refused), ("expired", row["expired"]),
+                               ("answered", len(row.get("answers", ())))):
                 group[key] += count
     summary["hours_to_accept"].sort()
     return summary
@@ -5835,7 +5875,7 @@ def health_totals(summaries):
     """The totals of the projects' summaries: each number, each count by name and each group's counts, the sum of the
     projects'; the stuck tasks counted; the projects that starve, and those paused, named by their repositories; the
     hours to accept of all of them together. The shares are worked out of the sums, never averaged."""
-    totals = {"projects": len(summaries), "stuck": 0, "starving": [], "paused": [], "by_kind": {}, "by_size": {}, "hours_to_accept": [],
+    totals = {"projects": len(summaries), "stuck": 0, "short_of_members": 0, "starving": [], "paused": [], "by_kind": {}, "by_size": {}, "hours_to_accept": [],
               **dict.fromkeys(HEALTH_SUMS, 0), **{table: {} for table in HEALTH_TABLES}}
     for summary in summaries:
         for key in HEALTH_SUMS:
@@ -5849,6 +5889,7 @@ def health_totals(summaries):
                 for key in GROUP_SUMS:
                     total[key] += group[key]
         totals["stuck"] += len(summary["stuck"])
+        totals["short_of_members"] += len(summary["short_of_members"])
         totals["starving"] += [summary["repository"]] if summary["starving"] else []
         totals["paused"] += [summary["repository"]] if summary["paused"] else []
         totals["hours_to_accept"] += summary["hours_to_accept"]
@@ -7573,6 +7614,16 @@ def base_full(feed, login):
     return cover
 
 
+def probe_in_feed(feed, task_id):
+    """True if the project's own run, as its feed shows, knows this task for a probe: its entry says « probe » and how
+    many answers it asks, a whole number within the bound, which a run at a commit before probes never writes. The
+    worker's tool is taken afresh and the run is pinned: a probe the run does not know is a work task, for both."""
+    listed = feed.get("tasks")
+    entry = next((t for t in listed if isinstance(t, dict) and t.get("id") == task_id), {}) if isinstance(listed, list) else {}
+    asked = entry.get("answers_asked")
+    return entry.get("kind") == "probe" and type(asked) is int and 1 <= asked <= PROBE_ANSWERS_MOST
+
+
 def feed_counts(feed, task_id):
     """The whole numbers the feed gives about a task: how many candidates the judge refused, for which of this
     file's own reason codes, and the hint. Numbers under this file's own names: no text of the feed."""
@@ -7718,9 +7769,11 @@ def cmd_next(args):
         data = {"id": task["id"], "title": task.get("title", ""), "files": task["files"], "size": task.get("size", "S"),
                 "tier": max(1, int(task.get("tier", 1))), "goal": task.get("goal") or {"kind": "correct"},
                 "context": task.get("context", ""),
-                # A probe asks one named thing to be tried: a correct candidate is its answer, short of the goal or not
-                # (the worker's guide says what that changes). The word is the hive's, checked when the tasks were read.
-                **({"kind": "probe"} if task.get("kind") == "probe" else {}), **feed_counts(feed, task["id"])}
+                # A probe asks one named thing to be tried: a correct candidate short of its goal is its answer (the
+                # worker's guide says what that changes). Said only when the project's own run knows probes, as its
+                # feed shows (probe_in_feed): a run at an older commit takes the line for a work task, and so does this.
+                **({"kind": "probe"} if task.get("kind") == "probe" and probe_in_feed(feed, task["id"]) else {}),
+                **feed_counts(feed, task["id"])}
         print(f"TASK {task['id']}")
         print(f"DEAL {deal['at']}")
         print(f"UNTIL {deal['until']}")

@@ -14639,14 +14639,17 @@ REGISTRY = Path(os.environ.get("HIVE_REGISTRY") or Path(hive.__file__).resolve()
 
 
 PROBE = {"id": "toy-0006", "title": "Try an order-4 model", "files": ["lib.c"], "kind": "probe", "goal": PROVED_GAIN}
+ELSEWHERE = {"id": "toy-0008", "title": "Work in docs", "files": ["docs/"]}  # a task « correct » apart, to make a member established
+EARLIER = "2026-11-12T11:30:00Z"  # half an hour before NOW: an acceptance then makes its member established for an answer at NOW
 
 
 class TestProbes(Base):
     """A probe (a task of the kind « probe ») asks one named thing to be tried without knowing whether it helps. A
     member's candidate for it that the judge finds correct, within the project's requirements, and short of its goal
-    is its answer: the refusal's line, figures kept, says « probe »; it costs no wait, earns nothing, integrates
-    nothing; the probe is done once as many distinct members answered as it asks. A candidate that reaches the goal
-    with its proof is accepted as any other. Nothing of the member's own words is recorded: the answer is the judge's."""
+    (goal_not_met) is its answer: the refusal's line, figures kept, says « probe »; it costs no wait, earns nothing,
+    integrates nothing. The probe is done once as many distinct ESTABLISHED members (each with an acceptance of its own
+    before its answer) answered as it asks. A candidate that reaches the goal with its proof is accepted as any other;
+    one short of its proof alone is no answer. Nothing of the member's own words is recorded."""
 
     def with_tasks(self, *more):
         self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [*TASKS, *more]))
@@ -14654,6 +14657,17 @@ class TestProbes(Base):
 
     def answer_line(self, task="toy-0006"):
         return [e for e in self.w.events() if e["type"] == "verdict" and e["task"] == task][-1]
+
+    def tallied(self):
+        config, tasks, ledger = self.w.load()
+        return hive.tally(tasks, [line for line in map(hive.tally_line, ledger.events) if line is not None], hive.now())
+
+    def established(self, fork, task="toy-0002", path=None):
+        """An acceptance of the member's own, on a task « correct » in a folder of its own: from then on it is established."""
+        fork.fresh(f"hive/submit/{task}").submit(task, path=path or f"src/{fork.login}.c" if task == "toy-0002" else f"docs/{fork.login}.txt",
+                                                 content=f"int {fork.login};\n")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": EARLIER}):  # (dated before the answers of the test, which come at NOW)
+            self.assertEqual(self.one([o for o in self.w.run() if o["task"] == task])["result"], "accepted")
 
     def test_a_probes_short_answer_is_recorded_costs_nothing_earns_nothing_and_integrates_nothing(self):
         self.with_tasks(PROBE)
@@ -14669,32 +14683,59 @@ class TestProbes(Base):
                                                "model", "reason", "detail", "report", "probe"]), "no login, no commit, no text of the member's")
         self.assertEqual(self.w.tip(), start, "nothing is integrated")
         config, tasks, ledger = self.w.load()
-        self.assertIn("toy-0006", ledger.done(), "answered by as many members as it asks (one): done")
+        self.assertNotIn("toy-0006", ledger.done(), "an answer from a member with no acceptance of its own completes nothing")
         self.assertEqual((ledger.standing(101, hive.now(), config), ledger.accepted_members(), ledger.last_deal_accepted(101)),
                          ((1, None, 1), set(), False), "no wait, no class, no acceptance; still a deal of the day")
         self.assertEqual(ledger.answered(101), {"toy-0006"})
         feed = self.w.feed()["toy-0006"]
         self.assertEqual({key: feed[key] for key in ("status", "kind", "answers_asked", "answers", "refusals", "refused_for", "hint")},
-                         {"status": "done", "kind": "probe", "answers_asked": 1, "answers": 1, "refusals": 0, "refused_for": {}, "hint": 1})
+                         {"status": "open", "kind": "probe", "answers_asked": 1, "answers": 1, "refusals": 0, "refused_for": {}, "hint": 1})
         self.assertNotIn("kind", self.w.feed()["toy-0001"], "a work task's entry is as it was")
-        self.assertEqual(hive.build_stats(ledger)["models"], {"undeclared": {"judged": 1, "accepted": 0}}, "judged, not accepted")
-        row = hive.tally(tasks, [l for l in map(hive.tally_line, ledger.events) if l is not None], hive.now())["tasks"]["toy-0006"]
-        self.assertEqual({key: row[key] for key in ("status", "accepted", "refused", "answers_asked", "answered_by", "answered_by_established")},
-                         {"status": "done", "accepted": 0, "refused": {}, "answers_asked": 1, "answered_by": 1, "answered_by_established": 0})
+        self.assertEqual(hive.build_stats(ledger)["models"], {"undeclared": {"judged": 0, "accepted": 0, "answered": 1}},
+                         "an answer is counted apart: judged counts what was judged to be accepted")
+        tallied = self.tallied()
+        row = tallied["tasks"]["toy-0006"]
+        self.assertEqual({key: row[key] for key in ("status", "accepted", "refused", "answers_asked", "answered_by", "answered_by_established",
+                                                    "answers_needed", "answerers_left")},
+                         {"status": "open", "accepted": 0, "refused": {}, "answers_asked": 1, "answered_by": 1, "answered_by_established": 0,
+                          "answers_needed": 1, "answerers_left": 0})
         self.assertEqual(row["answers"], [{"at": line["at"], "reason": "goal_not_met", "report": line["report"], "established": False}])
-        # a correct candidate short of its proof alone is an answer too
-        self.with_tasks(PROBE, {**PROBE, "id": "toy-0007"})
-        self.w.fork("bob", 102).submit("toy-0007")
-        self.assertEqual(self.one(self.w.run(lambda *a: {**judge_by_content(*a), "report": {"gain": 0.05, "sure_gain": 0}}))["probe"], 1)
-        self.assertEqual(self.answer_line("toy-0007")["reason"], "not_proven")
+        self.assertEqual(tallied["short_of_members"], ["toy-0006"], "no member has an acceptance yet: nobody can complete it")
+        summary = hive.tally_sums(tallied)
+        self.assertEqual((summary["by_kind"]["probe"]["answered"], summary["by_kind"]["probe"]["refused"], summary["short_of_members"]),
+                         (1, 0, ["toy-0006"]), "health: the answers apart, and no refusal")
+        self.assertIsNone(hive.with_shares(summary)["by_kind"]["probe"]["acceptance"], "an answer is no ending of what was meant to be accepted")
+        # an established member's answer completes it: the tally says so, and why
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        bob.fresh("hive/submit/toy-0006").submit("toy-0006", content=LIB + "/* bob's try */\n")
+        self.assertEqual(self.one(self.w.run())["probe"], 1)
+        self.assertIn("toy-0006", self.w.load()[2].done())
+        tallied = self.tallied()
+        row = tallied["tasks"]["toy-0006"]
+        self.assertEqual((row["status"], row["answered_by"], row["answered_by_established"], row["answers"][-1]["established"], row["answers_needed"]),
+                         ("done", 2, 1, True, 0))
+        self.assertEqual((tallied["short_of_members"], self.w.feed()["toy-0006"]["status"]), ([], "done"))
+
+    def test_a_candidate_short_of_its_proof_alone_is_no_answer(self):
+        """It reached the goal: a working idea, which a probe's answer would close with nothing integrated. On a probe it
+        is what it is on any task: refused at no wait, no « probe » on its line, and the probe stays open."""
+        self.with_tasks(PROBE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        bob.fresh("hive/submit/toy-0006").submit("toy-0006")
+        seen = self.one(self.w.run(lambda *a: {**judge_by_content(*a), "report": {"gain": 0.05, "sure_gain": 0}}))
+        self.assertEqual((seen["reason"], "probe" in seen, "probe" in self.answer_line()), ("not_proven", False, False))
+        config, _, ledger = self.w.load()
+        self.assertEqual((ledger.done() & {"toy-0006"}, ledger.answered(102), ledger.standing(102, hive.now(), config)[1]), (set(), set(), None))
+        self.assertEqual(self.w.feed()["toy-0006"]["refused_for"], {"not_proven": 1})
 
     def test_an_answer_leaves_its_members_standing_as_it_was(self):
         """A member whose last deal was accepted, and who then answers a probe, stands where it stood: class 0, no wait,
         and its last deal that counts still the accepted one (a preference is still followed)."""
         self.with_tasks(PROBE)
         bob = self.w.fork("bob", 102)
-        bob.submit("toy-0002", path="src/b.c", content="int b;\n")
-        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        self.established(bob)
         bob.fresh("hive/submit/toy-0006").submit("toy-0006", content=LIB + "/* bob's try */\n")
         self.assertEqual(self.one(self.w.run())["probe"], 1)
         config, _, ledger = self.w.load()
@@ -14723,11 +14764,11 @@ class TestProbes(Base):
                          "a refusal costs what it costs")
         self.assertEqual(ledger.done() & {"toy-0007", "toy-0008"}, set())
 
-    def test_a_probe_that_asks_two_answers_takes_them_from_two_members(self):
-        """A probe may ask more answers than one (« answers », up to PROBE_ANSWERS_MOST), from distinct members: a member
-        who answered is never dealt it again, even when it is the one task left; once enough members answered, it is
-        done, and the cutter publishes what needs it (the question is answered, whichever way)."""
-        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [{**PROBE, "answers": 2}, {**TASKS[2]}]))
+    def test_a_probe_that_asks_two_answers_takes_them_from_two_established_members(self):
+        """A probe may ask more answers than one (« answers », up to PROBE_ANSWERS_MOST), from distinct established
+        members: a member who answered is never dealt it again, even when it is the one task left; once enough answered,
+        it is done, and the cutter publishes what needs it (the question is answered, whichever way)."""
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [{**PROBE, "answers": 2}, TASKS[1], ELSEWHERE, TASKS[2]]))
         self.w.publish()
 
         def cut_says():
@@ -14737,8 +14778,11 @@ class TestProbes(Base):
             backlog = {"toy-0009": {"id": "toy-0009", "title": "After the probe", "files": ["lib.c"], "goal": PROVED_GAIN, "needs": ["toy-0006"]}}
             return hive.cut(config, tasks, backlog, counted, set(), ledger.done(), hive.tip_paths(self.w.harvest, self.w.tip()))[1]
 
-        self.alice.submit("toy-0006")
-        self.assertEqual(self.one(self.w.run())["probe"], 2)
+        bob = self.w.fork("bob", 102)
+        self.established(self.alice)
+        self.established(bob, "toy-0008")
+        self.alice.fresh("hive/submit/toy-0006").submit("toy-0006")
+        self.assertEqual(self.one([o for o in self.w.run() if o["task"] == "toy-0006"])["probe"], 2)
         config, tasks, ledger = self.w.load()
         self.assertNotIn("toy-0006", ledger.done(), "one answer of two")
         self.assertEqual((self.w.feed()["toy-0006"]["status"], self.w.feed()["toy-0006"]["answers"]), ("open", 1))
@@ -14746,36 +14790,87 @@ class TestProbes(Base):
         self.alice.ready()
         self.w.run()
         self.assertEqual(self.w.deals()["toy-0006"], ("alice", "closed"), "the member who answered is not dealt it again, though it is the one task left")
-        bob = self.w.fork("bob", 102)
         bob.ready()
         self.w.run()
         self.assertEqual(self.w.deals()["toy-0006"], ("bob", "live"))
-        bob.fresh("hive/submit/toy-0006").submit("toy-0006", content=LIB + "/* bob's try */\n")
+        bob.fresh("hive/submit/toy-0006-2").submit("toy-0006", content=LIB + "/* bob's try */\n")
         self.assertEqual(self.one([o for o in self.w.run() if o["task"] == "toy-0006"])["probe"], 2)
         config, tasks, ledger = self.w.load()
-        self.assertIn("toy-0006", ledger.done(), "two answers from two members")
-        row = hive.tally(tasks, [line for line in map(hive.tally_line, ledger.events) if line is not None], hive.now())["tasks"]["toy-0006"]
-        self.assertEqual((row["status"], row["answered_by"], len(row["answers"])), ("done", 2, 2))
+        self.assertIn("toy-0006", ledger.done(), "two answers from two established members")
+        row = self.tallied()["tasks"]["toy-0006"]
+        self.assertEqual((row["status"], row["answered_by"], row["answered_by_established"], len(row["answers"])), ("done", 2, 2, 2))
         self.assertEqual(cut_says()["added"], [{"id": "toy-0009", "from": "backlog"}], "a probe answered satisfies what needs it")
+
+    def test_a_probe_the_members_the_project_has_cannot_complete_is_short_of_members(self):
+        """It asks two answers and the project has one established member: it can never be done, would stay open for
+        ever and count as left to do. The tally says so, before and after that member's answer."""
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [{**PROBE, "answers": 2}, TASKS[1], TASKS[2]]))
+        self.w.publish()
+        self.established(self.alice)
+        tallied = self.tallied()
+        self.assertEqual((tallied["short_of_members"], tallied["tasks"]["toy-0006"]["answers_needed"], tallied["tasks"]["toy-0006"]["answerers_left"]),
+                         (["toy-0006"], 2, 1))
+        self.alice.fresh("hive/submit/toy-0006").submit("toy-0006")
+        self.assertEqual(self.one([o for o in self.w.run() if o["task"] == "toy-0006"])["probe"], 2)
+        tallied = self.tallied()
+        self.assertEqual((tallied["short_of_members"], tallied["tasks"]["toy-0006"]["status"], tallied["tasks"]["toy-0006"]["answers_needed"],
+                          tallied["tasks"]["toy-0006"]["answerers_left"], tallied["left"]), (["toy-0006"], "open", 1, 0, 1))
+        bob = self.w.fork("bob", 102)
+        self.with_tasks({**PROBE, "answers": 2}, ELSEWHERE)
+        self.established(bob, "toy-0008")
+        self.assertEqual(self.tallied()["short_of_members"], [], "a second established member who has not answered: it can be done again")
+
+    def test_an_answer_behind_a_push_that_did_not_land_is_answered_at_the_next_run(self):
+        """A probe's answer judged after an accepted candidate whose push did not land is unused, as any candidate there:
+        no verdict, no cost, no answer; the next run judges it again and records it."""
+        probe = {**PROBE, "files": ["src/"]}
+        self.with_tasks(probe)
+        hook = self.w.upstream / "hooks/pre-receive"
+        hook.write_text("#!/bin/sh\nwhile read old new ref; do\n  if git log -p \"$old..$new\" | grep -q 'AKIA[0-9A-Z]\\{16\\}'; then\n"
+                        "    exit 1\n  fi\ndone\nexit 0\n")
+        os.chmod(hook, 0o755)
+        mallory = self.w.fork("mallory", 666)
+        mallory.submit("toy-0001", content=LIB + '/* "AKIAABCDEFGHIJKLMNOP" */\n')
+        answer = self.alice.submit("toy-0006", path="src/p.c", content="int tried;\n")
+        _, verdicts, _ = self.w.sweep()
+        with self.assertRaisesRegex(hive.HiveError, "declined a commit"):
+            self.w.apply(verdicts)
+        self.assertEqual([e["type"] for e in self.w.events() if e.get("sha") == answer], ["unused"])
+        config, _, ledger = self.w.load()
+        self.assertEqual((ledger.answered(101), ledger.standing(101, hive.now(), config)[:2]), (set(), (1, None)))
+        with mock.patch.dict(os.environ, {"HIVE_NOW": LATER}):
+            _, verdicts, _ = self.w.sweep()
+            with contextlib.suppress(hive.HiveError):
+                self.w.apply(verdicts)
+        self.assertEqual([(e["type"], e.get("probe")) for e in self.w.events() if e.get("sha") == answer], [("unused", None), ("verdict", 1)])
 
     def test_the_line_alone_says_an_answer(self):
         """Ledger.done and the tally read the line: a refusal for a goal short that does not say « probe » (written by
         a hive at an older commit, or for a work task) is the refusal it is; « probe » means an answer only as a whole
-        number from 1 to PROBE_ANSWERS_MOST, on a member's candidate, for a goal short."""
+        number from 1 to PROBE_ANSWERS_MOST, on a member's candidate, refused for goal_not_met. An answer completes a
+        probe only from a member with an acceptance dated before it."""
         base = {"type": "verdict", "at": NOW, "task": "toy-0006", "deal": NOW, "member_id": 1, "repo_id": 1, "sha": "a" * 40,
                 "result": "refused", "judged": True, "model": None, "reason": "goal_not_met", "detail": {}, "report": {}}
         self.assertEqual(hive.probe_answer({**base, "probe": 1}), 1)
-        self.assertEqual(hive.probe_answer({**base, "reason": "not_proven", "probe": hive.PROBE_ANSWERS_MOST}), hive.PROBE_ANSWERS_MOST)
+        self.assertEqual(hive.probe_answer({**base, "probe": hive.PROBE_ANSWERS_MOST}), hive.PROBE_ANSWERS_MOST)
         for name, line in (("no probe", base), ("zero", {**base, "probe": 0}), ("too many", {**base, "probe": hive.PROBE_ANSWERS_MOST + 1}),
                            ("a yes", {**base, "probe": True}), ("a text", {**base, "probe": "1"}), ("a fraction", {**base, "probe": 1.0}),
+                           ("short of a proof", {**base, "reason": "not_proven", "probe": 1}),
                            ("judge refused", {**base, "reason": "judge_refused", "probe": 1}),
                            ("a requirement", {**base, "reason": "requirement_not_met", "probe": 1}),
                            ("accepted", {**base, "result": "accepted", "probe": 1}), ("a ruling's", {**base, "ruling": "b" * 40, "probe": 1}),
                            ("a deal", {**base, "type": "deal", "probe": 1})):
             with self.subTest(name):
                 self.assertIsNone(hive.probe_answer(line))
-        hive.Ledger(self.w.state).append([base])
-        self.assertNotIn("toy-0006", hive.Ledger(self.w.state).done())
+        accepted = {**base, "task": "toy-0001", "sha": "c" * 40, "result": "accepted", "member": "m", "commit": "d" * 40}
+        for name, lines, done in (("an old line", [base], False), ("no acceptance", [{**base, "probe": 1}], False),
+                                  ("an acceptance at the same instant", [{**accepted}, {**base, "probe": 1}], False),
+                                  ("an acceptance after it", [{**base, "probe": 1}, {**accepted, "at": LATER}], False),
+                                  ("an acceptance before it", [{**accepted, "at": "2026-11-12T10:00:00Z"}, {**base, "probe": 1}], True)):
+            with self.subTest(name):
+                ledger = hive.Ledger(self.w.state).first(0)
+                ledger.append(lines, write=False)
+                self.assertEqual("toy-0006" in ledger.done(), done)
 
     def test_a_probe_line_is_held_to_its_rules(self):
         """In the project's file (check_links, for every run) and at the cutter's gate (new_task_refusals): a probe's
@@ -14799,7 +14894,10 @@ class TestProbes(Base):
         self.assertEqual(hive.new_task_refusals(floored, "toy-0006", PROBE, set()), [], "the floor is asked of the goal, as of any task")
         self.assertTrue(hive.new_task_refusals(floored, "toy-0006", {**PROBE, "goal": {**PROVED_GAIN, "min": 0.01}}, set()))
 
-    def test_next_shows_a_dealt_probe_as_one(self):
+    def test_next_says_probe_only_when_the_projects_own_run_knows_probes(self):
+        """The worker's tool is taken afresh and the run is pinned: `next` shows {"kind": "probe"} only when the feed the
+        project's own run wrote lists the task as a probe, with how many answers it asks. A feed written by a run that
+        knows no probe (no such entry) leaves the line a work task, for the worker as for the run."""
         self.with_tasks(PROBE)
         self.w.deal(self.alice, "toy-0006")
         self.w.plan()
@@ -14807,6 +14905,16 @@ class TestProbes(Base):
         printed = self.w.next("alice")
         self.assertIn('| {"kind": "probe"}\n', printed)
         self.assertLess(printed.index('| {"context": ""}'), printed.index('| {"kind": "probe"}'))
+        feed = json.loads((self.w.state / "feed.json").read_text())
+        for name, changed in (("an older run's entry", lambda entry: {k: v for k, v in entry.items() if k not in ("kind", "answers_asked", "answers")}),
+                              ("no count", lambda entry: {k: v for k, v in entry.items() if k != "answers_asked"}),
+                              ("a count beyond the bound", lambda entry: {**entry, "answers_asked": hive.PROBE_ANSWERS_MOST + 1}),
+                              ("a count that is a text", lambda entry: {**entry, "answers_asked": "1"})):
+            with self.subTest(name):
+                (self.w.state / "feed.json").write_text(json.dumps({**feed, "tasks": [changed(t) if t["id"] == "toy-0006" else t for t in feed["tasks"]]}))
+                printed = self.w.next("alice")
+                self.assertIn("TASK toy-0006", printed)
+                self.assertNotIn('| {"kind"', printed, "a work task, as the run will take it")
 
 
 class TestAProbesAnswerIsNoRuling(Base):
@@ -14822,11 +14930,15 @@ class TestAProbesAnswerIsNoRuling(Base):
         config, tasks, ledger = self.w.load()
         ruling = {"guardian_id": 201, "ruling": "c" * 40, "whole": True, "task": "toy-0006", "sha": candidate}
         self.assertEqual(hive.admissible(ruling, config, tasks, ledger), "not_reviewable", "a goal short is no figure the project requires")
-        other = self.w.fork("bob", 102).submit("toy-0007")
+        bob = self.w.fork("bob", 102)
+        bob.submit("toy-0002", path="src/b.c", content="int b;\n")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": EARLIER}):  # (an acceptance dated before its answer: established)
+            self.assertEqual(self.one(self.w.run(judge_that_flags))["result"], "accepted")
+        other = bob.fresh("hive/submit/toy-0007").submit("toy-0007")
         self.assertEqual(self.one(self.w.run(judge_that_flags))["probe"], 1)
         config, tasks, ledger = self.w.load()
         self.assertEqual(hive.admissible({**ruling, "task": "toy-0007", "sha": other}, config, tasks, ledger), "task_done",
-                         "a probe answered as it asks is done: nothing is reviewed for it")
+                         "a probe an established member answered as it asks is done: nothing is reviewed for it")
 
 
 class TestTheToolsNames(unittest.TestCase):
@@ -14889,11 +15001,11 @@ class TestHealth(unittest.TestCase):
 
     def test_a_projects_numbers_by_kind_and_size_its_errors_and_durations(self):
         summary = self.summary(*self.lines())
-        self.assertEqual(summary["by_size"], {"S": {"tasks": 4, "deals": 2, "accepted": 1, "refused": 0, "expired": 0, "acceptance": 1.0},
-                                              "M": {"tasks": 1, "deals": 3, "accepted": 0, "refused": 1, "expired": 1, "acceptance": 0.0}},
+        self.assertEqual(summary["by_size"], {"S": {"tasks": 4, "deals": 2, "accepted": 1, "refused": 0, "expired": 0, "answered": 0, "acceptance": 1.0},
+                                              "M": {"tasks": 1, "deals": 3, "accepted": 0, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.0}},
                          "a refusal for the hive's own doing (not_answered) and a deal run out at nobody's cost end nothing of the member's")
-        self.assertEqual(summary["by_kind"], {"work": {"tasks": 4, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "acceptance": 0.333},
-                                              "probe": {"tasks": 1, "deals": 1, "accepted": 0, "refused": 0, "expired": 0, "acceptance": None}})
+        self.assertEqual(summary["by_kind"], {"work": {"tasks": 4, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.333},
+                                              "probe": {"tasks": 1, "deals": 1, "accepted": 0, "refused": 0, "expired": 0, "answered": 0, "acceptance": None}})
         self.assertEqual((summary["errors"], summary["errors_on"], summary["refused"]),
                          ({"judge": 1, "hive": 1, "unknown": 1}, ["toy-0004"], {"goal_not_met": 1, "not_answered": 1}),
                          "an error mark of a kind the hive does not write is counted, as of no known kind")
@@ -14912,7 +15024,7 @@ class TestHealth(unittest.TestCase):
         totals = hive.health_totals([one, other])
         self.assertEqual((totals["projects"], totals["deals"], totals["accepted"], totals["refused"], totals["errors"]),
                          (2, 6, 2, {"goal_not_met": 1, "not_answered": 1}, {"judge": 1, "hive": 1, "unknown": 1}))
-        self.assertEqual(totals["by_size"]["M"], {"tasks": 2, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "acceptance": 0.333},
+        self.assertEqual(totals["by_size"]["M"], {"tasks": 2, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.333},
                          "a share worked out of the sums, never an average of the projects' shares")
         self.assertEqual((totals["hours_to_accept"], totals["median_hours_to_accept"]), ([0.3, 0.5], 0.4), "the hours of all of them, in order")
         self.assertEqual((totals["paused"], totals["starving"]), (["Bee-ruche/port"], []), "projects named by their repositories")

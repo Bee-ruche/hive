@@ -877,6 +877,9 @@ def collect(state, now, tasks=None, project=None):
         accepted, judged, member_id = event["accepted"], event["judged"], event["member_id"]
         in_week = since < event["at"]  # and no line is dated after `now`: see above
         totals["verdicts"] += 1
+        # A probe's answer is judged and counted apart (« answered »): « judged » counts what was judged to be
+        # accepted, so that an acceptance rate is the share it says. stats.json counts the same (hive.build_stats).
+        judged = judged and not event.get("answer")
         totals["judged"] += judged
         totals["accepted"] += accepted and judged
         totals["integrations"] += accepted
@@ -893,9 +896,10 @@ def collect(state, now, tasks=None, project=None):
             (ended if mine else refusals)[event["reason"]] = (ended if mine else refusals).get(event["reason"], 0) + 1
             if event["measured"] is not None and event["measured"]["measures"]:
                 short.append((event["at"], position, event))  # refused for a figure, and the ledger keeps what the judge measured
-        if judged:
-            row = models.setdefault(event["model"], {"judged": 0, "accepted": 0, "ids": set()})
-            row["judged"] += 1
+        if judged or event.get("answer"):
+            row = models.setdefault(event["model"], {"judged": 0, "accepted": 0, "answered": 0, "ids": set()})
+            row["judged"] += judged
+            row["answered"] += bool(event.get("answer"))
             row["accepted"] += accepted
             if member_id is not None:
                 row["ids"].add(member_id)
@@ -1039,7 +1043,8 @@ def compare_stats(stats, models):
     the models' figures this page counted. The page shows its own count either way; a difference is a stale file."""
     if not isinstance(stats, dict) or not isinstance(stats.get("models"), dict):
         return "absent"
-    counted = {model or "undeclared": {"judged": row["judged"], "accepted": row["accepted"]} for model, row in models.items()}
+    counted = {model or "undeclared": {"judged": row["judged"], "accepted": row["accepted"],
+                                       **({"answered": row["answered"]} if row.get("answered") else {})} for model, row in models.items()}
     return "agrees" if stats["models"] == counted else "differs"
 
 
