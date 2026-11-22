@@ -92,7 +92,9 @@ The rules that keep the ledger's history true:
 ## Probes
 
 A `work` task bets on a threshold: « do this idea, gain at least X ». When the bet is wrong, nothing is learnt: a
-worker that cannot reach the goal stops without submitting, and the deal runs out with no line but its expiry. A
+worker that cannot reach the goal stops without submitting, and the deal runs out with no line but its expiry. The
+member holds the task until then and waits after it, as after any deal that ends without an accepted candidate; each
+run of its worker meanwhile tries the same thing again; and the task stays open, to be dealt again. A
 **probe** (`"kind": "probe"`) asks one named thing to be tried without knowing whether it helps, and records what was
 found, even nothing.
 
@@ -127,8 +129,16 @@ found, even nothing.
   direction is closed on several answers from established members, or on the architect's word. A later task states
   a finding in the cutter's own words, with the judge's figures (« the order-4 model was tried: 0.3 % »): never in a
   worker's words, which the ledger does not hold.
-- **When to cut one**: an idea whose worth is unknown and cheap to try. Probes are a minority of scouts, never most
-  of the open tasks: the open count counts them, and each costs the hive a judgement for no integration.
+- **When to cut one**: an idea whose worth is unknown and cheap to try, and **any goal whose threshold would be a
+  guess**. A `work` task's threshold comes from a figure the judge gave on this project for that kind of change: an
+  accepted task's report, a probe's answer. A threshold set by likeness alone (« the same change gained 1.4 % in the
+  file beside it ») is a guess: cut the probe first, its goal at the least the project takes (its floor, or the
+  charter's least step). A try that reaches that goal is integrated as a task's would be; one that falls short is
+  recorded instead of lost, and its member is free at once.
+- **When not to**: where the judge's figures do give a threshold, write the `work` task. A short answer costs the
+  hive a judgement for no integration and costs its member nothing, so a probe holds a careless try to less than a
+  task does; and one answer ends it for that member, where a task can be tried again. The open count counts
+  probes as it counts tasks.
 - **The pin.** A hive at an older commit reads a probe as a `work` task: a short answer is an ordinary refusal and
   the task stays open, and the cutter (the hive's latest) then reads those refusals as failures. A project publishes
   probes once the commit its caller names holds this rule.
