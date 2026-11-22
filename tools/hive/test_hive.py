@@ -15536,6 +15536,9 @@ class TestReleases(Base):
             self.assertIsNone(hive.read_marker(wrong), wrong)
         self.assertEqual(hive.read_marker("Hive-Task: toy-0001\nHive-Action: submit\n" + deal + who + "Hive-Because: out_of_reach\n")["because"],
                          None, "on a candidate the line means nothing")
+        self.assertEqual(hive.read_marker("Hive-Action: ready\n" + who + "Hive-Because: cannot_run\n"),
+                         {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "prefer": None, "because": None},
+                         "nor on an ask")
         dealt = self.w.deal(self.alice, "toy-0001")
         pushed = [release(self.alice, "toy-0001", dealt, None), release(self.alice, "toy-0001", dealt, "bored", branch="hive/release/b"),
                   release(self.alice, "toy-0001", dealt, "out_of_reach", branch="hive/release/c", more=("Hive-Because: cannot_run",))]
@@ -15590,6 +15593,94 @@ class TestReleases(Base):
         self.w.run()
         self.assertEqual([(e["task"], e["fault"], e.get("released")) for e in self.expiries()][-1], ("toy-0002", True, None),
                          "the task was closed: the deal ends at no cost, and the release is spent")
+
+    def test_the_steps_that_write_hold_a_release_against_what_the_plan_itself_shows(self):
+        """That the member's fork held the release is the plan's word; what the plan itself shows of it is held by the
+        steps that write, in every project (check_releases): no candidate of the plan's for the same deal, the release
+        set aside among the tips not to be read again, no probe given back as out of reach, one release for one deal."""
+        self.with_tasks(*TASKS, PROBE)
+        dealt = self.w.deal(self.alice, "toy-0001")
+        held = self.w.deal(self.alice, "toy-0006")  # (written by hand: the run deals a probe to an established member alone)
+        one = release(self.alice, "toy-0001", dealt)
+        release(self.alice, "toy-0006", held, "cannot_run")
+        made = self.w.plan()
+        given = {e["task"]: e for e in made["expiries"]}
+        self.assertEqual({task: e["released"] for task, e in given.items()}, {"toy-0001": "out_of_reach", "toy-0006": "cannot_run"})
+        first, probe = given["toy-0001"], given["toy-0006"]
+        candidate = {"sha": "c" * 40, "repo_id": 1101, "login": "alice", "member_id": 101, "task": "toy-0001", "model": None, "deal": dealt,
+                     "declined": False, "long": False, "heavy": False, "large": False}
+        spent = {fork: [sha for sha in shas if sha != one] for fork, shas in made["ignored"].items()}
+        wrong = {"a candidate of the same deal": {"queue": [candidate]},
+                 "a release the plan does not set aside": {"ignored": spent},
+                 "a probe given back as out of reach": {"expiries": [first, {**probe, "released": "out_of_reach"}]},
+                 "one release for two deals": {"expiries": [first, {**probe, "release": one}]}}
+        for name, changes in wrong.items():
+            with self.subTest(name):
+                with self.assertRaises(hive.HiveError):
+                    self.w.record(**changes)
+                self.assertEqual(self.expiries(), [], "nothing is written")
+        self.w.record()
+        self.assertEqual(len(self.expiries()), 2, "the plan as the plan step made it")
+
+    def test_a_release_and_a_candidate_of_one_deal_in_two_runs_the_first_one_read_ends_it(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        release(self.alice, "toy-0001", dealt)
+        self.w.run()  # the release is read: the deal is over
+        late = self.alice.submit("toy-0001", deal=dealt)
+        self.assertEqual(self.w.run(), [], "a candidate of a deal given back is no candidate")
+        self.assertIn(late, self.ignored(self.alice))
+        self.assertEqual([e["released"] for e in self.expiries()], ["out_of_reach"])
+        held = self.w.deal(self.alice, "toy-0002")  # the other order: the candidate first
+        self.alice.fresh("hive/submit/toy-0002").submit("toy-0002", path="src/y.c", content="int y;\n", deal=held)
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        after = release(self.alice, "toy-0002", held)
+        self.w.run()
+        self.assertEqual(len(self.expiries()), 1, "the deal was answered: a release of it ends nothing")
+        self.assertIn(after, self.ignored(self.alice))
+
+    def test_a_release_counts_whenever_the_run_reads_it_while_the_ledger_holds_the_deal_live(self):
+        dealt = self.w.deal(self.alice, "toy-0001", at="2026-11-12T07:00:00Z")  # until 10:00, its grace over at 11:00: at NOW, past both
+        release(self.alice, "toy-0001", dealt)
+        self.w.run()
+        self.assertEqual([(e["fault"], e.get("released")) for e in self.expiries()], [(False, "out_of_reach")],
+                         "the release the run reads, not the expiry the deal would have been without it")
+
+    def test_a_machine_that_cannot_run_the_sandbox_gives_back_a_work_task_at_the_same_cost(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        release(self.alice, "toy-0001", dealt, "cannot_run")
+        self.w.run()
+        self.assertEqual([(e["task"], e["released"]) for e in self.expiries()], [("toy-0001", "cannot_run")])
+        config, _, ledger = self.w.load()
+        self.assertEqual((ledger.standing(101, hive.now(), config), ledger.held_in_vain(101)), ((2, "2026-11-12T14:00:00Z", 1), {"toy-0001"}))
+
+    def test_a_release_by_a_member_in_a_streak_of_lapses_keeps_the_streak_and_adds_no_doubling(self):
+        first = self.w.deal(self.alice, "toy-0001", at="2026-11-12T06:00:00Z")
+        hive.Ledger(self.w.state).append([{"type": "expired", "at": "2026-11-12T10:00:00Z", "run": "a" * 32, "task": "toy-0001", "member_id": 101,
+                                           "deal": first, "fault": False}])
+        second = self.w.deal(self.alice, "toy-0004", at="2026-11-12T07:00:00Z")
+        hive.Ledger(self.w.state).append([{"type": "expired", "at": "2026-11-12T11:00:00Z", "run": "b" * 32, "task": "toy-0004", "member_id": 101,
+                                           "deal": second, "fault": False}])
+        held = self.w.deal(self.alice, "toy-0002", at="2026-11-12T11:30:00Z")
+        release(self.alice, "toy-0002", held)
+        self.w.run()
+        self.assertEqual([e.get("released") for e in self.expiries()], [None, None, "out_of_reach"])
+        self.assertEqual(self.w.feed_file()["wait"][hive.member_mark("alice")], "2026-11-12T15:00:00Z",
+                         "two lapses in a row: four hours from the last; the release keeps that streak and adds no doubling (a third lapse "
+                         "would wait eight hours from now, and the release's own wait ends at 14:00)")
+
+    def test_a_because_line_on_an_ask_or_a_candidate_means_nothing(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.alice.write("lib.c", LIB.replace("return 0;", "return 0; /* tuned */")).commit()
+        message = f"Hive submit\n\nHive-Task: toy-0001\nHive-Action: submit\nHive-Deal: {dealt}\nHive-Member: alice\nHive-Because: out_of_reach"
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", message, cwd=self.alice.work)
+        self.alice.push()
+        bob = self.w.fork("bob", 102)
+        tree = sh("git", "mktree", cwd=bob.work, stdin="").stdout.strip()
+        ask = sh("git", "commit-tree", tree, "-m", "Hive ready\n\nHive-Action: ready\nHive-Member: bob\nHive-Because: cannot_run", cwd=bob.work).stdout.strip()
+        sh("git", "push", "--quiet", "--force", "origin", f"{ask}:refs/heads/hive/ready", cwd=bob.work)
+        self.assertEqual(self.one(self.w.run())["result"], "accepted", "a candidate, judged as any other")
+        self.assertEqual(len([task for task, login in self.w.dealt_by_runs() if login == "bob"]), 1, "an ask, served as any other")
+        self.assertEqual(self.expiries(), [])
 
 
 class TestTheBaseCoversAMemberThatGaveItsDealBack(Base):

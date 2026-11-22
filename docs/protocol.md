@@ -85,11 +85,11 @@ Hive-Because: out_of_reach
   statistic, not a proof.
 - `Hive-Because` (on a release, and required there): one of two codes of the hive's own. `out_of_reach`: an honest
   try, checked as the task's check allows, showed that the member cannot do the task (its goal, its tests, its
-  files). `cannot_run`: the member's machine cannot run the project's sandbox. A release carries nothing else the
-  worker wrote. `Hive-Task` and `Hive-Deal` name the deal it gives back, as on a candidate: a release of another
-  deal than the one its member holds, of a deal that is over, or of a probe given back as out of reach (a probe's
-  answer is a correct try, submitted), is nothing, and is not read again. A hive at an older commit knows no such
-  action: for it the commit holds no marker, and the deal runs out as it always did.
+  files). `cannot_run`: the member's machine cannot run the project's sandbox. `hive.py release` writes nothing else
+  in it, and the hive takes nothing else from it. `Hive-Task` and `Hive-Deal` name the deal it gives back, as on a
+  candidate: a release of another deal than the one its member holds, of a deal that is over, or of a probe given
+  back as out of reach (a probe's answer is a correct try, submitted), is nothing, and is not read again. A hive at an
+  older commit knows no such action: for it the commit holds no marker, and the deal runs out as it always did.
 
 A key that appears twice, an unknown action or a malformed value means "no marker": the commit is ignored.
 `hive.py ready`, `hive.py submit` and `hive.py release` write these commits and push them to the fork. `release`
@@ -151,8 +151,8 @@ Each run, after the forks were read, in this order:
    member. A deal on a task the project closed meanwhile ends at once, at no cost either. **A deal its member gives
    back** (a release of that deal in the member's fork) ends at once too, whatever time it has left, and its task
    is free for others in the same run. A candidate for the same deal wins: it is judged, and the release is spent.
-   A release read while the deal is live counts, as a candidate does (its hour of grace included); `hive.py
-   release` gives nothing back once the deal's time is up.
+   A release counts as long as the ledger holds the deal as live, whenever the run that reads it comes (its time
+   and its grace may be past), as a candidate does; `hive.py release` gives nothing back once the deal's time is up.
 2. **Candidates.** A submit is a candidate if its member holds the task's live deal and it names that deal. An
    expired deal is over: what its member pushes for it afterwards is not a candidate.
 3. **Askers.** Members with an ask at a branch tip, except those who hold a deal without a candidate, are waiting
@@ -246,11 +246,9 @@ set the wait to nothing while it is tried, and then only the day's count is left
 wait, or, for a candidate that lacks a proof alone, its place in the day's limit. When the judge examined the
 candidate, the wait is two hours; there is none when the candidate is correct, reaches the task's own figure and
 lacks only a proof (`not_proven`): the hive cannot tell a gain the noise hid from no gain, so it neither accepts
-nor charges. **A deal given back costs two hours, each time**, as a judged refusal. A worker that finds its task
-out of reach and says so at once frees it for others hours earlier, spends no judgement, and is free itself as much
-sooner; its wait is never longer than for a deal it lets run out, which doubles: honesty is the cheaper way. It is
-never shorter than for a candidate the judge refused: giving back is no cheaper way out, nor a cheaper way to choose
-one's tasks, than a candidate pushed for the purpose. When the task was held for nothing (no candidate, or one
+nor charges. **A deal given back costs two hours, each time**, as a judged refusal, never doubled. A worker that finds
+its task out of reach and says so at once frees it for others hours earlier, spends no judgement, and is free itself
+as much sooner than after a deal it lets run out. When the task was held for nothing (no candidate, or one
 refused before the judge), it is two hours doubled at each such deal since the member's last accepted candidate,
 seven days at most; an acceptance clears both, and nothing else does. A project also limits the deals an account
 is given in a day (5 by default), **not counting those whose candidate was accepted**: the limit bounds what an

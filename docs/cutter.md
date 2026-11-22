@@ -167,9 +167,11 @@ why the worker could not, and what it measured, are its own words, and the ledge
 - **Stuck**: a deal given back as out of reach by a member with an acceptance before it counts as a deal left to run
   out does ("The loop"). One given back because a machine cannot run the sandbox says nothing of the task, and
   counts for nothing there: many of them say the project's sandbox is hard to run, which is for the architect.
-- **How to read it.** Given back as out of reach by established members, a task's goal is likely beyond what the
-  idea gives, or the task too large for a deal: cut it smaller, or turn the idea into a probe ("Probes"), whose
-  answer records the judge's figures. One release from one member is weak evidence, as one short answer is.
+- **How to read it.** A release is its member's word: the hive checks nothing of the try, nor whether there was one,
+  and a release costs its member a wait and no work. It is cheap evidence, weaker than a refusal, which the judge
+  measured. Given back as out of reach by several established members, a task's goal is likely beyond what the idea
+  gives, or the task too large for a deal: cut it smaller, or turn the idea into a probe ("Probes"), whose answer
+  records the judge's figures. One release from one member says little.
 - **A probe is never given back as out of reach**: its answer is a correct try, which the worker submits. It may be
   given back because the machine cannot run the sandbox.
 - **The pin.** A hive at an older commit reads no release: the worker's tool then gives nothing back, and the deal runs
@@ -224,11 +226,13 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
    published at the first cycle after two quiet runs of the project's hive (no candidate, no task held), six hours
    apart, judged the tip as a candidate for it and saw it fail ("The proof at the tip"): the cutter runs nothing of the
    project, and waits for that answer.
-   - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
-     refused on it, let a deal on it run out, or gave a deal on it back as out of their reach: the rule of the feed's
-     `hint`. A refusal, an expiry or a release from an account that never had an acceptance never counts, so
-     throwaway accounts cannot make a task stuck; a `not_proven` refusal (the judge's stopwatch could not give a
-     proof) is not a failure, nor is a deal given back because a machine cannot run the project's sandbox.
+   - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** on the
+     project, before they failed on this task, failed on it: the judge examined their candidate and refused it
+     (`judge_refused`, `goal_not_met`, `requirement_not_met`), they let a deal on it run out, or they gave a deal on it
+     back as out of their reach. A failure from an account that never had an acceptance, or from before its first
+     one, never counts, so throwaway accounts cannot make a task stuck; a `not_proven` refusal (the judge's stopwatch
+     could not give a proof) is not a failure, nor is a deal given back because a machine cannot run the project's
+     sandbox. The feed's `hint` also counts only members with an acceptance, but the judge's refusals alone.
      A project with fewer than three members who ever had a candidate accepted never has a stuck
      task: its architect closes one by hand.
    - The project is **starving** when nothing is left to do, open or dealt. That is an alarm for the architect:

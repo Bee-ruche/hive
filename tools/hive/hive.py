@@ -168,14 +168,12 @@ PROBE_ANSWERS_MOST = 5  # the most answers a probe may ask (its « answers », 1
 # sandbox. The plan ends such a deal at once (plan, step 1), with the line of a deal whose time ran out, plus
 # « released »: the code, and « release »: the release's commit id. It costs its member the first wait, each time, as a
 # candidate the judge refused does (Ledger.standing), never the wait that doubles. Given back early, the deal ends hours
-# before one left to run out would, and its wait is never longer than that one's (the same first wait, never doubled):
-# honesty is the cheaper way. And never shorter than a judged refusal's: giving back is no cheaper way out, nor a
-# cheaper way to choose one's tasks, than a candidate pushed for the purpose. The worker's tool gives nothing back once
-# the deal's time is up (cmd_release). Its member held the task in vain, and the deal counts in the day's limit and in
-# the class, as every deal that did not end in an acceptance. A probe is no task one gives back as out of reach: a
-# correct try of the thing it names is its answer. A hive at an older commit reads no release (an action it does not
-# know is no marker), and the deal runs out as it always did; and a line that says « released » is, for it, the expiry
-# it also is.
+# before one left to run out would, and its wait is never longer than that one's (the same first wait, never doubled).
+# The worker's tool gives nothing back once the deal's time is up (cmd_release). Its member held the task in vain,
+# and the deal counts in the day's limit and in the class, as every deal that did not end in an acceptance. A probe is
+# no task one gives back as out of reach: a correct try of the thing it names is its answer. A hive at an older commit
+# reads no release (an action it does not know is no marker), and the deal runs out as it always did; and a line that
+# says « released » is, for it, the expiry it also is.
 RELEASES = ("out_of_reach", "cannot_run")
 RELEASE_BRANCH = "hive/release/{task}"
 ACTIONS = ("ready", "submit", "release")
@@ -1154,11 +1152,9 @@ class Ledger:
             gain at all, and the figure reached may be one a candidate can flatter: so it is still a deal that did not
             end in an acceptance, it cost a judgement, and it counts in the day's limit, which is the bound on the
             judge's time an account can take, and in the member's class;
-          - a deal its member gave back (a release, RELEASES): the first wait, each time, as a judged refusal. A
-            member that finds a task out of its reach and says so at once costs the hive no judgement, frees the
-            task for others hours earlier, and is free itself as much sooner: its wait is never longer than for a
-            deal it lets run out (never doubled), and never shorter than for a candidate the judge refused, so that
-            giving back is no cheaper way out than a candidate pushed for the purpose;
+          - a deal its member gave back (a release, RELEASES): the first wait, each time, as a judged refusal, never
+            doubled. A member that finds a task out of its reach and says so at once costs the hive no judgement, and
+            frees the task for others, and itself, hours earlier than a deal left to run out would;
           - a deal held for nothing (no candidate in time, or a candidate refused before the judge could examine
             it): the same wait, doubled at each such deal in a row, until an acceptance.
           What the hive's own side caused (a task closed meanwhile, a candidate it could not answer, a fork it could
@@ -2429,11 +2425,32 @@ def check_rulings(plan_, config, tasks, ledger):
     return answers
 
 
+def check_releases(plan_, tasks):
+    """Holds each deal the plan says its member gave back (« released ») against what the plan itself shows, as the
+    plan step makes it: no candidate of the plan's is for that member, task and deal (a candidate wins over a
+    release); the release's commit is among the tips the plan says are not to be read again (it puts every release
+    it read there); it does not give a probe back as out of reach; and no two deals were given back by one release.
+    That the member's fork held the release stays the plan's word. A plan that says otherwise is not the hive's:
+    HiveError, and nothing of it is written."""
+    answered = {(c["member_id"], c["task"], c["deal"]) for c in plan_["queue"]}
+    spent = {sha for shas in plan_["ignored"].values() for sha in shas}
+    given = [expiry for expiry in plan_["expiries"] if "released" in expiry]
+    for expiry in given:
+        if (expiry["member_id"], expiry["task"], expiry["deal"]) in answered:
+            raise HiveError("the plan says a deal was given back whose candidate it also judges: nothing is written")
+        if expiry["release"] not in spent:
+            raise HiveError("the plan says a deal was given back by a release it does not set aside: nothing is written")
+        if expiry["released"] == "out_of_reach" and tasks.get(expiry["task"], {}).get("kind") == "probe":
+            raise HiveError("the plan says a probe was given back as out of reach: nothing is written")
+    if len({expiry["release"] for expiry in given}) != len(given):
+        raise HiveError("the plan says one release gave back two deals: nothing is written")
+
+
 def check_cover(plan_, config, tasks, read, counted):
     """Holds the plan's deals against what the project's trusted base covers (cover_of): what a step that writes asks
     before it writes or pushes anything, from the project's file, its tasks and the ledger, at the plan's own
     instant. `read`: the ledger as the plan read it, before the deals the plan says are over; `counted`: the same
-    with them (as_the_plan_counted). A project that sets no bound asks nothing here.
+    with them (as_the_plan_counted). A project that sets no bound is asked nothing more than check_releases asks.
 
     The members that are active (active_members) are counted in `counted`, as the plan counted them: a place is
     held by a live deal, and the deals the plan says are over hold none. So a step first holds each of those
@@ -2441,12 +2458,14 @@ def check_cover(plan_, config, tasks, read, counted):
     account and that instant, and either its time is up at the plan's instant (its end and the project's grace are
     past), or its task is no longer open (closed, listed no more, or done), or its member gave it back (« released »).
     What the plan step alone read stays the plan's word: that the member's fork, read whole, held no candidate for a
-    deal whose time is up, and that it held a release for a deal given back.
+    deal whose time is up, and that it held a release for a deal given back. What the plan itself shows of a release
+    is held first, in every project, whatever its base (check_releases).
 
     Then the accounts the plan deals to, the deals it keeps for after the judging included, that are not active
     are new members: with the members that are active, they are no more than the base covers. A plan that frees a
     place by a deal that is not over, that admits one new member more than the base covers, or one at all where
     the base has the members it covers, is not the hive's: HiveError, and nothing of it is written."""
+    check_releases(plan_, tasks)
     cover = cover_of(config)
     if cover is None:
         return
@@ -4571,7 +4590,8 @@ def cmd_plan(args):
         write_bundle(args.repo, made, args.bundle)
         write_json(args.out, made)
         print(f"{len(made['queue'])} candidate(s), {len(made['deals'])} deal(s), {len(made['conditional'])} kept for after "
-              f"the judging, {len(made['expiries'])} deal(s) whose time is up", file=sys.stderr)
+              f"the judging, {sum('released' not in e for e in made['expiries'])} deal(s) whose time is up or whose task is closed, "
+              f"{sum('released' in e for e in made['expiries'])} given back", file=sys.stderr)
     print(f"plan_sha256={file_sha256(args.out)}")
 
 
@@ -4597,7 +4617,8 @@ def cmd_record(args):
     record(made, config, tasks, Ledger(state), state)
     if args.commit_state:
         save_state(args.state, config["project"], instant)
-    print(f"{len(made['deals'])} deal(s) recorded, {len(made['expiries'])} closed for lack of a candidate")
+    print(f"{len(made['deals'])} deal(s) recorded, {sum('released' not in e for e in made['expiries'])} closed for lack of a candidate "
+          f"or because their task is closed, {sum('released' in e for e in made['expiries'])} given back")
 
 
 def judging_plan(args):

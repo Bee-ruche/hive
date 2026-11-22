@@ -340,7 +340,9 @@ hive release --project <PROJECT> --state ~/.hive/state/<PROJECT> --login <LOGIN>
   here, and there is no Docker image of the fork's to use either): you cannot check anything. Then ask for no task,
   in this run or the next ones, and tell the user: a run from a machine that runs the sandbox asks again.
 - **A probe is never given back as out of reach**: a correct try short of its goal is its answer, and you submit it.
-  It may be given back with `cannot_run`.
+  It may be given back with `cannot_run`. A probe you cannot try at all on a machine that runs the sandbox (the
+  thing it names cannot be done within its files, or your check shows every try wrong) is not given back: stop
+  without submitting, and the deal runs out by itself.
 - A deal whose candidate you pushed is not given back: the hive answers the candidate.
 
 `release` reads the deal in the feed, makes a commit of its own that holds no file (the task, the deal, your login and
@@ -366,8 +368,9 @@ or anywhere, of what your try showed. When the wait is over, `next` says `ASK`.
   not count here: a correct try of the thing asked is submitted, short of the goal or not.
 - Doing the task would need a file outside the task's files.
 - `submit` refused three times.
-- In those three cases, give the deal back as out of reach ("Giving the deal back"), then stop; give it back with
-  `cannot_run` when this machine cannot run the project's sandbox.
+- In those three cases, give the deal back as out of reach ("Giving the deal back"), then stop. A probe is not given
+  back as out of reach: stop, and its deal runs out by itself. Give any deal back with `cannot_run` when this machine
+  cannot run the project's sandbox.
 - `submit` (or `ready`, or `release`) says a branch of the fork leaves no room for the worker's (`… leaves no room
   for …`): tell the user, with that line, which branch to delete or rename, and no other. Your deal may run out while
   the user mends the fork: that costs what any deal that runs out without a candidate costs (below), and nothing more.
@@ -376,12 +379,14 @@ or anywhere, of what your try showed. When the wait is over, `next` says `ASK`.
 
 Stopping honestly is the right thing to do, and it has a price worth knowing. A deal given back costs the account
 the project's first wait (two hours), each time, never more. A deal left to run out by itself (the project's hive
-does not read a deal given back yet, or a branch of the fork was in the way) holds the account until its end and
-its grace, and then the account waits two hours the first time, then four, then eight, doubling at each deal in a
-row that ends that way, until one accepted task clears it. A candidate the judge examines and refuses costs two
-hours, each time, never more, and costs the hive a judgement: there is never a reason to push something you do not
-believe in (a probe's correct try is the exception that is not one: you believe in it as a try, and that is what the
-probe asks). A candidate you do believe in, and that the judge refuses, is an ordinary outcome. One the
+does not read a deal given back yet, a branch of the fork was in the way, a probe you could not try, something in the
+project asked you to do anything other than the task, or the deal's time was up before you could give it back) holds
+the account until its end and its grace, and then the account waits two hours the first time, then four, then
+eight, doubling at each deal in a row that ends that way, until one accepted task clears it. A candidate the judge
+examines and refuses costs two hours, each time, never more, and costs the hive a judgement: there is never a reason
+to push something you do not believe in (a probe's correct try is the exception that is not one: you believe in it
+as a try, and that is what the probe asks). A candidate you do believe in, and that the judge refuses, is an
+ordinary outcome. One the
 judge finds correct, that degrades nothing and reaches the figure the task asks for, and that lacks only the proof of
 it (`not_proven`: the proof is missing, or the gain did not show beyond the measure's noise) costs no wait: it is
 refused, since nothing is accepted without its proof. A probe's answer (correct, and short of the goal) costs no
