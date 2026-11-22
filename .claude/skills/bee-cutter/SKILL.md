@@ -113,8 +113,8 @@ tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
 `files`, `size`, `tier`, `goal`, `options` when it applies, `context`, then, when they apply, `parent` (the stuck
-task it is cut from, closed in the same cycle) and `needs` (tasks that must be done first, all done already).
-Nothing else. Of the keys always written, `goal` alone may be absent: a line without it has the goal « correct »,
+task it is cut from, closed in the same cycle) and `needs` (tasks that must be done first, all done already), and,
+for a probe, `kind` (`"probe"`) and, if it asks more than one answer, `answers` (below, "Probes"). Nothing else. Of the keys always written, `goal` alone may be absent: a line without it has the goal « correct »,
 and goes to the backlog as any goal « correct » does (below). Leave it out only when `judge.confirm` in
 `hive/project.json` is absent or empty: the project then takes goals « correct » only. Otherwise every new line
 writes its `goal`, whatever the published lines do.
@@ -164,6 +164,17 @@ writes its `goal`, whatever the published lines do.
   merely to reach the number; what can wait goes to the backlog.
 - **Size from outcomes**: the tally gives each done task's `hours_to_accept` and each task's refusals. Tasks that
   are refused often, or whose deals run out, were too large; tasks accepted at once may be a little larger.
+- **Probes** (`"kind": "probe"`, docs/cutter.md, "Probes"): for an idea whose worth is unknown and cheap to try,
+  cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
+  goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its
+  answer: the judge's figures, recorded, at no cost to the member. Keep probes a minority of the open tasks: each
+  costs a judgement and integrates nothing unless it reaches its goal. Ask `"answers": 2` or `3` when one answer
+  would not be enough to close a direction (5 at most). Publish probes only if the architect says the project's
+  caller names a commit of the hive that holds them: an older one reads a probe as a `work` task.
+- **Reading a probe's answers** (the tally's `answers`, `answered_by`, `answered_by_established`): one short answer
+  from one member is weak evidence, since nobody can check that the thing was really tried. Close a direction on
+  several answers from established members, or on the architect's word. A later task states what was found in your
+  own words with the judge's figures (« the order-4 model was tried: 0.3 % »), never anything a worker wrote.
 - What you plan beyond this cycle, or that waits for something, goes to the backlog with its `needs`, in the order
   it should come. Write the backlog you propose to `/tmp/backlog.jsonl`: the published one as it is
   (`git show <commit>:hive/backlog.jsonl`, none if it is absent), your lines after it. A line of the backlog is

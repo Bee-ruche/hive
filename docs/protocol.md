@@ -207,6 +207,7 @@ What ends a deal, and what it costs its member:
 | --- | --- |
 | its candidate is accepted | none; it clears any wait |
 | the judge examined its candidate and refused it (`judge_refused`, `goal_not_met`, `requirement_not_met`) | a wait of two hours, each time, never doubled: a refusal there is ordinary, on tasks that ask for a measured gain |
+| its task is a probe, and the judge found its candidate correct, within every figure the project requires, and short of the probe's goal: the probe's answer ("How a candidate is judged and integrated") | **no wait**, and no credit either: the class is left as it was, and the deal counts in the day's limit |
 | the judge examined its candidate, found it correct, nothing degraded and the figure the task asks for reached, and only the proof of it is missing or did not come out beyond the measure's noise (`not_proven`) | **no wait**: the hive does not charge a member for what its own stopwatch could not tell. It cost the hive a judgement all the same, and it is a deal that did not end in an acceptance: it counts in the day's limit and in the member's class |
 | its candidate is refused before the judge could examine it: on a structural rule, because it does not merge or changes nothing, after three failures that are its own (`judge_failed`) or three pushes the project's repository declined (`push_refused`) | a wait that doubles |
 | its time is up and the fork holds no candidate | the same wait that doubles |
@@ -369,6 +370,30 @@ the hive runs those git commands with an empty attribute source.
   with no other: a measure without one is a row of its table. Told which proofs the project takes (its file, given
   to the page tool), the page leads with one of those measures only: a flag the project keeps and does not take as
   a proof leads nothing.
+- **A probe's answer is what the judge measured.** A task of the kind `probe` asks one named thing to be tried,
+  without knowing whether it helps; its goal is on a figure, as a `work` task's is. A member's candidate for it that
+  the judge finds correct, within every figure the project requires, and short of the probe's goal (`goal_not_met`,
+  or `not_proven`) is the probe's **answer**:
+  - Its line is the refusal's, with the judge's figures, and one number more, `probe` ("The ledger and the feed").
+    Nothing is integrated.
+  - It costs its member no wait and leaves its class as it was. It is no acceptance: it makes nobody active, follows
+    no preference and counts for nobody's standing. It still counts in the day's limit, so an account answers five
+    probes a day at most.
+  - A member who answered a probe is never dealt it again, even when it is the one task left.
+  - The probe is **done** once as many distinct members answered as it asks (`answers` on its line, 1 by default, 5 at
+    most), or once a candidate reaches its goal with its proof, which is accepted and integrated as any other. Done
+    means done for everything that reads it: no deal, the `needs` of other tasks, the feed, the tally.
+  - A refusal by the judge, a figure the project requires that is not met, and everything refused before the judge
+    (a change that changes nothing among them) are the refusals they are, for a probe as for any task. A ruling
+    reviews a refusal for a figure the project requires: a probe's answer is none, and a ruling brings no probe an
+    answer.
+  - Nothing the worker wrote is recorded. The thing to try is named by the task, which the cutter wrote; the answer
+    is the judge's numbers. Nobody can check that it was really tried: a correct candidate that changes nothing the
+    judge counts (a comment) answers « nothing gained ». That is why a probe may ask several answers, and why the
+    cutter weighs one short answer from one member as weak evidence ([cutter.md](cutter.md), "Probes").
+  - A hive at an older commit reads a probe as a `work` task: its short answer is an ordinary refusal, with its
+    two-hour wait, and the task stays open. A project publishes probes once the commit its caller names holds this
+    rule.
 - **A refusal on the suspects says which of the judge's checks it was.** The common judge counts what its
   reading of the compiled code and of the source flags in a candidate and not in the base (`suspects`), and a
   project may bound that count for every contribution. Beside the count the hive takes from the judge's report one
@@ -655,7 +680,10 @@ The hive's files there:
   `requirement_not_met`, `not_proven`: the judge ran, the candidate is correct, a figure or a proof is short) keeps the same `report` as an
   accepted one**, the same numbers bounded the same way: how far it fell short is what its member needs to know,
   and whoever is dealt the task next. `judge_refused` and every refusal before the judge carry none. A refusal's
-  line written before this rule has no `report`; it stays valid, and whatever reads the ledger takes both.
+  line written before this rule has no `report`; it stays valid, and whatever reads the ledger takes both. **A
+  probe's answer** ("How a candidate is judged and integrated") is such a line, refused for `goal_not_met` or
+  `not_proven`, with one number more: `probe`, how many answers the probe asks, from 1 to 5. A hive at an older
+  commit reads it as the refusal it also is.
 
   A commit has one verdict as a candidate. One that a guardian admitted and the hive then accepted has a second,
   which names the ruling (`ruling`, `guardian_id`, `guardian`, `waived`: "Guardians") and is recorded once per
@@ -669,7 +697,8 @@ The hive's files there:
   copy nothing of a preference from the plan: before they write or push anything, they hold that it has that shape
   and names a file of the project as its tasks write it, and they write the project's own string.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
-  of judged refusals and the task's context; and, **under a hash of each login** that a worker computes for its
+  of judged refusals and the task's context (a probe adds `kind`, how many answers it asks and how many it has, and
+  its answers are no refusals there); and, **under a hash of each login** that a worker computes for its
   own, the task a member holds, since when, until when and whether its candidate was seen (`deals`), and until
   when a member is dealt nothing (`wait`). It holds nothing a contributor wrote. The hash keeps sentences a login
   could spell out of the feed; it hides nobody, since the owners of forks are public. `members` says where the
@@ -696,7 +725,7 @@ The hive's files there:
 
 A task the judge keeps refusing asks for a stronger worker: the feed gives a `hint` that rises by one for every
 three different members refused, among those the judge has accepted something from. It is a hint for people;
-tasks are dealt by their own tier.
+tasks are dealt by their own tier. A probe's answers raise no hint.
 
 **What a worker believes.** The tool it runs is the protocol's own (its copy of `Bee-ruche/hive`, taken afresh at
 each run). A task's text and files, the project's branch and its check come from the project's settings and tasks,
@@ -780,7 +809,8 @@ hour and the fork's own number, which adding forks to the list does not shift.
   folder ending with `/`), and optionally `size`, `tier`, `goal`, `options`, `context`, `closed`, and the links
   that make the project's map: `parent` (the task it was cut from), `needs` (the tasks to be done before it) and
   `kind` (`work`, `probe` or `hunt`), which name other tasks of the file and go round in no cycle, or the file is
-  not run ([cutter.md](cutter.md), "The map: links between tasks"). Tasks are
+  not run ([cutter.md](cutter.md), "The map: links between tasks"). A probe's goal is on a figure, and a probe alone
+  may say how many `answers` it asks, a whole number from 1 to 5 ([cutter.md](cutter.md), "Probes"). Tasks are
   written by the project's maintainers or by its cutter ([cutter.md](cutter.md)); they are trusted data.
 - Two more files under `hive/`, for the project's cutter: `hive/charter.md`, the architect's charter (the project's
   goal, what counts as progress, its directions), which no run reads, and `hive/backlog.jsonl`, the tasks the

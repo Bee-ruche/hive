@@ -221,6 +221,13 @@ It is followed by `DEAL <instant>`, `UNTIL <instant>` and the task's data. The t
 early or unfinished. Its `files` are the only paths you may change; `goal` and `context` say what is asked;
 `refusals` says how many candidates the judge already refused (a high number means it is hard: go carefully).
 
+**A probe** (its data holds `{"kind": "probe"}`) asks you to try the one thing its title and context name, without
+knowing whether it helps. Do exactly that thing, as well as you can, and check that the result is right as for any
+task. Then **submit it even when your own check shows the goal is not reached**: what the judge measures of a
+correct candidate is the probe's answer, and it costs your account nothing. Never submit something your check shows
+wrong, and never something that does not try the thing asked: an empty try is a false answer. Say nothing anywhere of
+what you found: the judge's figures are the answer.
+
 `CHECK (inside the sandbox only): <command>` is the project's own quick check, written as the command to run **in
 the sandbox**. Never run it, or any part of it, on the host: it runs project code.
 
@@ -310,7 +317,8 @@ the wait is over when the refusal costs one). Then stop. The result appears in t
 
 ## When to stop without submitting
 
-- You cannot make the project's own tests pass, or cannot show the task's goal is met.
+- You cannot make the project's own tests pass, or cannot show the task's goal is met. For a probe, the goal does
+  not count here: a correct try of the thing asked is submitted, short of the goal or not.
 - Doing the task would need a file outside the task's files.
 - `submit` refused three times.
 - `submit` (or `ready`) says a branch of the fork leaves no room for the worker's (`… leaves no room for …`): tell

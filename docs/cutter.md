@@ -62,7 +62,7 @@ What those who split work for others have learnt, for people and for AI agents, 
 | The judge author | Writes and hardens the judge of a new kind of project: the bottleneck of every new kind | trusted; later, tasks for volunteers judged by seeded mutants | with each new kind |
 | The judge | Accepts or refuses a candidate | machine | exists |
 | The guardians | Look again at refusals ("Guardians" in [protocol.md](protocol.md)); later, mark the advances of exploration from structured findings, and audit a random sample of refusals to measure the judge's own error | trusted | exists; the rest later |
-| Volunteers' agents | Do tasks: `work` (a goal the judge decides), `probe` (evidence about something unknown), `hunt` (a divergence from a reference, an input that breaks a change) | untrusted | `work` exists; the others later |
+| Volunteers' agents | Do tasks: `work` (a goal the judge decides), `probe` (evidence about something unknown), `hunt` (a divergence from a reference, an input that breaks a change) | untrusted | `work` and `probe` exist; `hunt` later |
 
 ## The map: links between tasks
 
@@ -71,7 +71,7 @@ tasks already lets through, and which a project's run reads at the same commit a
 
 - `parent`: the id of the task this one was cut from.
 - `needs`: the ids of the tasks that must be done before this one is worth doing.
-- `kind`: `work` (the default), `probe` or `hunt`.
+- `kind`: `work` (the default), `probe` ("Probes", below) or `hunt`. A `hunt` is checked and read by nothing yet.
 
 The rules that keep the ledger's history true:
 
@@ -88,6 +88,39 @@ The rules that keep the ledger's history true:
   are one flat list, those left to do first. Beside it, the tasks that need attention: the stuck ones, the others
   refused or run out twice or more (refusals by reason), the runs spent without an answer by kind, and whether the
   project starves. Numbers, codes and task ids, from the tally and what `health` adds up of it.
+
+## Probes
+
+A `work` task bets on a threshold: « do this idea, gain at least X ». When the bet is wrong, nothing is learnt: a
+worker that cannot reach the goal stops without submitting, and the deal runs out with no line but its expiry. A
+**probe** (`"kind": "probe"`) asks one named thing to be tried without knowing whether it helps, and records what was
+found, even nothing.
+
+- **Its line** is a task's: a title and a context that name the one thing to try, the files, and a goal on a figure
+  (`metric`), held to the same rules as any goal, the project's floors included. It may say how many `answers` it
+  asks, from distinct members: 1 by default, 5 at most.
+- **Its answer** is what the judge measured on a correct candidate. A candidate that reaches the goal with its proof
+  is accepted and integrated, as for a `work` task. One the judge finds correct, within the project's requirements,
+  and short of the goal is refused and not integrated, and its line is the probe's answer: the judge's figures and
+  `probe` ([protocol.md](protocol.md), "How a candidate is judged and integrated"). The member pays nothing for it
+  and earns nothing by it. A member who answered is never dealt the same probe again.
+- **It is done** once as many distinct members answered as it asks. An answered probe satisfies what `needs` it:
+  the question was answered, whichever way.
+- **What the cutter reads**: `hive tally` gives, for each probe, how many answers it asks, each answer (its
+  instant, its reason, the judge's figures, and whether its member had an acceptance on the project before it),
+  and how many distinct members answered, of them how many had. Numbers and codes, as everything the tally gives.
+- **How to read it.** One short answer from one member is weak evidence: nobody can check that the thing was
+  really tried, and a correct candidate that changes nothing the judge counts answers « nothing gained ». A
+  direction is closed on several answers from established members, or on the architect's word. A later task states
+  a finding in the cutter's own words, with the judge's figures (« the order-4 model was tried: 0.3 % »): never in a
+  worker's words, which the ledger does not hold.
+- **When to cut one**: an idea whose worth is unknown and cheap to try. Probes are a minority of scouts, never most
+  of the open tasks: the open count counts them, and each costs the hive a judgement for no integration.
+- **The pin.** A hive at an older commit reads a probe as a `work` task: a short answer is an ordinary refusal and
+  the task stays open, and the cutter (the hive's latest) then reads those refusals as failures. A project publishes
+  probes once the commit its caller names holds this rule.
+- `hunt` (a divergence from a reference, an input that breaks a change) is not built: the hive checks the word and
+  reads nothing of it.
 
 ## The backlog and the charter
 
@@ -400,7 +433,7 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
 - A deal weighted by the cutter (recruitment in proportion to what an area yields, a share of scouts, scores that
   evaporate, a quorum before committing): a change of the protocol.
 - A way for a volunteer's agent to say "this task is impossible as stated", with its evidence, at no cost.
-- Exploration: `probe` and `hunt` tasks, findings the guardians restate as structured fields, an archive of
+- Exploration beyond probes: `hunt` tasks, findings the guardians restate as structured fields, an archive of
   approaches, a ladder of easier variants.
 - The guardians' audit of a random sample of refusals, which measures the judge's own error.
 - A survey in the project's run that measures, in the judge's container, what the cutter needs (hot spots, the
