@@ -232,7 +232,8 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
      back as out of their reach. A failure from an account that never had an acceptance, or from before its first
      one, never counts, so throwaway accounts cannot make a task stuck; a `not_proven` refusal (the judge's stopwatch
      could not give a proof) is not a failure, nor is a deal given back because a machine cannot run the project's
-     sandbox. The feed's `hint` also counts only members with an acceptance, but the judge's refusals alone.
+     sandbox. The feed's `hint` is another count: the members with an acceptance, at any time, whose candidate the
+     judge examined and refused on the task (a `not_proven` among them); no deal run out, none given back.
      A project with fewer than three members who ever had a candidate accepted never has a stuck
      task: its architect closes one by hand.
    - The project is **starving** when nothing is left to do, open or dealt. That is an alarm for the architect:
