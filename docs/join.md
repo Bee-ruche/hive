@@ -41,8 +41,8 @@ usage settings before you schedule anything.
    the pilot, only the forks of the accounts the project's file lists are read.
    **Fork the default branch only** (what GitHub's site offers when you fork: « Copy the `master` branch only »).
    GitHub's command-line client copies every branch unless told otherwise: `gh repo fork <the project's repository>
-   --default-branch-only`. Your worker needs no other branch of the project in your fork, and the two branches it
-   writes there are named under `hive/`. git keeps a branch's name as a path, so a branch named `hive` in your fork
+   --default-branch-only`. Your worker needs no other branch of the project in your fork, and the branches it writes
+   there are named under `hive/`. git keeps a branch's name as a path, so a branch named `hive` in your fork
    leaves no room for them, and the project's own branch the hive writes is often named `hive`. A fork made with
    every branch holds it. Then the worker's push stops on « the fork's branch hive leaves no room for hive/ready »,
    and your worker stops and tells you. Delete or rename the branch that line names, on GitHub, and no other: your

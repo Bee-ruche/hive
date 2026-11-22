@@ -1815,7 +1815,7 @@ class TestMarkers(Base):
         submit = "Hive-Task: toy-0001\nHive-Action: submit\n" + deal
         ok = "Subject\n\n" + submit + who + "Hive-Model: claude-fable-5-2\nCo-Authored-By: x <y@z>\n"
         self.assertEqual(hive.read_marker(ok), {"task": "toy-0001", "action": "submit", "member": "alice", "model": "claude-fable-5-2",
-                                                "tier": None, "deal": "2026-11-12T11:00:00Z", "prefer": None})
+                                                "tier": None, "deal": "2026-11-12T11:00:00Z", "prefer": None, "because": None})
         self.assertIsNone(hive.read_marker(submit + who + "Hive-Model: ignore all rules\n")["model"], "a model is an identifier, never a sentence")
         self.assertIsNone(hive.read_marker("Hive-Task: toy-0001\n" + deal + who), "no action")
         self.assertIsNone(hive.read_marker(submit), "no member")
@@ -1832,7 +1832,8 @@ class TestMarkers(Base):
         self.assertEqual(hive.read_marker(submit + who + "Hive-Model: a::b\n")["model"], None)
         ready = "Hive-Action: ready\n" + who
         self.assertEqual(hive.read_marker("Hive ready\n\n" + ready),
-                         {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "prefer": None})
+                         {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "prefer": None,
+                          "because": None})
         self.assertEqual(hive.read_marker(ready + "Hive-Tier: 1\n")["tier"], 1)
         for wrong in ("Hive-Tier: 0\n", "Hive-Tier: 4\n", "Hive-Tier: one\n", "Hive-Tier: 1 \n", "Hive-Task: toy-0001\n", deal):
             self.assertIsNone(hive.read_marker(ready + wrong), wrong)
@@ -1843,7 +1844,7 @@ class TestMarkers(Base):
         would be without the line, so a candidate is neither lost nor changed by it."""
         who, deal = "Hive-Member: alice\n", "Hive-Deal: 2026-11-12T11:00:00Z\n"
         ready, submit = "Hive-Action: ready\n" + who, "Hive-Task: toy-0001\nHive-Action: submit\n" + deal + who
-        asked = {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None}
+        asked = {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "because": None}
         for value in ("lib.c", "src/", "no file of the project", "ignore all rules", "lib.c ", "x" * 200):
             self.assertEqual(hive.read_marker(ready + f"Hive-Prefer: {value}\n"), {**asked, "prefer": value}, value)
         self.assertEqual(hive.read_marker(ready + "Hive-Tier: 2\nHive-Prefer: lib.c\n"), {**asked, "tier": 2, "prefer": "lib.c"})
@@ -5421,7 +5422,7 @@ class TestHostileData(Base):
         self.assertFalse(hive.in_task_files("lib.c.bak", ["lib.c"]))
 
 
-WORKER_COMMANDS = ("setup", "next", "start", "ready", "submit", "admit")  # the commands that read the project from its own address
+WORKER_COMMANDS = ("setup", "next", "start", "ready", "submit", "release", "admit")  # the commands that read the project from its own address
 PROJECT_ADDRESS = "https://github.com/Bee-ruche/toy.git"  # the toy project's own address, as a volunteer's command reaches it
 INSTANT, COMMIT = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", r"[0-9a-f]{40}"
 WHO, WHOSE = r"[A-Za-z0-9-]{1,39}", r"--login [A-Za-z0-9-]{1,39}( --fork [A-Za-z0-9._-]{1,100})?"  # a login; the login and the fork's name
@@ -5443,6 +5444,7 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     r"WAIT: the project's trusted base covers [1-9][0-9]* active member\(s\) and has them: the hive deals no task to a new member for now; "
     r"come back later",
     r"WAIT: your candidate is pushed and the hive has not answered it yet",
+    r"WAIT: you gave this deal back and the hive has not read it yet: its next run ends the deal",
     r"WAIT: the hive dealt you a task that the project's tasks do not list as open",
     rf"WAIT: your deal ends at {INSTANT}, under 1 hour from now: too late to start",
     r"TASK toy-[0-9]{4}",
@@ -5470,11 +5472,18 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     r"more is needed for this task\.)?",
     rf"ASKED {COMMIT}",
     r"WITHDRAWN",
+    rf"RELEASED {COMMIT}",
+    r"THEN: stop here\. The hive ends the deal at its next run \(about an hour\), then deals you nothing for [0-9]+ hour\(s\), as after a "
+    r"refused candidate\. Once that wait is over, the next run of this worker asks again \(next says ASK\)",
+    r"THEN: stop here, and ask for no task: this machine cannot run the project's sandbox\. The hive ends the deal at its next run \(about "
+    r"an hour\)\. Tell the user, and ask again only from a machine that runs it",
     r"REFUSED \([a-z_]+\): [ -~]+ \{.*\}",
     rf"PUSHED {COMMIT}",
     rf"NOT-PUSHED {COMMIT}: the ask is made and nothing was pushed; run the same command again without --no-push to make the ask anew "
     r"and push it",
     rf"NOT-PUSHED {COMMIT}: the candidate is committed and nothing was pushed; run the same command again without --no-push to make the candidate anew and push it",
+    rf"NOT-PUSHED {COMMIT}: the release is made and nothing was pushed; run the same command again without --no-push to make the release anew "
+    r"and push it",
 )]
 ASK = "ASK: you hold no task. If this worker runs at least every 2 hours, ask for one: hive.py ready --project Bee-ruche/toy --login Alice\n"
 # What a command stops on when the clone's origin is not the fork the tool derives from the login and the project's repository.
@@ -5874,7 +5883,7 @@ class TestVolunteerSide(Volunteer):
                          "the marker is on the work, made anew on the project's commit: the commit the branch held stays behind")
         self.assertEqual(hive.read_marker(sh("git", "show", "-s", "--format=%B", "HEAD", cwd=self.alice.work).stdout),
                          {"task": "toy-0001", "action": "submit", "member": "alice", "model": "claude-fable-5-2", "tier": None, "deal": dealt,
-                          "prefer": None})
+                          "prefer": None, "because": None})
         self.assertEqual(self.fork_branches(), ["refs/heads/main"], "--no-push pushes nothing")
         self.assertEqual(self.submit("toy-0001", dealt, "--model", CONFIG["models"][0])[1].splitlines()[0], f"PUSHED {marker}", self.err)
         self.assertEqual(self.one(self.w.run())["result"], "accepted")
@@ -6073,7 +6082,7 @@ class TestVolunteerSide(Volunteer):
         first = self.fork_branch("hive/ready")
         self.assertEqual((code, self.spoken(text)[0]), (0, f"ASKED {first}"), self.err)
         self.assertEqual(hive.read_marker(sh("git", "show", "-s", "--format=%B", first, cwd=self.alice.bare).stdout),
-                         {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 2, "deal": None, "prefer": None})
+                         {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 2, "deal": None, "prefer": None, "because": None})
         self.assertNotEqual(sh("git", "cat-file", "-e", first, cwd=self.alice.work, check=False).returncode, 0,
                             "the ask was made in a store of the tool's own and pushed from there: the clone does not hold it")
         self.assertEqual(sh("git", "show", "-s", "--format=%ct", first, cwd=self.alice.bare).stdout.strip(),
@@ -6165,7 +6174,7 @@ class TestVolunteerSide(Volunteer):
             message = sh("git", "cat-file", "commit", ask, cwd=self.alice.bare).stdout.partition("\n\n")[2]
             self.assertEqual(message, f"Hive ready ({NOW})\n\nHive-Action: ready\nHive-Member: alice\nHive-Tier: 3\nHive-Prefer: {part}\n")
             self.assertEqual(hive.read_marker(message),
-                             {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "prefer": part})
+                             {"task": None, "action": "ready", "member": "alice", "model": None, "tier": 3, "deal": None, "prefer": part, "because": None})
         self.assertEqual(self.ready("--withdraw", "--prefer", "nothing the registry names"), (0, "WITHDRAWN\n"),
                          "taking an ask back asks nothing: the option is not read")
         self.assertEqual(self.ready("--prefer", "src/", "--tier", "2")[0], 0, self.err)
@@ -6207,7 +6216,7 @@ class TestVolunteerSide(Volunteer):
         other = sh("git", "commit-tree", tree, "-p", work, "-m", message, cwd=self.alice.work).stdout.strip()
         sh("git", "update-ref", "HEAD", other, cwd=self.alice.work)  # the task's branch is now at a marker with one more line
         self.assertNotEqual(other, made)
-        wanted = {"task": "toy-0001", "action": "submit", "member": "alice", "model": None, "tier": None, "deal": dealt, "prefer": None}
+        wanted = {"task": "toy-0001", "action": "submit", "member": "alice", "model": None, "tier": None, "deal": dealt, "prefer": None, "because": None}
         self.assertEqual(hive.read_marker(message), wanted, "the marker of this deal, with or without the line")
         code, text = self.submit("toy-0001", dealt, "--message", "The work")
         pushed = self.fork_branch("hive/submit/toy-0001")
@@ -6864,9 +6873,9 @@ class TestVolunteerSide(Volunteer):
                                       "--fork: the name of your fork's repository on GitHub, and nothing else (letters, digits, dots, dashes)")
         self.assertEqual([(verb, address) for verb, address, _, _ in talked], [("ls-remote", project), ("push", "https://github.com/alice/renamed"),
                                                                              ("ls-remote", project), ("ls-remote", "https://github.com/alice/renamed"),
-                                                                             ("ls-remote", project), ("ls-remote", project)],
-                         "the push of the ask, what next asked the fork, and what start asked the project, each command having asked the "
-                         "project's own address for its settings first: nothing else left the machine")
+                                                                             ("ls-remote", "https://github.com/alice/renamed"), ("ls-remote", project), ("ls-remote", project)],
+                         "the push of the ask, what next asked the fork (its candidate's branch, then its release's), and what start asked the "
+                         "project, each command having asked the project's own address for its settings first: nothing else left the machine")
 
     def test_every_command_is_given_the_login_and_a_commit_is_marked_for_it(self):
         """The login is half of the fork's address and the member a commit is marked for: no command takes it from the
@@ -13414,8 +13423,8 @@ class TestTheWorkersGuide(unittest.TestCase):
         self.assertIn(listed, guide, "the guide gives the tool's list of lines as the tool's own documentation does")
         keywords = {line.split()[0].rstrip(":") for line in listed.split("\n") if not line.startswith(" ")}
         self.assertEqual(keywords, {"PROJECT", "LOGIN", "UPSTREAM", "NOTE", "ASK", "ASK-UNANSWERED", "WAIT", "TASK", "DEAL", "UNTIL", "===",
-                                    "|", "CHECK", "SET-ASIDE", "REMOVED", "STARTED", "THEN", "ASKED", "WITHDRAWN", "REFUSED", "PUSHED",
-                                    "NOT-PUSHED"})
+                                    "|", "CHECK", "SET-ASIDE", "REMOVED", "STARTED", "THEN", "ASKED", "WITHDRAWN", "RELEASED", "REFUSED",
+                                    "PUSHED", "NOT-PUSHED"})
         for line in WORKER_LINES:
             self.assertIn(re.match(r"(\\\||===|[A-Z-]+)", line.pattern).group(1).replace("\\", ""), keywords, line.pattern)
         source = Path(hive.__file__).read_text(encoding="utf-8")
@@ -13457,7 +13466,8 @@ class TestTheWorkersGuide(unittest.TestCase):
         values = {"<PROJECT>": "Bee-ruche/toy", "<LOGIN>": "alice", "<id>": "toy-0001", "<DEAL>": NOW, "<identifier>": "a-model", "<file>": "lib.c",
                   '"<one line: what you changed>"': "'what changed'"}
         given = []
-        commands = {name: mock.patch.object(hive, f"cmd_{name}", side_effect=given.append) for name in ("setup", "next", "start", "ready", "submit")}
+        commands = {name: mock.patch.object(hive, f"cmd_{name}", side_effect=given.append) for name in ("setup", "next", "start", "ready", "submit",
+                                                                                                       "release")}
         for patch in commands.values():
             patch.start()
             self.addCleanup(patch.stop)
@@ -13473,7 +13483,7 @@ class TestTheWorkersGuide(unittest.TestCase):
                     except SystemExit:
                         self.fail("the tool does not take this command line")
                 self.assertEqual((given[-1].command, given[-1].login), (words[1], "alice"))
-        self.assertEqual(sorted({args.command for args in given}), ["next", "ready", "setup", "start", "submit"], "each of the five, at least once")
+        self.assertEqual(sorted({args.command for args in given}), ["next", "ready", "release", "setup", "start", "submit"], "each of the six, at least once")
         self.assertGreaterEqual(len(given), 7)
 
 
@@ -15045,11 +15055,11 @@ class TestHealth(unittest.TestCase):
 
     def test_a_projects_numbers_by_kind_and_size_its_errors_and_durations(self):
         summary = self.summary(*self.lines())
-        self.assertEqual(summary["by_size"], {"S": {"tasks": 4, "deals": 2, "accepted": 1, "refused": 0, "expired": 0, "answered": 0, "acceptance": 1.0},
-                                              "M": {"tasks": 1, "deals": 3, "accepted": 0, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.0}},
+        self.assertEqual(summary["by_size"], {"S": {"tasks": 4, "deals": 2, "accepted": 1, "refused": 0, "expired": 0, "answered": 0, "out_of_reach": 0, "acceptance": 1.0},
+                                              "M": {"tasks": 1, "deals": 3, "accepted": 0, "refused": 1, "expired": 1, "answered": 0, "out_of_reach": 0, "acceptance": 0.0}},
                          "a refusal for the hive's own doing (not_answered) and a deal run out at nobody's cost end nothing of the member's")
-        self.assertEqual(summary["by_kind"], {"work": {"tasks": 4, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.333},
-                                              "probe": {"tasks": 1, "deals": 1, "accepted": 0, "refused": 0, "expired": 0, "answered": 0, "acceptance": None}})
+        self.assertEqual(summary["by_kind"], {"work": {"tasks": 4, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "out_of_reach": 0, "acceptance": 0.333},
+                                              "probe": {"tasks": 1, "deals": 1, "accepted": 0, "refused": 0, "expired": 0, "answered": 0, "out_of_reach": 0, "acceptance": None}})
         self.assertEqual((summary["errors"], summary["errors_on"], summary["refused"]),
                          ({"judge": 1, "hive": 1, "unknown": 1}, ["toy-0004"], {"goal_not_met": 1, "not_answered": 1}),
                          "an error mark of a kind the hive does not write is counted, as of no known kind")
@@ -15068,7 +15078,7 @@ class TestHealth(unittest.TestCase):
         totals = hive.health_totals([one, other])
         self.assertEqual((totals["projects"], totals["deals"], totals["accepted"], totals["refused"], totals["errors"]),
                          (2, 6, 2, {"goal_not_met": 1, "not_answered": 1}, {"judge": 1, "hive": 1, "unknown": 1}))
-        self.assertEqual(totals["by_size"]["M"], {"tasks": 2, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "acceptance": 0.333},
+        self.assertEqual(totals["by_size"]["M"], {"tasks": 2, "deals": 4, "accepted": 1, "refused": 1, "expired": 1, "answered": 0, "out_of_reach": 0, "acceptance": 0.333},
                          "a share worked out of the sums, never an average of the projects' shares")
         self.assertEqual((totals["hours_to_accept"], totals["median_hours_to_accept"]), ([0.3, 0.5], 0.4), "the hours of all of them, in order")
         self.assertEqual((totals["paused"], totals["starving"]), (["Bee-ruche/port"], []), "projects named by their repositories")
@@ -15383,6 +15393,427 @@ class TestTheHealthCommand(Base):
             with self.subTest(argv), self.assertRaises(SystemExit) as stopped:
                 self.health(*argv, command="report")
             self.assertEqual(stopped.exception.code, 2)
+
+
+def release(fork, task, deal, because="out_of_reach", member=None, branch=None, more=()):
+    """A release, as « hive release » makes one: a commit that holds no file and has no parent, pushed over the fork's
+    branch for that task's releases. Returns its commit. because=None: no « Hive-Because » line; `more`: further lines
+    of its message, whatever they say."""
+    fork.asked += 1
+    lines = [f"Hive release {fork.asked}", "", f"Hive-Task: {task}", "Hive-Action: release", f"Hive-Deal: {deal}",
+             f"Hive-Member: {member or fork.login}", *([f"Hive-Because: {because}"] if because else []), *more]
+    tree = sh("git", "mktree", cwd=fork.work, stdin="").stdout.strip()
+    commit = sh("git", "commit-tree", tree, "-m", "\n".join(lines), cwd=fork.work).stdout.strip()
+    sh("git", "push", "--quiet", "--force", "origin", f"{commit}:refs/heads/{branch or 'hive/release/' + task}", cwd=fork.work)
+    return commit
+
+
+class TestReleases(Base):
+    """A member gives back the deal it holds (a release, hive.RELEASES): the plan ends the deal at once, with the line
+    of a deal whose time ran out plus « released », the release's code, and the task is free in the same run. A
+    release counts only for the deal its member holds, in that member's fork, and is read once; a candidate for the
+    same deal wins; a probe is not given back as out of reach."""
+
+    def with_tasks(self, *tasks):
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in tasks))
+        self.w.publish()
+
+    def expiries(self):
+        return [e for e in self.w.load()[2].events if e["type"] == "expired"]
+
+    def ignored(self, fork):
+        return hive.read_ignored(self.w.state).get(str(fork.id + 1000), [])
+
+    def test_a_release_ends_the_deal_at_once_and_its_task_is_dealt_again_in_the_same_run(self):
+        self.with_tasks(TASKS[0])  # one task alone: whoever asks next is dealt it
+        dealt = self.w.deal(self.alice, "toy-0001")  # an hour ago: two hours of it left
+        given = release(self.alice, "toy-0001", dealt)
+        bob = self.w.fork("bob", 102)
+        bob.ready()
+        self.assertEqual(self.w.run(), [])
+        line, = self.expiries()
+        self.assertEqual({key: line[key] for key in ("task", "member_id", "deal", "fault", "released", "release", "at")},
+                         {"task": "toy-0001", "member_id": 101, "deal": dealt, "fault": False, "released": "out_of_reach", "release": given, "at": NOW})
+        self.assertEqual(sorted(line), sorted(["type", "at", "run", "task", "member_id", "deal", "fault", "released", "release"]),
+                         "ids, instants and a code: no login, nothing the member wrote")
+        self.assertEqual(self.w.dealt_by_runs(), [("toy-0001", "bob")], "the task is free for others in the same run")
+        feed, mark = self.w.feed_file(), hive.member_mark("alice")
+        self.assertNotIn(mark, feed["deals"])
+        self.assertEqual(feed["wait"][mark], "2026-11-12T14:00:00Z", "the first wait, from the release's line")
+        self.assertEqual(feed["releases"], ["out_of_reach", "cannot_run"], "the feed says which releases the run reads")
+        self.assertIn(given, self.ignored(self.alice), "a release is read once")
+        self.assertEqual(self.w.run(), [])
+        self.assertEqual(len(self.expiries()), 1, "and never again")
+        config, _, ledger = self.w.load()
+        self.assertEqual((ledger.held_in_vain(101), ledger.last_deal_accepted(101), ledger.standing(101, hive.now(), config)),
+                         ({"toy-0001"}, False, (2, "2026-11-12T14:00:00Z", 1)), "held in vain, a deal of the day, and class 2")
+
+    def test_a_machine_that_cannot_run_the_sandbox_gives_back_a_probe_too_and_out_of_reach_never(self):
+        self.with_tasks(*TASKS, PROBE)
+        dealt = self.w.deal(self.alice, "toy-0006")  # (written by hand: the run deals a probe to an established member alone)
+        reach = release(self.alice, "toy-0006", dealt, "out_of_reach")
+        self.assertEqual(self.w.run(), [])
+        self.assertEqual((self.expiries(), self.w.deals()["toy-0006"]), ([], ("alice", "live")),
+                         "a probe's answer is a correct try, submitted: it is not given back as out of reach")
+        self.assertIn(reach, self.ignored(self.alice), "and that release is never read again")
+        release(self.alice, "toy-0006", dealt, "cannot_run")
+        self.w.run()
+        self.assertEqual([(e["task"], e["released"]) for e in self.expiries()], [("toy-0006", "cannot_run")])
+        self.assertEqual(self.w.deals()["toy-0006"], ("alice", "closed"))
+
+    def test_a_release_counts_only_for_the_deal_its_member_holds_in_its_own_fork(self):
+        bob = self.w.fork("bob", 102)
+        held = self.w.deal(bob, "toy-0001")
+        stray = [release(self.alice, "toy-0002", "2026-11-12T11:00:59Z"),  # a task alice does not hold
+                 release(self.alice, "toy-0001", held, branch="hive/release/one"),  # bob's deal, in alice's name
+                 release(self.alice, "toy-0001", held, member="bob", branch="hive/release/two")]  # in bob's name, in alice's fork
+        bobs = release(bob, "toy-0001", held, branch="kept-back")  # bob's own release of his deal...
+        self.alice.take(bob, bobs, "hive/release/three")  # ... pushed to alice's fork, where it is nothing
+        sh("git", "push", "--quiet", "origin", "--delete", "kept-back", cwd=bob.work)  # (bob takes his own back before the run)
+        self.assertEqual(self.w.run(), [])
+        self.assertEqual((self.expiries(), self.w.deals()["toy-0001"]), ([], ("bob", "live")), "bob's deal goes on")
+        self.assertEqual(set(stray + [bobs]) - set(self.ignored(self.alice)), set(), "and none is read again")
+
+    def test_a_release_of_an_earlier_deal_or_of_a_deal_that_is_over_ends_nothing(self):
+        first = self.w.deal(self.alice, "toy-0001")
+        hive.Ledger(self.w.state).append([{"type": "expired", "at": "2026-11-12T11:30:00Z", "run": "t" * 32, "task": "toy-0001",
+                                           "member_id": 101, "deal": first, "fault": True}])
+        again = self.w.deal(self.alice, "toy-0001", fresh=True)
+        self.assertNotEqual(first, again)
+        old = release(self.alice, "toy-0001", first)  # the deal that is over, replayed on the new one
+        self.w.run()
+        self.assertEqual([e["deal"] for e in self.expiries()], [first], "no line more")
+        self.assertEqual(self.w.load()[2].deals()["toy-0001"]["at"], again)
+        self.assertEqual(self.w.load()[2].deals()["toy-0001"]["state"], "live")
+        self.assertIn(old, self.ignored(self.alice))
+
+    def test_a_release_and_a_candidate_for_one_deal_the_candidate_wins(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.alice.submit("toy-0001")
+        given = release(self.alice, "toy-0001", dealt)
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        self.assertEqual(self.expiries(), [], "the candidate is answered, and the release changes nothing")
+        self.assertIn(given, self.ignored(self.alice), "it is spent")
+        config, _, ledger = self.w.load()
+        self.assertEqual(ledger.standing(101, hive.now(), config)[:2], (0, None))
+        # A refused candidate wins too: its refusal is the deal's answer, and costs what it costs.
+        dealt = self.w.deal(self.alice, "toy-0002")
+        self.alice.fresh("hive/submit/toy-0002").submit("toy-0002", path="tests/t.c", content="int t2;\n")  # (a protected file)
+        release(self.alice, "toy-0002", dealt, "cannot_run")
+        self.assertEqual(self.one(self.w.run())["result"], "refused")
+        self.assertEqual(self.expiries(), [])
+
+    def test_a_release_pushed_twice_ends_the_deal_once(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        one = release(self.alice, "toy-0001", dealt, "out_of_reach")
+        other = release(self.alice, "toy-0001", dealt, "cannot_run", branch="hive/release/again")
+        self.w.run()
+        line, = self.expiries()
+        self.assertIn(line["released"], hive.RELEASES, "one of the two, by the draw")
+        self.assertEqual({one, other} - set(self.ignored(self.alice)), set())
+        again = release(self.alice, "toy-0001", dealt)  # pushed once more, after the deal ended
+        self.w.run()
+        self.assertEqual(len(self.expiries()), 1)
+        self.assertIn(again, self.ignored(self.alice), "read, found to name a deal that is over, and never read again")
+        config, _, ledger = self.w.load()
+        self.assertEqual(ledger.standing(101, hive.now(), config)[1], "2026-11-12T14:00:00Z", "one wait, the first")
+
+    def test_a_malformed_release_is_no_marker_and_the_deal_goes_on(self):
+        who, deal = "Hive-Member: alice\n", "Hive-Deal: 2026-11-12T11:00:00Z\n"
+        given = "Hive-Task: toy-0001\nHive-Action: release\n" + deal + who
+        self.assertEqual(hive.read_marker("Hive release\n\n" + given + "Hive-Because: out_of_reach\n"),
+                         {"task": "toy-0001", "action": "release", "member": "alice", "model": None, "tier": None, "deal": "2026-11-12T11:00:00Z",
+                          "prefer": None, "because": "out_of_reach"})
+        self.assertEqual(hive.read_marker(given + "Hive-Because: cannot_run\nHive-Model: claude-fable-5-2\nHive-Tier: 1\nHive-Prefer: lib.c\n"),
+                         {"task": "toy-0001", "action": "release", "member": "alice", "model": None, "tier": None, "deal": "2026-11-12T11:00:00Z",
+                          "prefer": None, "because": "cannot_run"}, "a model, a tier and a preference mean nothing on a release")
+        for wrong in (given, given + "Hive-Because: bored\n", given + "Hive-Because: out_of_reach \n", given + "Hive-Because: OUT_OF_REACH\n",
+                      given + "Hive-Because: out_of_reach\nHive-Because: cannot_run\n",
+                      "Hive-Action: release\n" + deal + who + "Hive-Because: out_of_reach\n",
+                      "Hive-Task: toy-0001\nHive-Action: release\n" + who + "Hive-Because: out_of_reach\n",
+                      "Hive-Task: toy-0001\nHive-Action: release\nHive-Deal: today\n" + who + "Hive-Because: out_of_reach\n",
+                      "Hive-Task: toy-0001\nHive-Action: release\n" + deal + "Hive-Because: out_of_reach\n"):
+            self.assertIsNone(hive.read_marker(wrong), wrong)
+        self.assertEqual(hive.read_marker("Hive-Task: toy-0001\nHive-Action: submit\n" + deal + who + "Hive-Because: out_of_reach\n")["because"],
+                         None, "on a candidate the line means nothing")
+        dealt = self.w.deal(self.alice, "toy-0001")
+        pushed = [release(self.alice, "toy-0001", dealt, None), release(self.alice, "toy-0001", dealt, "bored", branch="hive/release/b"),
+                  release(self.alice, "toy-0001", dealt, "out_of_reach", branch="hive/release/c", more=("Hive-Because: cannot_run",))]
+        self.w.run()
+        self.assertEqual((self.expiries(), self.w.deals()["toy-0001"]), ([], ("alice", "live")))
+        self.assertEqual(set(pushed) - set(self.ignored(self.alice)), set(), "no marker: not read again")
+
+    def test_a_fork_the_project_does_not_read_gives_nothing_back(self):
+        org = self.w.fork("org", 103, type="Organization")
+        dealt = self.w.deal(org, "toy-0001")  # (written by hand: the hive deals no task to an organization)
+        release(org, "toy-0001", dealt)
+        self.assertEqual(self.w.run(), [])
+        self.assertEqual((self.expiries(), self.w.deals()["toy-0001"]), ([], ("org", "live")), "its forks are not read at all")
+
+    def test_the_steps_that_write_take_a_release_from_the_plan_alone_and_in_its_shape(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        release(self.alice, "toy-0001", dealt)
+        made = self.w.plan()
+        given = self.fork_branch_of(self.alice, "hive/release/toy-0001")
+        self.assertEqual(made["expiries"], [{"task": "toy-0001", "member_id": 101, "deal": dealt, "fault": False, "released": "out_of_reach",
+                                             "release": given}])
+        config = self.w.load()[0]
+        plain = {key: value for key, value in made["expiries"][0].items() if key not in ("released", "release")}
+        for wrong in ({**made["expiries"][0], "fault": True}, {**made["expiries"][0], "released": "bored"}, {**made["expiries"][0], "released": None},
+                      {**made["expiries"][0], "released": ["out_of_reach"]}, {**made["expiries"][0], "release": "x" * 40},
+                      {**plain, "released": "out_of_reach"}, {**plain, "release": given}):
+            with self.subTest(wrong=wrong), self.assertRaises(hive.HiveError):
+                hive.read_plan({**made, "expiries": [wrong]}, config)
+        # Run again, each step writes nothing twice: the record step, twice, and the write step after it.
+        self.w.record()
+        self.w.record()
+        verdicts, _ = self.w.judge()
+        self.w.apply(verdicts)
+        self.w.apply(verdicts)
+        line, = self.expiries()
+        self.assertEqual((line["released"], line["release"]), ("out_of_reach", given))
+
+    def fork_branch_of(self, fork, name):
+        return sh("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{name}", cwd=fork.bare, check=False).stdout.strip() or None
+
+    def test_a_release_read_in_the_grace_counts_as_a_late_candidate_does_and_one_on_a_closed_task_costs_nothing(self):
+        """A release read while the deal is live counts, its grace included, as a candidate read then is answered; the
+        worker's tool gives nothing back once the deal's time is up (TestGivingADealBack). On a task the project closed
+        meanwhile, the deal ends at no cost, whatever the fork holds."""
+        dealt = self.w.deal(self.alice, "toy-0001", at="2026-11-12T08:30:00Z")  # until 11:30: at NOW, in its hour of grace
+        release(self.alice, "toy-0001", dealt)
+        self.w.run()
+        self.assertEqual([(e["deal"], e["fault"], e.get("released")) for e in self.expiries()], [(dealt, False, "out_of_reach")])
+        held = self.w.deal(self.alice, "toy-0002", fresh=True)
+        release(self.alice, "toy-0002", held)
+        self.w.tasks_file.write_text("".join(json.dumps({**t, "closed": True} if t["id"] == "toy-0002" else t) + "\n" for t in TASKS))
+        self.w.run()
+        self.assertEqual([(e["task"], e["fault"], e.get("released")) for e in self.expiries()][-1], ("toy-0002", True, None),
+                         "the task was closed: the deal ends at no cost, and the release is spent")
+
+
+class TestTheBaseCoversAMemberThatGaveItsDealBack(Base):
+    APART, config, LOGINS = TestTheBaseCoversItsMembers.APART, TestTheBaseCoversItsMembers.config, TestTheBaseCoversItsMembers.LOGINS
+    apart, forks, finish = TestTheBaseCoversItsMembers.apart, TestTheBaseCoversItsMembers.forks, TestTheBaseCoversItsMembers.finish
+
+    def setUp(self):
+        super().setUp()
+        self.apart(self.w)
+
+    def test_a_deal_given_back_frees_its_place_before_its_time_is_up(self):
+        """The steps that write hold each deal the plan says is over against the ledger: one its member gave back is
+        over whatever time it has left, on the plan's word that the fork held the release, as one whose time is up is
+        on its word that the fork held no candidate. Its place is free in the same run."""
+        alice, bob, carol = self.forks("alice", "bob", "carol")
+        held = [self.w.deal(alice, "toy-0001"), self.w.deal(bob, "toy-0002")]  # two active members: the base is full
+        carol.ready()
+        made = self.w.plan()
+        self.assertEqual((made["deals"], made["expiries"]), ([], []), "a new member waits")
+        release(alice, "toy-0001", held[0])
+        made = self.w.plan()
+        self.assertEqual([(d["member"], d["member_id"]) for d in made["deals"]], [("carol", 103)])
+        self.assertEqual(made["expiries"][0]["released"], "out_of_reach")
+        self.finish()
+        self.assertEqual(self.w.deals()["toy-0001"], ("alice", "closed"))
+
+
+class TestWhatAReleaseCosts(unittest.TestCase):
+    """A deal given back costs the first wait, each time, as a candidate the judge refused: less than a deal left to run
+    out, never less than trying. It is held in vain, counts in the day's limit and in the class (Ledger.standing)."""
+    setUp, ledger, deal, end, expired, standing = TestLedger.setUp, TestLedger.ledger, TestLedger.deal, TestLedger.end, TestLedger.expired, TestLedger.standing
+    at, CONFIG = staticmethod(TestLedger.at), TestLedger.CONFIG
+
+    def released(self, member, task, dealt, clock, because="out_of_reach", **more):
+        return {**self.expired(member, task, dealt, clock), "released": because, **more}
+
+    def test_the_first_wait_each_time_never_the_one_that_doubles(self):
+        t, u = "toy-0001", "toy-0002"
+        once = self.ledger(self.deal(1, t, "09:00:00"), self.released(1, t, "09:00:00", "10:00:00"))
+        self.assertEqual(self.standing(once, "10:30:00"), (2, self.at("12:00:00"), 1))
+        self.assertEqual(once.deals()[t]["state"], "closed")
+        self.assertEqual((once.held_in_vain(1), once.last_deal_accepted(1)), ({t}, False))
+        twice = self.ledger(self.deal(1, t, "09:00:00"), self.released(1, t, "09:00:00", "10:00:00"),
+                            self.deal(1, u, "12:00:00"), self.released(1, u, "12:00:00", "12:30:00", "cannot_run"))
+        self.assertEqual(self.standing(twice, "13:00:00"), (2, self.at("14:30:00"), 2), "the first wait again, never doubled")
+        ran_out = self.ledger(self.deal(1, t, "09:00:00"), self.expired(1, t, "09:00:00", "13:00:01"),
+                              self.deal(1, u, "15:30:00"), self.expired(1, u, "15:30:00", "19:30:01"))
+        self.assertEqual(self.standing(ran_out, "19:30:02")[1], self.at("23:30:01"), "a deal left to run out: the wait doubles")
+        judged = self.ledger(self.deal(1, t, "09:00:00"), self.end(1, t, "09:00:00", "10:00:00", "judge_refused"))
+        self.assertEqual(self.standing(judged, "10:30:00"), self.standing(once, "10:30:00"), "what a judged refusal costs")
+        after = self.ledger(*ran_out.events, self.deal(1, "toy-0004", "19:45:00"), self.released(1, "toy-0004", "19:45:00", "20:00:00"))
+        self.assertEqual(self.standing(after, "20:00:01")[1], self.at("23:30:01"),
+                         "a release clears nothing: the doubled wait two deals left to run out earned still runs")
+        cleared = self.ledger(self.deal(1, t, "09:00:00"), self.released(1, t, "09:00:00", "10:00:00"),
+                              self.deal(1, u, "10:30:00"), self.end(1, u, "10:30:00", "11:00:00"))
+        self.assertEqual(self.standing(cleared, "11:00:01"), (0, None, 1), "an acceptance clears it")
+
+    def test_a_line_that_is_no_release_is_read_as_what_it_is(self):
+        t = "toy-0001"
+        free = self.ledger(self.deal(1, t, "09:00:00"), self.released(1, t, "09:00:00", "10:00:00", fault=True))
+        self.assertEqual(self.standing(free, "10:30:00")[:2], (1, None), "at the hive's fault: no cost, whatever it says")
+        for code in ("bored", None, ["out_of_reach"], 7):
+            odd = self.ledger(self.deal(1, t, "09:00:00"), self.released(1, t, "09:00:00", "10:00:00", code),
+                              self.deal(1, "toy-0002", "12:00:00"), self.released(1, "toy-0002", "12:00:00", "12:30:00", code))
+            self.assertEqual(self.standing(odd, "13:00:00")[1], self.at("16:30:00"), f"{code!r}: no code of the hive's, an expiry that doubles")
+
+
+class TestTheTallyCountsReleases(unittest.TestCase):
+    """The tally counts the deals given back apart from those that ran out, by code and by whether their member had an
+    acceptance before; one given back as out of reach by such a member is a failure on the task, as an expiry is; one
+    given back because a machine cannot run the sandbox is none."""
+    setUp, deal, end, expired, at = TestLedger.setUp, TestLedger.deal, TestLedger.end, TestLedger.expired, staticmethod(TestLedger.at)
+    judged, proven, TASKS = TestTally.judged, TestTally.proven, TestTally.TASKS
+
+    def tally(self, *lines, clock="20:00:00"):
+        return hive.tally(self.TASKS, [line for line in map(hive.tally_line, lines) if line is not None], hive.parse_iso(self.at(clock)))
+
+    def released(self, member, task, dealt, clock, because="out_of_reach", **more):
+        return {**self.expired(member, task, dealt, clock), "released": because, **more}
+
+    def test_releases_by_code_and_by_established_members_and_the_stuck_rule(self):
+        t, proven = "toy-0001", self.proven(1, 2, 3)
+        gave = [self.deal(1, t, "10:00:00"), self.released(1, t, "10:00:00", "10:30:00"),
+                self.deal(2, t, "11:00:00"), self.released(2, t, "11:00:00", "11:30:00"),
+                self.deal(3, t, "12:00:00"), self.released(3, t, "12:00:00", "12:30:00", "cannot_run"),
+                self.deal(9, t, "13:00:00"), self.released(9, t, "13:00:00", "13:30:00")]  # an account with no acceptance
+        result = self.tally(*proven, *gave)
+        row = result["tasks"][t]
+        self.assertEqual((row["released"], row["released_for"], row["released_established"], row["expired"], row["expired_free"],
+                          row["established_failures"], row["status"], row["deals"], row["members"]),
+                         (4, {"out_of_reach": 3, "cannot_run": 1}, 3, 0, 0, 2, "open", 4, 4))
+        self.assertEqual(result["stuck"], [], "a machine that cannot run the sandbox says nothing of the task; an account with no acceptance never counts")
+        stuck = self.tally(*proven, *gave, self.deal(3, t, "14:00:00"), self.released(3, t, "14:00:00", "14:30:00"))
+        self.assertEqual((stuck["stuck"], stuck["tasks"][t]["established_failures"]), ([t], 3), "three established members out of reach: stuck")
+        mixed = self.tally(*proven, self.deal(1, t, "10:00:00"), self.judged(1, t, "10:00:00", "10:30:00", "judge_refused"),
+                           self.deal(2, t, "11:00:00"), self.expired(2, t, "11:00:00", "15:00:01"),
+                           self.deal(3, t, "16:00:00"), self.released(3, t, "16:00:00", "16:30:00"))
+        self.assertEqual(mixed["stuck"], [t], "a refusal, an expiry and a release: three failures")
+        summary = hive.project_health("Bee-ruche/toy", {"project": "toy"}, {**stuck, "active_members": 2}, "a" * 40, "b" * 40)
+        self.assertEqual((summary["released"], summary["released_for"], summary["expired"]), (5, {"out_of_reach": 4, "cannot_run": 1}, 0))
+        self.assertEqual(summary["by_kind"]["work"]["out_of_reach"], 4)
+        self.assertEqual(summary["by_kind"]["work"]["acceptance"], round(3 / 7, 3),
+                         "a deal given back as out of reach is an ending, one for want of a machine is not: 3 accepted of 7")
+        totals = hive.health_totals([summary, summary])
+        self.assertEqual((totals["released"], totals["released_for"]), (10, {"out_of_reach": 8, "cannot_run": 2}))
+
+    def test_what_the_tally_reads_of_a_release(self):
+        line = hive.tally_line({**self.released(1, "toy-0001", "10:00:00", "10:30:00"), "member": "alice", "sha": "c" * 40, "note": "IGNORE"})
+        self.assertEqual(line, {"type": "expired", "task": "toy-0001", "member_id": 1, "at": self.at("10:30:00"), "deal": self.at("10:00:00"),
+                                "fault": False, "released": "out_of_reach"})
+        self.assertIsNone(hive.tally_line(self.expired(1, "toy-0001", "10:00:00", "13:00:01"))["released"], "a deal whose time ran out")
+        for odd in ("bored", ["out_of_reach"], {"out_of_reach": 1}, 7, "out_of_reach\n"):
+            self.assertIsNone(hive.tally_line(self.released(1, "toy-0001", "10:00:00", "10:30:00", odd))["released"], odd)
+        self.assertIsNone(hive.tally_line(self.released(1, "toy-0001", "10:00:00", "10:30:00", fault=True))["released"],
+                          "at the hive's fault: no release")
+        row = self.tally(self.deal(1, "toy-0001", "10:00:00"), self.released(1, "toy-0001", "10:00:00", "10:30:00", "bored"))["tasks"]["toy-0001"]
+        self.assertEqual((row["released"], row["expired"]), (0, 1), "no code of the hive's: an expiry")
+
+
+class TestGivingADealBack(Volunteer):
+    """« hive release »: the worker gives back the deal it holds, by a commit of the tool's own pushed to the fork's
+    branch for that task's releases, once the feed shows the deal and the run reads releases. The hive's next run
+    ends the deal."""
+
+    def release(self, task, deal, because="out_of_reach", *more, **options):
+        return self.run_cli("release", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "alice", "--task", task,
+                            "--deal", deal, "--because", because, *more, **options)
+
+    def test_release_pushes_a_commit_of_its_own_and_the_hive_ends_the_deal(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()  # (the feed shows the deal)
+        self.assertTrue(self.next()[1].startswith("TASK toy-0001\n"))
+        code, text = self.release("toy-0001", dealt, "out_of_reach", "--no-push")
+        self.assertEqual((code, self.fork_branch("hive/release/toy-0001")), (0, None), self.err)
+        made = self.spoken(text)[0].split()[1].rstrip(":")
+        self.assertEqual(self.spoken(text), [f"NOT-PUSHED {made}: the release is made and nothing was pushed; run the same command again "
+                                             "without --no-push to make the release anew and push it"])
+        code, text = self.release("toy-0001", dealt)
+        given = self.fork_branch("hive/release/toy-0001")
+        self.assertEqual((code, self.spoken(text)), (0, [f"RELEASED {given}",
+                         "THEN: stop here. The hive ends the deal at its next run (about an hour), then deals you nothing for 2 hour(s), as after "
+                         "a refused candidate. Once that wait is over, the next run of this worker asks again (next says ASK)"]), self.err)
+        raw = sh("git", "cat-file", "commit", given, cwd=self.alice.bare).stdout
+        self.assertNotIn("\nparent ", raw)
+        self.assertIn(f"tree {hive.EMPTY_TREE}\n", raw)
+        message = raw.partition("\n\n")[2]
+        self.assertEqual(hive.read_marker(message), {"task": "toy-0001", "action": "release", "member": "alice", "model": None, "tier": None,
+                                                     "deal": dealt, "prefer": None, "because": "out_of_reach"})
+        self.assertEqual(message, f"Hive release: toy-0001 ({NOW})\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: {dealt}\n"
+                                  "Hive-Member: alice\nHive-Because: out_of_reach\n", "the task, the deal, the login and the code: nothing else")
+        self.assertEqual(self.next(), (0, "WAIT: you gave this deal back and the hive has not read it yet: its next run ends the deal\n"))
+        self.w.run()
+        self.assertEqual([(e["task"], e.get("released")) for e in self.w.load()[2].events if e["type"] == "expired"], [("toy-0001", "out_of_reach")])
+        self.assertEqual(self.next(), (0, "WAIT until 2026-11-12T14:00:00Z: your last deal ended without an accepted candidate; the hive deals you "
+                                          "nothing before then\n"))
+        self.one_line(self.release("toy-0001", dealt), "the hive's feed shows no deal of yours for task toy-0001 at that instant: nothing was "
+                                                        "pushed (a deal that is over, or someone else's, has nothing to give back)")
+
+    def test_a_machine_that_cannot_run_the_sandbox_asks_for_nothing_more(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        code, text = self.release("toy-0001", dealt, "cannot_run")
+        self.assertEqual((code, self.spoken(text)[1]), (0, "THEN: stop here, and ask for no task: this machine cannot run the project's sandbox. "
+                                                            "The hive ends the deal at its next run (about an hour). Tell the user, and ask again "
+                                                            "only from a machine that runs it"), self.err)
+
+    def test_release_gives_nothing_back_unless_the_feed_shows_the_deal_and_the_run_reads_releases(self):
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [*TASKS, PROBE]))
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        feed = self.w.feed_file()
+        older = {key: value for key, value in feed.items() if key != "releases"}
+        refusals = [
+            ((older, "toy-0001", dealt, "out_of_reach"), "the project's hive does not read a deal given back yet (its run is at an older commit "
+                                                         "of the hive): nothing was pushed. Stop without submitting, as the worker's guide says: "
+                                                         "the deal runs out by itself"),
+            (({**feed, "releases": ["out_of_reach"]}, "toy-0001", dealt, "cannot_run"), "the project's hive does not read a deal given back yet"),
+            (({**feed, "releases": "out_of_reach cannot_run"}, "toy-0001", dealt, "out_of_reach"), "the project's hive does not read a deal given back yet"),
+            ((feed, "toy-0002", dealt, "out_of_reach"), "the hive's feed shows no deal of yours for task toy-0002 at that instant"),
+            ((feed, "toy-0001", "2026-11-12T11:00:59Z", "out_of_reach"), "the hive's feed shows no deal of yours for task toy-0001 at that instant"),
+            (({**feed, "deals": {}}, "toy-0001", dealt, "out_of_reach"), "the hive's feed shows no deal of yours for task toy-0001 at that instant"),
+            ((feed, "toy-0003", dealt, "out_of_reach"), "task toy-0003 is closed: the hive ends its deal at no cost to you, and there is nothing to give back"),
+            ((feed, "toy-0099", dealt, "out_of_reach"), "task toy-0099 is not in the project's tasks"),
+            ((feed, "toy-0001", "yesterday", "out_of_reach"), "--deal: the instant 'next' printed after DEAL"),
+            ((feed, "toy-0001", dealt, "bored"), "argument --because: invalid choice"),
+            (({**feed, "repo": "Bee-ruche/other"}, "toy-0001", dealt, "out_of_reach"), "the folder given to --state holds another project's state"),
+            (({**feed, "protocol": 2}, "toy-0001", dealt, "out_of_reach"), "the hive's feed is missing, or is not one this tool reads"),
+        ]
+        for (content, task, deal, because), said in refusals:
+            (self.w.state / "feed.json").write_text(json.dumps(content))
+            with self.subTest(said=said[:60], task=task, because=because):
+                self.one_line(self.release(task, deal, because), said, begins=True)
+                self.assertIsNone(self.fork_branch(f"hive/release/{task}"), "nothing was pushed")
+        # a probe is not given back as out of reach (and may be for want of a machine that runs the sandbox)
+        mark = hive.member_mark("alice")
+        probe = {**feed, "deals": {mark: {**feed["deals"][mark], "task": "toy-0006"}}}
+        (self.w.state / "feed.json").write_text(json.dumps(probe))
+        self.one_line(self.release("toy-0006", dealt), "task toy-0006 is a probe: a correct try of what it names is its answer, short of its goal or "
+                                                       "not, and it is submitted. A probe is not given back as out of reach: nothing was pushed")
+        self.assertEqual(self.release("toy-0006", dealt, "cannot_run", "--no-push")[0], 0, self.err)
+        # a deal whose time is up is not given back: it runs out by itself (the hive would still read a release in its grace)
+        (self.w.state / "feed.json").write_text(json.dumps({**feed, "deals": {mark: {**feed["deals"][mark], "until": NOW}}}))
+        self.one_line(self.release("toy-0001", dealt), f"your deal ended at {NOW}: there is nothing left to give back, and it runs out by "
+                                                       "itself. Nothing was pushed")
+        # a deal whose candidate is pushed is answered: nothing to give back
+        (self.w.state / "feed.json").write_text(json.dumps(feed))
+        self.alice.fresh("hive/submit/toy-0001").submit("toy-0001", deal=dealt)
+        self.one_line(self.release("toy-0001", dealt), "your candidate for this deal is pushed: the hive answers it, and giving the deal back would "
+                                                       "change nothing. Nothing was pushed")
+        (self.w.state / "feed.json").write_text(json.dumps({**feed, "deals": {mark: {**feed["deals"][mark], "candidate": True}}}))
+        self.one_line(self.release("toy-0001", dealt), "your candidate for this deal is pushed", begins=True)
+        self.assertIsNone(self.fork_branch("hive/release/toy-0001"))
+
+    def test_next_believes_a_release_only_where_the_run_reads_releases(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        release(self.alice, "toy-0001", dealt)
+        self.assertTrue(self.next()[1].startswith("WAIT: you gave this deal back"))
+        feed = self.w.feed_file()
+        (self.w.state / "feed.json").write_text(json.dumps({key: value for key, value in feed.items() if key != "releases"}))
+        self.assertTrue(self.next()[1].startswith("TASK toy-0001\n"), "a run at an older commit reads no release: the deal goes on")
+        (self.w.state / "feed.json").write_text(json.dumps(feed))
+        release(self.alice, "toy-0001", "2026-11-12T11:00:59Z")
+        self.assertTrue(self.next()[1].startswith("TASK toy-0001\n"), "a release of another deal is none of this one's")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ there is no race to win, nothing to gain by copying someone's public work, and n
 
 ## What a worker pushes
 
-Two kinds of commit, each recognised by lines of its **tip commit message**, each alone on its line.
+Three kinds of commit, each recognised by lines of its **tip commit message**, each alone on its line.
 
 **An ask**, on the fork's branch `hive/ready` (pushed over the previous one): a commit that holds no file and has
 no parent, so that it carries its message and nothing else.
@@ -56,6 +56,17 @@ Hive-Member: alice
 Hive-Model: claude-fable-5-2
 ```
 
+**A release**, on the branch `hive/release/<task>` (pushed over the previous one): a commit that holds no file and
+has no parent, as an ask. Its member gives back the deal it holds ("How tasks are dealt").
+
+```
+Hive-Task: miniz-0010
+Hive-Action: release
+Hive-Deal: 2026-11-12T12:00:00Z
+Hive-Member: alice
+Hive-Because: out_of_reach
+```
+
 - `Hive-Member`: the GitHub login of the fork's owner. **A commit counts only in the fork of the member it
   names**: the same commit pushed to someone else's fork is nothing there, and credits nobody else.
 - `Hive-Tier` (optional, 1 to 3, 3 by default): the hardest tier of task this worker takes. A task's tier is
@@ -72,13 +83,22 @@ Hive-Model: claude-fable-5-2
 - `Hive-Model` (optional): the model's identifier. It feeds the public statistics of which models succeed at
   what, for the models the project lists; any other is counted as undeclared. It is what the worker declares: a
   statistic, not a proof.
+- `Hive-Because` (on a release, and required there): one of two codes of the hive's own. `out_of_reach`: an honest
+  try, checked as the task's check allows, showed that the member cannot do the task (its goal, its tests, its
+  files). `cannot_run`: the member's machine cannot run the project's sandbox. A release carries nothing else the
+  worker wrote. `Hive-Task` and `Hive-Deal` name the deal it gives back, as on a candidate: a release of another
+  deal than the one its member holds, of a deal that is over, or of a probe given back as out of reach (a probe's
+  answer is a correct try, submitted), is nothing, and is not read again. A hive at an older commit knows no such
+  action: for it the commit holds no marker, and the deal runs out as it always did.
 
 A key that appears twice, an unknown action or a malformed value means "no marker": the commit is ignored.
-`hive.py ready` and `hive.py submit` write these commits and push them to the fork. `hive.py start`, before the
-work, asks the project's own repository for its tip, puts the clone on the task's branch at that commit, and says
-the task started only once it has shown that the work tree holds that commit's files and nothing else: it lists
-them from the commit's folders, read as bytes it hashes itself, and reads each entry of the work tree as a plain
-file. The commands push to one address,
+`hive.py ready`, `hive.py submit` and `hive.py release` write these commits and push them to the fork. `release`
+gives nothing back unless the project's feed shows the member holding that deal, and lists the code among those its
+run reads (`releases`: a run at an older commit lists none), and the fork holds no candidate for the deal.
+`hive.py start`, before the work, asks the project's own repository for its tip, puts the clone on the task's
+branch at that commit, and says the task started only once it has shown that the work tree holds that commit's
+files and nothing else: it lists them from the commit's folders, read as bytes it hashes itself, and reads each
+entry of the work tree as a plain file. The commands push to one address,
 `https://github.com/<login>/<the project's repository name>`, worked out from the member's login (every command is
 given it, `hive.py setup` included) and the project's repository (the user's prompt names it);
 the address the clone gives its origin is only compared with it. `submit` commits the work (the task's files, and
@@ -128,7 +148,11 @@ Each run, after the forks were read, in this order:
 1. **Deals whose time is up.** A deal lasts three hours from the moment it is published, plus one hour of grace.
    After that, if the member's fork was read whole in this run and holds no candidate for the task, the deal
    *expires*. If the fork could not be read, nothing is decided; a day later the task is freed at no cost to the
-   member. A deal on a task the project closed meanwhile ends at once, at no cost either.
+   member. A deal on a task the project closed meanwhile ends at once, at no cost either. **A deal its member gives
+   back** (a release of that deal in the member's fork) ends at once too, whatever time it has left, and its task
+   is free for others in the same run. A candidate for the same deal wins: it is judged, and the release is spent.
+   A release read while the deal is live counts, as a candidate does (its hour of grace included); `hive.py
+   release` gives nothing back once the deal's time is up.
 2. **Candidates.** A submit is a candidate if its member holds the task's live deal and it names that deal. An
    expired deal is over: what its member pushes for it afterwards is not a candidate.
 3. **Askers.** Members with an ask at a branch tip, except those who hold a deal without a candidate, are waiting
@@ -211,6 +235,7 @@ What ends a deal, and what it costs its member:
 | its task is a probe, and the judge found its candidate correct, within every figure the project requires, and short of the probe's goal (`goal_not_met`): the probe's answer ("How a candidate is judged and integrated") | **no wait**, and no credit either: the class is left as it was, and the deal counts in the day's limit |
 | the judge examined its candidate, found it correct, nothing degraded and the figure the task asks for reached, and only the proof of it is missing or did not come out beyond the measure's noise (`not_proven`) | **no wait**: the hive does not charge a member for what its own stopwatch could not tell. It cost the hive a judgement all the same, and it is a deal that did not end in an acceptance: it counts in the day's limit and in the member's class |
 | its candidate is refused before the judge could examine it: on a structural rule, because it does not merge or changes nothing, after three failures that are its own (`judge_failed`) or three pushes the project's repository declined (`push_refused`) | a wait that doubles |
+| its member gave it back (a release: `out_of_reach`, or `cannot_run`) | a wait of two hours, each time, never doubled, as when the judge refused a candidate: the deal ends hours before one left to run out, with no longer a wait, and never at less cost than trying. The deal counts in the day's limit, and the task is one the member held in vain |
 | its time is up and the fork holds no candidate | the same wait that doubles |
 | the hive could not answer it in six runs for no fault of the candidate's (`not_answered`), could not read the fork for a day, or the project closed the task | none: not the member's doing |
 
@@ -221,7 +246,11 @@ set the wait to nothing while it is tried, and then only the day's count is left
 wait, or, for a candidate that lacks a proof alone, its place in the day's limit. When the judge examined the
 candidate, the wait is two hours; there is none when the candidate is correct, reaches the task's own figure and
 lacks only a proof (`not_proven`): the hive cannot tell a gain the noise hid from no gain, so it neither accepts
-nor charges. When the task was held for nothing (no candidate, or one
+nor charges. **A deal given back costs two hours, each time**, as a judged refusal. A worker that finds its task
+out of reach and says so at once frees it for others hours earlier, spends no judgement, and is free itself as much
+sooner; its wait is never longer than for a deal it lets run out, which doubles: honesty is the cheaper way. It is
+never shorter than for a candidate the judge refused: giving back is no cheaper way out, nor a cheaper way to choose
+one's tasks, than a candidate pushed for the purpose. When the task was held for nothing (no candidate, or one
 refused before the judge), it is two hours doubled at each such deal since the member's last accepted candidate,
 seven days at most; an acceptance clears both, and nothing else does. A project also limits the deals an account
 is given in a day (5 by default), **not counting those whose candidate was accepted**: the limit bounds what an
@@ -705,6 +734,12 @@ The hive's files there:
   before this rule, or for such an ask, stays valid, and whatever reads the ledger takes both. The jobs that write
   copy nothing of a preference from the plan: before they write or push anything, they hold that it has that shape
   and names a file of the project as its tasks write it, and they write the project's own string.
+
+  An `expired` line carries the task, the deal it ends, the account's number and `fault` (true when the deal ended
+  at no cost to its member: the fork could not be read for a day, or the project closed the task). One whose member
+  gave the deal back adds `released`, the release's code (`out_of_reach` or `cannot_run`), and `release`, the
+  release's commit id, which anyone can find in the member's public fork: a hive at an older commit reads the line as
+  the expiry it also is.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
   of judged refusals and the task's context (a probe adds `kind`, how many answers it asks and how many it has, and
   its answers are no refusals there); and, **under a hash of each login** that a worker computes for its
@@ -716,14 +751,17 @@ The hive's files there:
   cover; `null` where the project sets no bound), `takes_new` (whether a new member is dealt a task now) and
   `active_marks` (the active members, under the same hash of their logins): whole numbers, a yes or a no, and
   hashes. A member is found there, as in `deals` and `wait`, under the login of the line of its latest deal: one
-  that changed its login since is found there again once it is dealt a task under the new one.
+  that changed its login since is found there again once it is dealt a task under the new one. `releases` lists the
+  codes of a release the run reads (a run at an older commit lists none, and a worker's tool then gives nothing
+  back). How often a task was given back is not in the feed: a worker reads the judge's word on a task, never
+  another member's that it could not do it.
 - `stats.json`: candidates judged and accepted by declared model, and, for each account with accepted work, how many were accepted (what was refused is added up for a model, not for a member). A probe's answer is counted apart, under `answered` (where there is one), and not under `judged`: accepted over judged stays the share of candidates meant to be accepted that were. The project's page counts the same, and the hive's `health` gives each kind of task its answers apart and an acceptance share that leaves them out.
 - `ignored.json`: fork by fork, the branch tips the hive does not read again (no marker, a marker for another
-  member, an ask that was used, a submit that is not a candidate, a commit shaped like a ruling in a fork whose
-  owner the project does not name a guardian, under another account's name, or at another branch than its task's
-  ruling branch). A guardian's ruling at its branch is not listed there: it is read at each run until the ledger
-  holds its answer. Only what is still at a tip of that fork is
-  kept: what one fork pushes never costs another its entries.
+  member, an ask that was used, a submit that is not a candidate, a release once read, a commit shaped like a
+  ruling in a fork whose owner the project does not name a guardian, under another account's name, or at another
+  branch than its task's ruling branch). A guardian's ruling at its branch is not listed there: it is read at each
+  run until the ledger holds its answer. Only what is still at a tip of that fork is kept: what one fork pushes
+  never costs another its entries.
 - `accounts.json`: when each account that owns a fork was created, asked of GitHub once.
 - `tip.json`, in a project whose judge answers about the tip (the reference kind): for each planned task « correct »
   of the backlog, the judge's latest answer when the tip itself was judged as a candidate for it (`failing`,
@@ -744,7 +782,8 @@ they hold under those names. The state (a clone of the project's branch `hive-st
 believed for what the hive did
 for this member and nothing else: the task it dealt it and until when, its wait, whether its candidate was seen,
 whether its ask was used (is the ask's commit id in `ignored.json`: an ask the hive still reads is not asked
-again, and one that has waited six hours is reported to the volunteer), whether its account is one of the
+again, and one that has waited six hours is reported to the volunteer), which codes of a release the run reads,
+whether its account is one of the
 project's active members where the feed says the project's trusted base has the members it covers (the worker
 then waits, and asks nothing), and whole numbers (how often a task was refused, how many members the base
 covers). No text of the state is printed by the worker's commands: every line they print is one of a fixed list

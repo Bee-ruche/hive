@@ -39,15 +39,16 @@ the public state of the projects this repository lists says of the hive, in numb
 (an issue template with its numbers filled from health, printed for a project's architect, who posts it or not: the
 hive posts nothing).
 
-Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit. Each is told the
-project by its repository (--project owner/name, as the user's prompt names it) and reads the project's settings and
-tasks from the project's own address, on its default branch (hive_project). Each first checks that the clone's own git
-settings are plain (plain_clone), then runs git so that no setting of the repository starts a program. What a command
-decides on comes from outside the clone: the fork's address is worked out from the login and the project's settings
-(own_fork), a task is started on the commit the project's own address announces (project_tip) and only once the work
-tree, read as files, is shown to hold that commit's files and nothing else (work_tree_proof), an ask carries no file
-and no history, and a candidate is pushed only once the commits and folders it rests on, read as bytes this file
-hashes itself, show that it starts from the project's history and changes only the task's files (candidate_proof).
+Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit, release. Each is
+told the project by its repository (--project owner/name, as the user's prompt names it) and reads the project's
+settings and tasks from the project's own address, on its default branch (hive_project). Each first checks that the
+clone's own git settings are plain (plain_clone), then runs git so that no setting of the repository starts a program.
+What a command decides on comes from outside the clone: the fork's address is worked out from the login and the
+project's settings (own_fork), a task is started on the commit the project's own address announces (project_tip) and
+only once the work tree, read as files, is shown to hold that commit's files and nothing else (work_tree_proof), an ask
+and a release carry no file and no history, and a candidate is pushed only once the commits and folders it rests on,
+read as bytes this file hashes itself, show that it starts from the project's history and changes only the task's
+files (candidate_proof).
 Every line they print on the standard output is one of these, and nothing else; what follows a keyword is a value this
 file checked or a sentence of its own, never a text of the feed or of the fork:
 
@@ -71,15 +72,17 @@ file checked or a sentence of its own, never a text of the feed or of the fork:
   REMOVED <n> <sentence>          start: what an earlier run left, ignored or untracked, is removed
   STARTED <branch> at <commit>    start: the clone is on the task's branch, at the project's tip, and its work tree
                                   holds that commit's files and nothing else
-  THEN: <sentence>                next, start, ready, submit: what to do after this command
+  THEN: <sentence>                next, start, ready, submit, release: what to do after this command
   ASKED <commit>                  ready: the ask is pushed to the fork
   WITHDRAWN                       ready --withdraw: the ask is taken back
+  RELEASED <commit>               release: the deal is given back (pushed to the fork); the hive's next run ends it
   REFUSED (<reason>): <sentence> <details as JSON>
                                   submit: a structural rule is broken: nothing was committed or pushed (the details
                                   are numbers, and paths that the project's own commit holds)
   PUSHED <commit>                 submit: the candidate is made, marked and pushed to the fork: it is with the hive,
                                   whatever the line after it adds about this clone
-  NOT-PUSHED <commit>: <sentence> ready, submit with --no-push: nothing was pushed; the same command without it pushes
+  NOT-PUSHED <commit>: <sentence> ready, submit, release with --no-push: nothing was pushed; the same command without
+                                  it pushes
 
 An error is one line on the standard error, « hive: <sentence> », with exit code 2 (1 after REFUSED). « hive: STOP:
 <sentence> », exit code 3, says the clone is not plain, or holds an object that is not what its name says, or that
@@ -131,7 +134,7 @@ LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 REPO_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9._-]{1,100}\Z")
 HEAD_REF = re.compile(r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}\Z")  # an identifier, never a sentence
-MARKER_LINE = re.compile(r"(Hive-Task|Hive-Action|Hive-Member|Hive-Model|Hive-Tier|Hive-Deal|Hive-Prefer): (.{1,200})\Z")
+MARKER_LINE = re.compile(r"(Hive-Task|Hive-Action|Hive-Member|Hive-Model|Hive-Tier|Hive-Deal|Hive-Prefer|Hive-Because): (.{1,200})\Z")
 METRIC = re.compile(r"[a-z][a-z0-9_]{0,59}\Z")
 PROOF = "sure_"  # how a proof is named: sure_<measure>, 1 when the judge saw the gain beyond its noise, else 0
 ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
@@ -159,9 +162,25 @@ HIVE_SIDE_REASONS = ("not_answered", "task_closed")  # the hive's or the project
 # what it is on any task. A hive at an older commit reads the same line as the ordinary refusal it also is.
 ANSWER_REASONS = ("goal_not_met",)
 PROBE_ANSWERS_MOST = 5  # the most answers a probe may ask (its « answers », 1 by default)
-ACTIONS = ("ready", "submit")
+# A RELEASE: a member gives back the deal it holds, before its time is up, for one of these reasons, each a code of this
+# file's own and nothing the member wrote: the task is out of its reach (an honest try, checked as the task's check
+# allows, showed that it cannot do it: the goal, the tests, the task's files), or this machine cannot run the project's
+# sandbox. The plan ends such a deal at once (plan, step 1), with the line of a deal whose time ran out, plus
+# « released »: the code, and « release »: the release's commit id. It costs its member the first wait, each time, as a
+# candidate the judge refused does (Ledger.standing), never the wait that doubles. Given back early, the deal ends hours
+# before one left to run out would, and its wait is never longer than that one's (the same first wait, never doubled):
+# honesty is the cheaper way. And never shorter than a judged refusal's: giving back is no cheaper way out, nor a
+# cheaper way to choose one's tasks, than a candidate pushed for the purpose. The worker's tool gives nothing back once
+# the deal's time is up (cmd_release). Its member held the task in vain, and the deal counts in the day's limit and in
+# the class, as every deal that did not end in an acceptance. A probe is no task one gives back as out of reach: a
+# correct try of the thing it names is its answer. A hive at an older commit reads no release (an action it does not
+# know is no marker), and the deal runs out as it always did; and a line that says « released » is, for it, the expiry
+# it also is.
+RELEASES = ("out_of_reach", "cannot_run")
+RELEASE_BRANCH = "hive/release/{task}"
+ACTIONS = ("ready", "submit", "release")
 # A ruling's marker (read_ruling): a guardian's, in the guardian's own fork. It is no member's marker: read_marker knows
-# two actions, and a commit that says « admit » is an ask or a candidate for nobody.
+# no « admit », and a commit that says « admit » is an ask, a candidate or a release for nobody.
 ADMIT = "admit"
 RULING_LINE = re.compile(r"(Hive-Task|Hive-Action|Hive-Member|Hive-Commit|Hive-Waive): (.{1,200})\Z")
 BOUND = re.compile(r"-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,9})?\Z")  # a bound as a ruling writes it: a plain decimal number
@@ -983,6 +1002,7 @@ class Ledger:
 
       deal      the hive dealt a task to a member                          once per task and run
       expired   a deal's member had no candidate when its time was up      once per task and run
+                (or its task was closed, or its member gave it back: « released », RELEASES)
       verdict   a candidate was answered (accepted or refused)             once per commit
       error     a run spent on a candidate without an answer (a « mark »)  once per commit and run
       intent    the hive is about to push this integration                 before each push
@@ -1134,6 +1154,11 @@ class Ledger:
             gain at all, and the figure reached may be one a candidate can flatter: so it is still a deal that did not
             end in an acceptance, it cost a judgement, and it counts in the day's limit, which is the bound on the
             judge's time an account can take, and in the member's class;
+          - a deal its member gave back (a release, RELEASES): the first wait, each time, as a judged refusal. A
+            member that finds a task out of its reach and says so at once costs the hive no judgement, frees the
+            task for others hours earlier, and is free itself as much sooner: its wait is never longer than for a
+            deal it lets run out (never doubled), and never shorter than for a candidate the judge refused, so that
+            giving back is no cheaper way out than a candidate pushed for the purpose;
           - a deal held for nothing (no candidate in time, or a candidate refused before the judge could examine
             it): the same wait, doubled at each such deal in a row, until an acceptance.
           What the hive's own side caused (a task closed meanwhile, a candidate it could not answer, a fork it could
@@ -1158,7 +1183,7 @@ class Ledger:
             elif e.get("type") == "verdict" and e.get("result") == "accepted":
                 accepted.add((e.get("task"), e.get("deal")))
             if e.get("type") == "expired":
-                ends.append((e["at"], "fault" if e.get("fault") else "penalty"))
+                ends.append((e["at"], "fault" if e.get("fault") else "released" if e.get("released") in RELEASES else "penalty"))
             elif e.get("type") == "verdict" and e.get("deal"):
                 ends.append((e["at"], "answer" if probe_answer(e) is not None
                              else "accepted" if e.get("result") == "accepted" else "judged" if e.get("reason") in JUDGED_REASONS
@@ -1170,7 +1195,7 @@ class Ledger:
                 streak, judged = 0, None
             elif kind == "penalty":
                 streak, last = streak + 1, at
-            elif kind == "judged":
+            elif kind in ("judged", "released"):  # (a release costs what a judged refusal costs: RELEASES)
                 judged = at
         waits = []
         if streak:
@@ -1201,9 +1226,9 @@ class Ledger:
 
     def held_in_vain(self, member_id):
         """The tasks a member was dealt and did not complete, by an ending that was its own: a candidate refused, or
-        a deal left without one. What the hive's or the project's side caused (HIVE_SIDE_REASONS, an expiry at no
-        fault of the member's) is not held against the task: the member's work on it was not what failed. A task
-        it completed is done and is dealt to nobody."""
+        a deal left without one (its time ran out, or the member gave it back). What the hive's or the project's side
+        caused (HIVE_SIDE_REASONS, an expiry at no fault of the member's) is not held against the task: the member's
+        work on it was not what failed. A task it completed is done and is dealt to nobody."""
         vain = set()
         for e in self.events:
             if e.get("member_id") != member_id:
@@ -1363,10 +1388,14 @@ def read_marker(message):
           + « Hive-Prefer: <file> », the part of the project its member prefers): deal me a task.
       « Hive-Action: submit » + « Hive-Task: <id> » + « Hive-Deal: <the deal's instant> » + « Hive-Member: <login> »
           (+ « Hive-Model: <identifier> »): a candidate for the task the hive dealt to this member, in that deal.
+      « Hive-Action: release » + « Hive-Task: <id> » + « Hive-Deal: <the deal's instant> » + « Hive-Member: <login> »
+          + « Hive-Because: <one of RELEASES> »: the member gives that deal back (RELEASES; plan, step 1).
     The member is the account the commit is for: it counts only in that account's own fork.
     « prefer » is what an ask's line says, as the fork wrote it and unchecked: an ask that names a part nobody knows
     is still an ask, and the one use of the value is its comparison with the project's own strings (discover). On
-    a submit the line means nothing: the marker stands as it would without it, and « prefer » is None."""
+    a submit or a release the line means nothing: the marker stands as it would without it, and « prefer » is None.
+    « because » is a release's code: one of RELEASES, or the release is no marker. On an ask or a candidate the line
+    means nothing, and « because » is None; so do a tier and a model on a release."""
     found = {}
     for line in message.split("\n"):
         m = MARKER_LINE.match(line.rstrip("\r"))
@@ -1377,14 +1406,18 @@ def read_marker(message):
     task, action, member = found.get("Hive-Task"), found.get("Hive-Action"), found.get("Hive-Member")
     if not (action in ACTIONS and member and LOGIN.match(member)):
         return None
-    if action == "submit" and not (task and TASK_ID.match(task) and stamp(found.get("Hive-Deal"))):
+    if action in ("submit", "release") and not (task and TASK_ID.match(task) and stamp(found.get("Hive-Deal"))):
+        return None
+    if action == "release" and found.get("Hive-Because") not in RELEASES:
         return None
     if action == "ready" and (task is not None or "Hive-Deal" in found or found.get("Hive-Tier", "3") not in ("1", "2", "3")):
         return None
     model = found.get("Hive-Model")
-    return {"task": task, "action": action, "member": member, "model": model if model and MODEL.match(model) else None,
+    return {"task": task, "action": action, "member": member,
+            "model": model if model and MODEL.match(model) and action != "release" else None,
             "tier": int(found.get("Hive-Tier", "3")) if action == "ready" else None, "deal": found.get("Hive-Deal"),
-            "prefer": found.get("Hive-Prefer") if action == "ready" else None}
+            "prefer": found.get("Hive-Prefer") if action == "ready" else None,
+            "because": found["Hive-Because"] if action == "release" else None}
 
 
 def read_ruling(message):
@@ -2132,7 +2165,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 elif member:
                     found.append({"sha": sha, "repo_id": fork["repo_id"], "login": fork["login"], "member_id": fork["id"],
                                   "task": marker["task"], "action": marker["action"], "model": marker["model"],
-                                  "tier": marker["tier"], "deal": marker["deal"],
+                                  "tier": marker["tier"], "deal": marker["deal"], "because": marker["because"],
                                   "prefer": next((part for part in parts if part == marker["prefer"]), None)})
                 # (An ask or a candidate in a fork read for its owner's rulings alone: nothing, and not remembered,
                 # so that it is read on the day the project reads that fork for a member.)
@@ -2406,8 +2439,9 @@ def check_cover(plan_, config, tasks, read, counted):
     held by a live deal, and the deals the plan says are over hold none. So a step first holds each of those
     against the ledger and the project's settings, as far as they tell: it is a deal the ledger holds as live, of that
     account and that instant, and either its time is up at the plan's instant (its end and the project's grace are
-    past) or its task is no longer open (closed, listed no more, or done). What the plan step alone read stays the
-    plan's word: that the member's fork, read whole, held no candidate for a deal whose time is up.
+    past), or its task is no longer open (closed, listed no more, or done), or its member gave it back (« released »).
+    What the plan step alone read stays the plan's word: that the member's fork, read whole, held no candidate for a
+    deal whose time is up, and that it held a release for a deal given back.
 
     Then the accounts the plan deals to, the deals it keeps for after the judging included, that are not active
     are new members: with the members that are active, they are no more than the base covers. A plan that frees a
@@ -2422,7 +2456,7 @@ def check_cover(plan_, config, tasks, read, counted):
         if not (deal and deal["state"] == "live" and deal["member_id"] == expiry["member_id"] and deal["at"] == expiry["deal"]):
             raise HiveError("the plan says a deal is over that the ledger does not hold as live: nothing is written")
         still_open = task is not None and not task.get("closed") and expiry["task"] not in done
-        if still_open and instant <= parse_iso(deal["until"]) + dt.timedelta(hours=config["grace_hours"]):
+        if still_open and "released" not in expiry and instant <= parse_iso(deal["until"]) + dt.timedelta(hours=config["grace_hours"]):
             raise HiveError("the plan says a deal is over whose time is not up, on a task that is open: nothing is written")
     active = active_members(counted, instant, config)
     new = {deal["member_id"] for deal in (*plan_["deals"], *plan_["conditional"])} - active
@@ -2447,6 +2481,14 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        read, nothing is decided; a day later the deal expires at no cost to its member. A deal on a task the
        project closed meanwhile ends at once, at no cost either. An expired deal is over: what its member pushes
        for it afterwards is not a candidate.
+       A deal its member GIVES BACK ends at once, whatever time it has left: a release (read_marker) in the member's
+       fork, for the task and the deal it holds, when the fork holds no candidate for that deal (a candidate is
+       answered, and the release is spent: it changes nothing). It is that same line, plus « released »: the
+       release's code (RELEASES), and « release »: its commit id. A release read while the deal is live counts, as a
+       candidate does (its grace included, and whenever the run comes: the worker's tool gives nothing back once
+       the deal's time is up, and a release pushed otherwise costs no less than a candidate the judge refused). A
+       release of another deal, of a deal that is over or of someone else's, and one that gives a probe back as out
+       of reach, is nothing, and is not read again; so is every release once read.
     2. Candidates. A submit for task T in member M's fork is a candidate if M holds T's live deal, the submit names
        that deal, and T is open. Of several, one stands (a draw). Every other submit is ignored for good: it costs
        the hive nothing. They are judged oldest deal first; after them those a run already failed on, and last
@@ -2512,18 +2554,24 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     key = secrets.token_hex(16)
     deals, done, models, rivals = ledger.deals(), ledger.done(), set(config["models"]), rivals_of(tasks)
 
-    submits, asks, rulings = {}, {}, []
+    submits, asks, rulings, releases = {}, {}, [], {}
     for entry in sorted(entries, key=lambda e: e["sha"]):
         deal = deals.get(entry["task"])
         if entry["action"] == ADMIT:
             rulings.append(entry)  # a guardian's ruling: neither a candidate nor an ask (below, once the deals whose time is up are known)
-        elif entry["action"] == "submit" and not (deal and deal["member_id"] == entry["member_id"] and deal["at"] == entry["deal"]
-                                                  and deal["state"] == "live"):
-            # Not the task's holder, or not for the deal it holds, or for a deal that is over: not a candidate, and
-            # never read again.
+        elif entry["action"] in ("submit", "release") and not (deal and deal["member_id"] == entry["member_id"] and deal["at"] == entry["deal"]
+                                                               and deal["state"] == "live"):
+            # Not the task's holder, or not for the deal it holds, or for a deal that is over: neither a candidate nor
+            # a release, and never read again.
             ignored[str(entry["repo_id"])].append(entry["sha"])
         elif entry["action"] == "submit":
             submits.setdefault((entry["member_id"], entry["task"]), []).append(entry)
+        elif entry["action"] == "release" and entry["because"] == "out_of_reach" and tasks.get(entry["task"], {}).get("kind") == "probe":
+            # A probe is not given back as out of its member's reach: a correct try of the thing it names is its
+            # answer. No release, and never read again: the deal goes on as it would without it.
+            ignored[str(entry["repo_id"])].append(entry["sha"])
+        elif entry["action"] == "release":
+            releases.setdefault((entry["member_id"], entry["task"]), []).append(entry)
         else:
             asks.setdefault(entry["member_id"], []).append(entry)
 
@@ -2533,8 +2581,11 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     def free(task_id):
         return task_id not in deals or deals[task_id]["state"] == "closed"
 
-    # 1. deals whose time is up
+    # 1. deals whose time is up, and deals given back
     expiries = []
+    for (member_id, task_id), group in sorted(releases.items()):
+        for entry in group:
+            ignored[str(entry["repo_id"])].append(entry["sha"])  # a release is read once, whatever comes of it (below)
     for task_id, deal in sorted(deals.items()):
         if deal["state"] != "live":
             continue
@@ -2542,6 +2593,14 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
             expiries.append({"task": task_id, "member_id": deal["member_id"], "deal": deal["at"], "fault": True})
             continue
         if (deal["member_id"], task_id) in submits:
+            continue  # a candidate is answered: a release of the same deal is spent, and changes nothing
+        given = releases.get((deal["member_id"], task_id))
+        if given:
+            # The member gives the deal back: it ends now, whatever time it has left, or the grace (RELEASES). Of two
+            # releases of one deal, the draw takes one, as it takes one candidate of several.
+            given.sort(key=lambda e: draw(key, e["sha"]))
+            expiries.append({"task": task_id, "member_id": deal["member_id"], "deal": deal["at"], "fault": False,
+                             "released": given[0]["because"], "release": given[0]["sha"]})
             continue
         over = parse_iso(deal["until"]) + dt.timedelta(hours=config["grace_hours"])
         if instant <= over:
@@ -2553,7 +2612,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     for expiry in expiries:
         deals[expiry["task"]]["state"] = "closed"
     # What this plan decides counts in this plan: a member whose deal has just expired waits from now on.
-    ledger.append([{"type": "expired", "at": iso(instant), "run": key, **expiry} for expiry in expiries], write=False)
+    ledger.append([expired_line(expiry, iso(instant), key) for expiry in expiries], write=False)
 
     # 2. candidates: the holder's, and nobody else's
     queue, rank = [], {}
@@ -2925,8 +2984,10 @@ def read_plan(plan_, config):
                 and all(c.get(k) is None or (isinstance(c[k], list) and all(is_sha(x) for x in c[k])) for k in ("after", "asks"))
                 and ("prefer" not in c or prefer_ok(c["prefer"])))
 
-    def expiry_ok(c):
-        return member_ok(c) and stamp(c.get("deal")) and type(c.get("fault")) is bool
+    def expiry_ok(c):  # a deal whose time is up, or that its member gave back (a release's code and commit, never at the hive's fault)
+        return (member_ok(c) and stamp(c.get("deal")) and type(c.get("fault")) is bool
+                and ("released" not in c or (c["released"] in RELEASES and c["fault"] is False and is_sha(c.get("release"))))
+                and ("release" not in c or "released" in c))
 
     ledger_ok = isinstance(plan_, dict) and isinstance(plan_.get("ledger"), dict) and type(plan_["ledger"].get("lines")) is int \
         and plan_["ledger"]["lines"] >= 0 and isinstance(plan_["ledger"].get("sha256"), str)
@@ -2961,9 +3022,16 @@ def as_the_plan_counted(ledger, plan_, expiries=True):
     counted = ledger.first(plan_["ledger"]["lines"])
     counted.append(settle(counted, parse_iso(plan_["at"]), plan_["landed"]), write=False)
     if expiries:
-        counted.append([{"type": "expired", "at": plan_["at"], "run": plan_["key"], "task": e["task"], "member_id": e["member_id"],
-                         "deal": e["deal"], "fault": e["fault"]} for e in plan_["expiries"]], write=False)
+        counted.append([expired_line(e, plan_["at"], plan_["key"]) for e in plan_["expiries"]], write=False)
     return counted
+
+
+def expired_line(expiry, at, run):
+    """The ledger line of a deal the plan found over: its time was up, its task was closed, or its member gave it back
+    (« released »: the release's code, RELEASES; « release »: the release's commit id, which anyone can look up in the
+    member's public fork). Every field is one the plan's own form holds (read_plan)."""
+    return {"type": "expired", "at": at, "run": run, "task": expiry["task"], "member_id": expiry["member_id"], "deal": expiry["deal"],
+            "fault": expiry["fault"], **({"released": expiry["released"], "release": expiry["release"]} if "released" in expiry else {})}
 
 
 def same_ledger(ledger, plan_):
@@ -3643,8 +3711,7 @@ def deal_lines(deals, key, config, tasks):
 
 def expired_lines(plan_):
     """The ledger lines of the deals the plan found over (once per task and run, whichever step writes them)."""
-    return [{"type": "expired", "at": iso(now()), "run": plan_["key"], "task": e["task"], "member_id": e["member_id"],
-             "deal": e["deal"], "fault": e["fault"]} for e in plan_["expiries"]]
+    return [expired_line(e, iso(now()), plan_["key"]) for e in plan_["expiries"]]
 
 
 def record(plan_, config, tasks, ledger, state_folder):
@@ -3825,7 +3892,10 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
     (cover_of): how many members are active, for how many days an acceptance keeps one so, how many its guardians cover
     (none where the project sets no bound), whether a new member is dealt a task now, and the active members under
     the same hash of their logins: whole numbers, a yes or a no, and hashes. A probe's answers (probe_answer) are
-    counted apart from its refusals, and raise no hint: a probe lists how many answers it asks and how many it has."""
+    counted apart from its refusals, and raise no hint: a probe lists how many answers it asks and how many it has.
+    « releases » lists the codes of a release this run reads (RELEASES): a run at a commit before releases writes no
+    such key, and a worker's tool then gives nothing back (cmd_release). A task's releases are not in the feed: what a
+    worker reads of a task is the judge's word on its candidates, never another member's that it could not do it."""
     instant = now()
     done, refusals, deals, proven = ledger.done(), {}, ledger.deals(), ledger.accepted_members()
     refused_members, answers = {}, {}
@@ -3878,7 +3948,7 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
             "generated_at": iso(instant), "tip": tip, "check": config.get("check", ""),
             "min_account_age_days": config["members"]["min_account_age_days"],
             "deals_per_day": config["members"]["deals_per_day"], "deals": held, "wait": waits, "tasks": listed,
-            "members": base}
+            "members": base, "releases": list(RELEASES)}
 
 
 def build_stats(ledger):
@@ -3949,6 +4019,9 @@ def tally_line(entry):
     line["deal"] = instant_text(entry.get("deal"))
     if entry["type"] == "expired":
         line["fault"] = entry.get("fault") is True  # the hive's or the project's doing: at no cost to the member
+        # A deal its member gave back: the release's code (RELEASES); None for a deal whose time ran out, and for any
+        # other value. A line at the hive's fault is no release, whatever it says.
+        line["released"] = entry.get("released") if not line["fault"] and entry.get("released") in RELEASES else None
     elif entry["type"] == "error":
         kind = entry.get("kind", "judge")
         line["kind"] = kind if isinstance(kind, str) and kind in ERROR_KINDS else None
@@ -3984,7 +4057,9 @@ def tally(tasks, lines, instant, active=None, taken=None):
     account with an acceptance counts as one that could still answer a probe.
 
     For each task: its status as the feed gives it; how many deals it had and how many members held it; how many of
-    those deals ran out at their member's cost (`expired`) and at nobody's (`expired_free`); its acceptances; its
+    those deals ran out at their member's cost (`expired`) and at nobody's (`expired_free`); how many its members gave
+    back (`released`), by the release's code (`released_for`), and of them how many by a member with an acceptance on
+    the project before it (`released_established`; the others are `released` less these); its acceptances; its
     refusals by reason; the runs spent on its candidates without an answer (`errors`, by kind); how many members failed
     on it among those the judge accepted something from (`established_failures`); the best value its candidates reached
     of the figure its goal is on, beside the goal's own bound (`best`); and the hours from the deal to its acceptance.
@@ -3998,7 +4073,9 @@ def tally(tasks, lines, instant, active=None, taken=None):
     complete it, and it would stay open for ever; on a project's first day, before any acceptance, every probe is.
 
     A task is STUCK when STUCK_MEMBERS distinct members, each with a candidate accepted on the project, failed on it:
-    the judge examined their candidate and refused it (FAILING_REASONS), or their deal on it ran out at their cost.
+    the judge examined their candidate and refused it (FAILING_REASONS), their deal on it ran out at their cost, or
+    they gave it back as out of their reach. A deal given back because the member's machine cannot run the project's
+    sandbox (cannot_run) says nothing of the task, and is no failure on it.
     Only members the judge has accepted something from are counted, as for the feed's hint, and a failure counts only
     when it came after its member's first acceptance: an account that never had an acceptance makes no task stuck,
     however often it fails or lets a deal run out, nor does one that failed first and earned an acceptance later, so
@@ -4026,8 +4103,8 @@ def tally(tasks, lines, instant, active=None, taken=None):
                          "kind": task.get("kind", "work") if task.get("kind", "work") in TASK_KINDS else None,
                          "parent": task["parent"] if isinstance(task.get("parent"), str) and TASK_ID.match(task["parent"]) else None,
                          "deals": 0, "members": 0,
-                         "expired": 0, "expired_free": 0, "accepted": 0, "refused": {}, "errors": {},
-                         "established_failures": 0, "hours_to_accept": None,
+                         "expired": 0, "expired_free": 0, "released": 0, "released_for": {}, "released_established": 0,
+                         "accepted": 0, "refused": {}, "errors": {}, "established_failures": 0, "hours_to_accept": None,
                          "best": {"figure": figure, "value": None, bound: goal[bound]} if figure and bound else None}
         if rows[task_id]["kind"] == "probe":  # what was found, even nothing: each answer's figures, and by whom, in numbers
             rows[task_id].update(answers_asked=answers_asked(task), answers=[], answered_by=0, answered_by_established=0)
@@ -4044,7 +4121,17 @@ def tally(tasks, lines, instant, active=None, taken=None):
         deal = latest.get(line["task"])
         if line["type"] in ("expired", "verdict") and deal and deal["member_id"] == line["member_id"] and deal["at"] == line["deal"]:
             deal["live"] = False  # as Ledger.deals: an expiry or a verdict on its candidate closes a deal
-        if line["type"] == "expired":
+        if line["type"] == "expired" and line.get("released"):
+            # A deal its member gave back: counted apart from those that ran out, by its code, and by whether its
+            # member had an acceptance on the project before it. Out of reach, it is a failure on the task, as a deal
+            # left to run out is; a machine that cannot run the project's sandbox says nothing of the task.
+            code, member = line["released"], line["member_id"]
+            row["released"] += 1
+            row["released_for"][code] = row["released_for"].get(code, 0) + 1
+            row["released_established"] += member in first and first[member] < line["at"]
+            if code == "out_of_reach":
+                failed[line["task"]][member] = line["at"]
+        elif line["type"] == "expired":
             row["expired_free" if line["fault"] else "expired"] += 1
             if not line["fault"]:
                 failed[line["task"]][line["member_id"]] = line["at"]
@@ -5725,9 +5812,9 @@ ID_CHARS = 64  # the longest project name or task id health prints
 # nothing that makes git write elsewhere (a trace) or run something else.
 ANONYMOUS_KEPT = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "HIVE_NOW", "SSL_CERT_FILE", "SSL_CERT_DIR")
 ANONYMOUS_PROXIES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")  # (in either letter case)
-HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free")  # a project's numbers that add up
-HEALTH_TABLES = ("tasks", "refused", "errors")  # a project's counts by status, by reason and by kind, which add up name by name
-GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired", "answered")  # what is counted of the tasks of one kind, or of one size
+HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free", "released")  # a project's numbers that add up
+HEALTH_TABLES = ("tasks", "refused", "errors", "released_for")  # a project's counts by status, by reason, by kind and by code, which add up name by name
+GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired", "answered", "out_of_reach")  # what is counted of the tasks of one kind, or of one size
 TEMPLATES_FOLDER = ".github/ISSUE_TEMPLATE"
 REPORT_TEMPLATES = {"error": "judge-or-machine-error.md", "optimisation": "hive-optimisation.md", "cutter": "cutter-feedback.md"}
 NUMBERS_START, NUMBERS_END = "<!-- numbers -->", "<!-- end of numbers -->"  # the part of a template that « report » fills
@@ -5835,10 +5922,12 @@ def acceptance(group):
     """The share of acceptances among a group's endings by its members' doing, counted by answer: each candidate the
     hive answered, accepted or refused (a refusal the protocol puts on the hive's or the project's side,
     HIVE_SIDE_REASONS, left out; judge_failed and push_refused, which it charges to the candidate, counted), and each
-    deal run out at its member's cost. A candidate a guardian admitted after its refusal is one answer more. None
-    while there was none. A probe's answer is no ending here (neither accepted nor refused): the group counts its
-    answers apart (`answered`), and its acceptance is the share it measures, of what was meant to be accepted."""
-    ended = group["accepted"] + group["refused"] + group["expired"]
+    deal run out at its member's cost or given back by it as out of its reach (`out_of_reach`: a deal given back because
+    a machine cannot run the project's sandbox says nothing of the task, and is left out). A candidate a guardian
+    admitted after its refusal is one answer more. None while there was none. A probe's answer is no ending here
+    (neither accepted nor refused): the group counts its answers apart (`answered`), and its acceptance is the share
+    it measures, of what was meant to be accepted."""
+    ended = group["accepted"] + group["refused"] + group["expired"] + group["out_of_reach"]
     return round(group["accepted"] / ended, 3) if ended else None
 
 
@@ -5863,21 +5952,23 @@ def project_health(repository, config, tallied, published, state):
 def tally_sums(tallied):
     """What one project's tally (tally) adds up to, for « health » and for the project's page (tools/hive/page.py): its
     tasks by status, what is left to do and can be dealt now, the stuck tasks, whether it starves; its deals,
-    acceptances, refusals by reason, and deals run out at the member's cost or at nobody's; the ledger's `error` marks
-    by kind and the tasks they fell on; and by kind and by size of task: how many tasks, their deals, their
-    acceptances, their refusals for the candidate's doing (those for the hive's or the project's doing aside:
-    HIVE_SIDE_REASONS), their deals run out at the member's cost. The hours to accept are the tally's, one for each task
-    accepted after a deal, in order. Numbers, codes and the project's task ids alone."""
+    acceptances, refusals by reason, deals run out at the member's cost or at nobody's, and deals given back (by the
+    release's code, `released_for`); the ledger's `error` marks by kind and the tasks they fell on; and by kind and by
+    size of task: how many tasks, their deals, their acceptances, their refusals for the candidate's doing (those for
+    the hive's or the project's doing aside: HIVE_SIDE_REASONS), their deals run out at the member's cost, and their
+    deals given back as out of reach (`out_of_reach`). The hours to accept are the tally's, one for each task accepted
+    after a deal, in order. Numbers, codes and the project's task ids alone."""
     summary = {"tasks": {status: 0 for status in ("open", "dealt", "done", "closed")}, "left": tallied["left"],
                "dealable": tallied["dealable"], "areas": tallied["areas"], "starving": tallied["starving"], "stuck": list(tallied["stuck"]),
                "short_of_members": list(tallied["short_of_members"]),
-               "deals": 0, "accepted": 0, "refused": {}, "expired": 0, "expired_free": 0, "errors": {}, "errors_on": [],
+               "deals": 0, "accepted": 0, "refused": {}, "expired": 0, "expired_free": 0, "released": 0, "released_for": {}, "errors": {},
+               "errors_on": [],
                "by_kind": {}, "by_size": {}, "hours_to_accept": []}
     for task_id, row in sorted(tallied["tasks"].items()):
         summary["tasks"][row["status"]] += 1
-        for key in ("deals", "accepted", "expired", "expired_free"):
+        for key in ("deals", "accepted", "expired", "expired_free", "released"):
             summary[key] += row[key]
-        for table, counts in (("refused", row["refused"]), ("errors", row["errors"])):
+        for table, counts in (("refused", row["refused"]), ("errors", row["errors"]), ("released_for", row["released_for"])):
             for name, count in counts.items():
                 summary[table][name] = summary[table].get(name, 0) + count
         if row["errors"]:
@@ -5888,7 +5979,8 @@ def tally_sums(tallied):
         for table, name in (("by_kind", row["kind"]), ("by_size", row["size"])):
             group = summary[table].setdefault(name or NO_WORD, dict.fromkeys(GROUP_SUMS, 0))
             for key, count in (("tasks", 1), ("deals", row["deals"]), ("accepted", row["accepted"]), ("refused", refused), ("expired", row["expired"]),
-                               ("answered", len(row.get("answers", ())))):
+                               ("answered", len(row.get("answers", ()))),
+                               ("out_of_reach", row["released_for"].get("out_of_reach", 0))):
                 group[key] += count
     summary["hours_to_accept"].sort()
     return summary
@@ -6006,7 +6098,7 @@ def report_cell(value):
     if isinstance(value, list):
         return ", ".join(report_cell(item) for item in value) or "-"
     if isinstance(value, dict):
-        ended = value["accepted"] + value["refused"] + value["expired"]
+        ended = value["accepted"] + value["refused"] + value["expired"] + value["out_of_reach"]
         return f"{value['acceptance']} ({value['accepted']} of {ended})" if ended else "-"
     return safe_text(value, 100).replace("|", "?")
 
@@ -6036,13 +6128,15 @@ def report_rows(template, summaries):
                 ("refused, push_refused", count("refused", "push_refused")),
                 ("refused, not_answered", count("refused", "not_answered")),
                 ("deals run out at nobody's cost", plain("expired_free")),
+                ("deals given back: the member's machine cannot run the project's sandbox", count("released_for", "cannot_run")),
                 ("deals", plain("deals")),
                 ("published commit read", plain("published")),
                 ("hive-state commit read", plain("state"))]
     if template == "optimisation":
         reasons = sorted({reason for s in summaries for reason in s["refused"]})
         return [("active members, as each project counts its own", plain("active_members")), ("deals", plain("deals")), ("accepted", plain("accepted")),
-                ("deals run out at the member's cost", plain("expired")), *by_kind, *by_size,
+                ("deals run out at the member's cost", plain("expired")),
+                ("deals given back as out of reach", count("released_for", "out_of_reach")), *by_kind, *by_size,
                 ("tasks accepted after a deal", lambda s: len(s["hours_to_accept"])),
                 ("median hours to accept", plain("median_hours_to_accept")),
                 ("longest hours to accept", lambda s: s["hours_to_accept"][-1] if s["hours_to_accept"] else None),
@@ -6102,7 +6196,7 @@ def cmd_report(args):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Volunteer side: setup, next, start, ready, submit, at the root of the clone of the volunteer's own fork
+# Volunteer side: setup, next, start, ready, submit, release, at the root of the clone of the volunteer's own fork
 #
 # What a worker believes:
 #   - this file and the protocol's tree it runs from (the user's copy of Bee-ruche/hive): the hive's own code.
@@ -6113,8 +6207,9 @@ def cmd_report(args):
 #   - the hive's state (--state, a clone of the project's branch hive-state): believed for what the hive did for THIS
 #     member and for nothing else: the task it dealt it and until when, its wait, whether its candidate was seen and
 #     its ask used, whether it is one of the project's active members where the project's trusted base has all the
-#     members it covers (base_full), and whole numbers (how often a task was refused, how many members the base
-#     covers). Every other fact comes from the project's settings, and no text of the state is printed;
+#     members it covers (base_full), which codes of a release the run reads (releases_in_feed), and whole numbers (how
+#     often a task was refused, how many members the base covers). Every other fact comes from the project's
+#     settings, and no text of the state is printed;
 #   - the fork's work tree and its .git folder: not trusted once project code ran there, even in the sandbox (which
 #     may leave the repository writable). So each command first checks that the clone's own git settings are the
 #     ones a clone has (plain_clone), runs git on the folders it names with every program a setting could start
@@ -7695,6 +7790,22 @@ def pushed_candidate(clone, url, task, deal_at):
     return bool(marker) and marker["action"] == "submit" and marker["task"] == task and marker["deal"] == deal_at
 
 
+def releases_in_feed(feed):
+    """The codes of a release (RELEASES) the project's own run reads, as its feed lists them (build_feed): those of
+    this file's own list that it names, and no other. A run at a commit before releases lists none: nothing is given
+    back to it, and nothing the fork holds is taken for a release by the worker's tool either."""
+    listed = feed.get("releases")
+    return tuple(code for code in RELEASES if isinstance(listed, list) and code in listed)
+
+
+def pushed_release(clone, url, task, deal_at):
+    """True if the fork holds, at the task's release branch, a release of this deal (cmd_release): the deal is given
+    back, and the hive's next run ends it."""
+    tip = fork_tip(clone, url, RELEASE_BRANCH.format(task=task))
+    marker = read_marker(tip[1]) if tip else None
+    return bool(marker) and marker["action"] == "release" and marker["task"] == task and marker["deal"] == deal_at
+
+
 def waiting_ask(clone, url, login, state):
     """The instant of the ask this member's fork holds and the hive has yet to answer, or None. The ask is the tip
     of the fork's asking branch. The hive keeps, in its state, the tips it will not read again; an ask is used
@@ -7725,12 +7836,13 @@ def cmd_next(args):
       TASK <id>        the hive dealt it this task (then DEAL, UNTIL, the task's data, CHECK, THEN)
       ASK              it holds no task and no ask is waiting: « ready » asks the hive for one
       ASK-UNANSWERED   its ask has waited ASK_PATIENCE_HOURS: the user's to look at
-      WAIT             nothing to do in this run, for one of nine reasons, each with its own sentence:
+      WAIT             nothing to do in this run, for one of ten reasons, each with its own sentence:
                        the project is paused; no feed yet; a feed this tool does not read; the wait after a deal
                        that ended without an accepted candidate; a project whose trusted base has the members it
                        covers, for an account that is not one of them (base_full); an ask the hive has not
-                       answered yet; a candidate pushed and not answered yet; a task the project's tasks do not list
-                       as open; too little left of the deal to start.
+                       answered yet; a candidate pushed and not answered yet; a deal given back (cmd_release) that
+                       the hive has not read yet, where its run reads releases; a task the project's tasks do not
+                       list as open; too little left of the deal to start.
     A feed that names another repository than the project's is another project's state: the command ends in one line
     that says to clone this project's own, and believes nothing of it."""
     if not LOGIN.match(args.login):
@@ -7782,6 +7894,8 @@ def cmd_next(args):
     left = (parse_iso(deal["until"]) - now()).total_seconds() / 3600
     if deal.get("candidate") is True or pushed_candidate(clone, fork, deal["task"], deal["at"]):
         print("WAIT: your candidate is pushed and the hive has not answered it yet")
+    elif releases_in_feed(feed) and pushed_release(clone, fork, deal["task"], deal["at"]):
+        print("WAIT: you gave this deal back and the hive has not read it yet: its next run ends the deal")
     elif task is None or task.get("closed"):
         print("WAIT: the hive dealt you a task that the project's tasks do not list as open")
     elif left < WORK_MARGIN_HOURS:
@@ -8389,6 +8503,76 @@ NOT_KEPT = (" This clone's own branch could not be moved to the candidate, which
             "this task.")
 
 
+def cmd_release(args):
+    """Volunteer side: gives back the deal this member holds (RELEASES), and pushes the release itself. A commit of its
+    own, as an ask is: no file, no parent, made in a store of this tool's own (own_store) and pushed (forced) to the
+    fork's branch for that task's releases (RELEASE_BRANCH), so that nothing the clone holds goes with it. Its message
+    names the task, the deal, the member and one code of this file's own list, which --because chooses: nothing else,
+    and nothing the worker wrote. The hive's next run ends the deal (plan, step 1); its member then waits what a
+    refused candidate costs.
+
+    Nothing is made or pushed, and the command ends in one line that says why, unless: the task is one of the
+    project's, and open; the project's own run reads releases of this code, as its feed shows (releases_in_feed: a run
+    at an older commit of the hive reads none, and the deal runs out as it always did); the feed shows this member
+    holding the deal of this task at this instant, and its time is not up (a deal is given back early, or runs out);
+    the fork holds no candidate for it (a candidate is answered, and a release would change nothing); and the task is
+    no probe given back as out of reach (a correct try of what it names is its answer). The state is believed for that
+    and nothing else: the codes, and this member's deal."""
+    if not LOGIN.match(args.login):
+        raise HiveError("--login: your GitHub login")
+    clone = plain_clone()
+    fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    config, tasks = hive_project(clone, args.project, args.upstream_url)
+    task = tasks.get(args.task)
+    if task is None:
+        raise HiveError(f"task {safe_text(args.task, 40)} is not in the project's tasks")
+    if task.get("closed"):
+        raise HiveError(f"task {task['id']} is closed: the hive ends its deal at no cost to you, and there is nothing to give back")
+    if not instant(args.deal):
+        raise HiveError("--deal: the instant 'next' printed after DEAL")
+    status, feed = read_untrusted(Path(args.state) / "feed.json", STATE_BYTES)
+    if status != "ok" or not isinstance(feed, dict) or type(feed.get("protocol")) is not int or feed["protocol"] != PROTOCOL:
+        raise HiveError("the hive's feed is missing, or is not one this tool reads: nothing was pushed. Run hive.py next, and do what it says")
+    if not (isinstance(feed.get("repo"), str) and feed["repo"].casefold() == config["repo"].casefold()):
+        raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: nothing was pushed. Clone the "
+                        f"state of this project (the branch hive-state of https://github.com/{config['repo']}) into a folder of its own, and give that folder")
+    if args.because not in releases_in_feed(feed):
+        raise HiveError("the project's hive does not read a deal given back yet (its run is at an older commit of the hive): nothing was "
+                        "pushed. Stop without submitting, as the worker's guide says: the deal runs out by itself")
+    deal, _ = my_deal(feed, login)
+    if deal is None or deal["task"] != task["id"] or deal["at"] != args.deal:
+        raise HiveError(f"the hive's feed shows no deal of yours for task {task['id']} at that instant: nothing was pushed (a deal that is "
+                        "over, or someone else's, has nothing to give back)")
+    if parse_iso(deal["until"]) <= now():
+        # A deal is given back while it is the member's: given back early, the task is free for others hours sooner. Once
+        # its time is up there is nothing left to give, and the deal runs out by itself, at what that costs.
+        raise HiveError(f"your deal ended at {deal['until']}: there is nothing left to give back, and it runs out by itself. Nothing was pushed")
+    if args.because == "out_of_reach" and task.get("kind") == "probe":
+        raise HiveError(f"task {task['id']} is a probe: a correct try of what it names is its answer, short of its goal or not, and it is "
+                        "submitted. A probe is not given back as out of reach: nothing was pushed")
+    if deal.get("candidate") is True or pushed_candidate(clone, fork, task["id"], args.deal):
+        raise HiveError("your candidate for this deal is pushed: the hive answers it, and giving the deal back would change nothing. "
+                        "Nothing was pushed")
+    released = now()  # (the instant makes each release a new commit)
+    lines = [f"Hive release: {task['id']} ({iso(released)})", "", f"Hive-Task: {task['id']}", "Hive-Action: release",
+             f"Hive-Deal: {args.deal}", f"Hive-Member: {login}", f"Hive-Because: {args.because}"]
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+        store = own_store(clone, folder)
+        commit = store.commit(EMPTY_TREE, None, "\n".join(lines) + "\n", clone.identity(login, released))
+        if args.no_push:
+            print(f"NOT-PUSHED {commit}: the release is made and nothing was pushed; run the same command again without --no-push to "
+                  "make the release anew and push it")
+            return
+        push(store, fork, commit, RELEASE_BRANCH.format(task=task["id"]))
+    print(f"RELEASED {commit}")
+    if args.because == "cannot_run":
+        print("THEN: stop here, and ask for no task: this machine cannot run the project's sandbox. The hive ends the deal at its next "
+              "run (about an hour). Tell the user, and ask again only from a machine that runs it")
+    else:
+        print(f"THEN: stop here. The hive ends the deal at its next run (about an hour), then deals you nothing for {config['backoff_hours']} "
+              "hour(s), as after a refused candidate. Once that wait is over, the next run of this worker asks again (next says ASK)")
+
+
 # Guardian side: admit, at the root of the clone of the guardian's own fork. A guardian is an account the project's
 # file names; the command is a worker's command in everything it believes and checks (the project's settings, the command line,
 # a plain clone, the fork's address worked out from the login), and it decides nothing: whether the ruling stands is
@@ -8648,6 +8832,16 @@ def main(argv=None):
     p.add_argument("--message", help="one plain line that says what you changed (the work commit's title)")
     p.add_argument("--model", help="your model's identifier, if the project lists it; leave it out if you are not sure")
     p.set_defaults(run=cmd_submit)
+    p = sub.add_parser("release", help="volunteer: give back the deal you hold, when the task is out of your reach or this machine cannot "
+                                       "run the project's sandbox (pushes the release to your fork)")
+    worker_side(p, pushes=True)
+    p.add_argument("--state", required=True, help="a clone of the project's branch hive-state (the hive's state for it)")
+    p.add_argument("--task", required=True)
+    p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
+    p.add_argument("--because", required=True, choices=RELEASES, help="out_of_reach: an honest try, checked as the task's check allows, "
+                                                                    "showed that you cannot do it; cannot_run: this machine cannot run the "
+                                                                    "project's sandbox")
+    p.set_defaults(run=cmd_release)
     p = sub.add_parser("admit", help="guardian: admit one commit the hive refused for a figure the project lets its guardians waive "
                                      "(pushes the ruling to your fork)")
     worker_side(p, pushes=True)

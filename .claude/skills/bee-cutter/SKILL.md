@@ -165,7 +165,9 @@ writes its `goal`, whatever the published lines do.
 - **One file, many tasks**: tasks on one file are dealt one after another. Fill `short` with tasks worth doing, not
   merely to reach the number; what can wait goes to the backlog.
 - **Size from outcomes**: the tally gives each done task's `hours_to_accept` and each task's refusals. Tasks that
-  are refused often, or whose deals run out, were too large; tasks accepted at once may be a little larger.
+  are refused often, whose deals run out, or that members give back as out of reach (`released_for`), were too
+  large or their goal too far; tasks accepted at once may be a little larger. A deal given back because a machine
+  cannot run the sandbox (`cannot_run`) says nothing of the task: many of them are for the architect.
 - **Probes** (`"kind": "probe"`, docs/cutter.md, "Probes"): for an idea whose worth is unknown and cheap to try,
   cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its
@@ -174,8 +176,8 @@ writes its `goal`, whatever the published lines do.
   that very change: a figure the charter gives for it, or one the tally holds on the goal's own figure for the task's
   own files (an accepted task's report, a probe's answer). Likeness alone (« the same change gained 1.4 % in the
   file beside it »), or a published goal's bounds changed with no such measure, is a guess; the half `hive cut` takes
-  off a stuck task's goal is not. A worker that falls short of a `work` task's goal submits nothing, its member
-  holds the task until the deal runs out and waits after it, and nothing is recorded. Cut the probe instead, its
+  off a stuck task's goal is not. A worker that falls short of a `work` task's goal submits nothing: it gives the
+  deal back, its member waits, and the ledger holds that it was given back, with no figure. Cut the probe instead, its
   goal at the least the project takes on that figure: `cutter.floors`, or, without one, the least step the charter
   names. With neither, do not cut the idea: name it to the architect in your report. A try that reaches the probe's
   goal is integrated as a task's would be.

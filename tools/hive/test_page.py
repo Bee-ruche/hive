@@ -2661,7 +2661,7 @@ class TestAttention(Case):
         seen = self.harmless(files)
         attention = self.summary(files)["attention"]
         self.assertEqual(attention["stuck"], [{"task": "toy-0001", "title": "Make f0 faster", "failures": 3,
-                                               "refused": [{"reason": "judge_refused", "count": 3}], "expired": 0}])
+                                               "refused": [{"reason": "judge_refused", "count": 3}], "expired": 0, "released": 0}])
         self.assertEqual((attention["left"], attention["open"], attention["dealable"], attention["areas"], attention["starving"]), (2, 2, 2, 2, False))
         self.assertIn("Tasks that need attention", seen.said)
         self.assertIn("Members who failed", seen.said)
@@ -2722,7 +2722,7 @@ class TestAttention(Case):
         files = self.make("--tasks", self.tasks(self.TASKS))
         seen = self.harmless(files)
         attention = self.summary(files)["attention"]
-        self.assertEqual(attention["often"], [{"task": "toy-0002", "title": "Work in src", "times": 3, "expired": 1,
+        self.assertEqual(attention["often"], [{"task": "toy-0002", "title": "Work in src", "times": 3, "expired": 1, "released": 0,
                                                "refused": [{"reason": "judge_refused", "count": 1}, {"reason": "path_outside_task", "count": 1}]}],
                          "toy-0001 is stuck (listed above); toy-0003, refused twice, is done")
         self.assertEqual((attention["often_least"], attention["often_left_out"]), (page.OFTEN, 0))
@@ -2730,7 +2730,7 @@ class TestAttention(Case):
                                                {"kind": "unknown", "count": 1}], "by kind, a line without one being the judge's")
         self.assertEqual((attention["errors_on"], attention["errors_on_left_out"]), (["toy-0001", "toy-0002", "toy-0005"], 0))
         self.assertIn("Refused or run out 2 times or more", seen.said)
-        self.assertEqual(seen.row("toy-0002 Work in src"), ["toy-0002 Work in src", "3", "judge_refused (1), path_outside_task (1)", "1"])
+        self.assertEqual(seen.row("toy-0002 Work in src"), ["toy-0002 Work in src", "3", "judge_refused (1), path_outside_task (1)", "1", "0"])
         self.assertIn("judge (2): the judge failed on the candidate; push (1): ", seen.said)
         self.assertIn("On the tasks toy-0001, toy-0002, toy-0005.", seen.said)
         self.assertNotIn("login", json.dumps(attention), "no member is named")
@@ -2738,6 +2738,27 @@ class TestAttention(Case):
         said = self.harmless(self.make("--tasks", self.tasks(self.TASKS))).said
         self.assertIn("No other task left to do was refused or ran out that often.", said)
         self.assertIn("None: every run that took a candidate gave it an answer.", said)
+
+    def test_deals_given_back_as_out_of_reach_count_beside_those_that_ran_out_and_those_for_a_machine_do_not(self):
+        """A deal given back as out of reach (a release, hive.RELEASES) is shown beside the deals that ran out, for the
+        stuck tasks and for those that ended often; one given back because a machine cannot run the project's sandbox
+        says nothing of the task, and is not counted there."""
+        def given(n, task, because):
+            return {"type": "expired", "at": f"2026-11-11T1{n}:30:00Z", "task": task, "member_id": 80 + n, "deal": f"2026-11-11T1{n}:00:00Z",
+                    "fault": False, "released": because}
+        lines = self.lines() + [given(0, "toy-0002", "out_of_reach"), given(1, "toy-0002", "out_of_reach"), given(2, "toy-0002", "cannot_run"),
+                                given(3, "toy-0003", "cannot_run"), given(4, "toy-0003", "cannot_run"), given(5, "toy-0001", "out_of_reach")]
+        self.ledger(lines)
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        seen = self.harmless(files)
+        attention = self.summary(files)["attention"]
+        self.assertEqual(attention["often"], [{"task": "toy-0002", "title": "Work in src", "times": 2, "expired": 0, "released": 2, "refused": []}],
+                         "toy-0003, given back twice for want of a machine, is not among them")
+        self.assertEqual([(item["task"], item["released"], item["expired"]) for item in attention["stuck"]], [("toy-0001", 1, 0)])
+        self.assertEqual(seen.row("toy-0002 Work in src"), ["toy-0002 Work in src", "2", "none", "0", "2"])
+        self.assertIn("Given back as out of reach", seen.said)
+        self.assertIn("or they gave it back as out of their reach", seen.said)
 
     def test_each_list_is_bounded_and_counts_the_rest(self):
         tasks = [{"id": f"toy-{n:04d}", "title": f"T{n}", "files": [f"f{n}.c"]} for n in range(1, 41)]

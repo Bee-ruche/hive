@@ -425,10 +425,13 @@ def attention(tallied, titles):
     named.
 
       stuck        the tasks that are stuck, each with how many members accepted elsewhere failed on it, its refusals
-                   by reason and the deals on it that ran out at their member's cost
+                   by reason, the deals on it that ran out at their member's cost, and those its members gave back as
+                   out of their reach (`released`; one given back because a machine cannot run the project's sandbox
+                   says nothing of the task, and is not counted here)
       often        the other tasks left to do (open or dealt) whose candidates were refused, or whose deals ran out at
-                   their member's cost, OFTEN times or more in all (`times`), whoever the members: their refusals by
-                   reason, those the hive's or the project's side caused (HIVE_SIDE) left out, and their deals run out
+                   their member's cost or were given back as out of reach, OFTEN times or more in all (`times`), whoever
+                   the members: their refusals by reason, those the hive's or the project's side caused (HIVE_SIDE) left
+                   out, their deals run out, and those given back
       errors       the ledger's « error » marks by kind (a run spent on a candidate without an answer), in the order of
                    ERROR_WORDS, and the tasks they fell on (errors_on)
       left, open, dealable, areas, starving
@@ -438,13 +441,16 @@ def attention(tallied, titles):
     Each list keeps ATTENTION_SHOWN rows, the first by its own order, and counts the rest (<list>_left_out)."""
     rows, sums = tallied["tasks"], hive.tally_sums(tallied)
     stuck = [{"task": task_id, "title": titles.get(task_id, ""), "failures": rows[task_id]["established_failures"],
-              "refused": reasons(rows[task_id]["refused"]), "expired": rows[task_id]["expired"]} for task_id in tallied["stuck"]]
+              "refused": reasons(rows[task_id]["refused"]), "expired": rows[task_id]["expired"],
+              "released": rows[task_id]["released_for"].get("out_of_reach", 0)} for task_id in tallied["stuck"]]
     often, stuck_ids = [], set(tallied["stuck"])
     for task_id, row in sorted(rows.items()):
         refused = {reason: count for reason, count in row["refused"].items() if reason not in HIVE_SIDE}
-        times = sum(refused.values()) + row["expired"]
+        released = row["released_for"].get("out_of_reach", 0)
+        times = sum(refused.values()) + row["expired"] + released
         if row["status"] in ("open", "dealt") and task_id not in stuck_ids and times >= OFTEN:
-            often.append({"task": task_id, "title": titles.get(task_id, ""), "times": times, "refused": reasons(refused), "expired": row["expired"]})
+            often.append({"task": task_id, "title": titles.get(task_id, ""), "times": times, "refused": reasons(refused), "expired": row["expired"],
+                          "released": released})
     often.sort(key=lambda item: -item["times"])  # (a stable sort: then by id)
     return {"stuck": stuck[:ATTENTION_SHOWN], "stuck_left_out": max(0, len(stuck) - ATTENTION_SHOWN), "stuck_members": tallied["stuck_members"],
             "often": often[:ATTENTION_SHOWN], "often_left_out": max(0, len(often) - ATTENTION_SHOWN), "often_least": OFTEN,
@@ -1335,24 +1341,28 @@ def attention_block(attention):
                             tile("Dealable now", attention["dealable"], "no task sharing a file is dealt"),
                             tile("Separate areas", attention["areas"], "at least this many tasks can be held at once")], class_="tiles"))
     if attention["stuck"]:
-        rows = [[task_cell(item), item["failures"], reasons_cell(item["refused"]), item["expired"]] for item in attention["stuck"]]
-        block.append(table([("Task", False), ("Members who failed", True), ("Refusals by reason", False), ("Deals that ran out", True)], rows))
+        rows = [[task_cell(item), item["failures"], reasons_cell(item["refused"]), item["expired"], item["released"]] for item in attention["stuck"]]
+        block.append(table([("Task", False), ("Members who failed", True), ("Refusals by reason", False), ("Deals that ran out", True),
+                            ("Given back as out of reach", True)], rows))
     else:
         block.append(el("p", "No task is stuck.", class_="soft"))
     block.append(el("p", f"A task is stuck when {attention['stuck_members']} different members, each with a contribution accepted on "
-                         "the project, failed on it: the judge examined their candidate and refused it, or their deal ran out. "
+                         "the project, failed on it: the judge examined their candidate and refused it, their deal ran out, or "
+                         "they gave it back as out of their reach. "
                          "Such a task is to be cut again into smaller ones. No member is named."
                          + left_out(attention["stuck_left_out"], "Stuck tasks"), class_="note"))
     least = attention["often_least"]
     block.append(el("p", el("strong", f"Refused or run out {least} times or more")))
     if attention["often"]:
-        rows = [[task_cell(item), item["times"], reasons_cell(item["refused"]), item["expired"]] for item in attention["often"]]
-        block.append(table([("Task", False), ("Times", True), ("Refusals by reason", False), ("Deals that ran out", True)], rows))
+        rows = [[task_cell(item), item["times"], reasons_cell(item["refused"]), item["expired"], item["released"]] for item in attention["often"]]
+        block.append(table([("Task", False), ("Times", True), ("Refusals by reason", False), ("Deals that ran out", True),
+                            ("Given back as out of reach", True)], rows))
     else:
         block.append(el("p", "No other task left to do was refused or ran out that often.", class_="soft"))
-    block.append(el("p", f"The tasks left to do, stuck ones aside, whose candidates were refused or whose deals ran out at their member's "
-                         f"cost {least} times or more in all, whoever the members, the most first. What the hive or the project ended at no "
-                         "cost to the member is not counted. No member is named." + left_out(attention["often_left_out"], "Tasks"), class_="note"))
+    block.append(el("p", f"The tasks left to do, stuck ones aside, whose candidates were refused, or whose deals ran out at their member's "
+                         f"cost or were given back as out of reach, {least} times or more in all, whoever the members, the most first. "
+                         "What the hive or the project ended at no cost to the member is not counted. No member is named."
+                         + left_out(attention["often_left_out"], "Tasks"), class_="note"))
     block.append(el("p", el("strong", "Runs spent without an answer")))
     if attention["errors"]:
         last = attention["errors"][-1]

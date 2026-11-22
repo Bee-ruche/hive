@@ -55,7 +55,7 @@ What those who split work for others have learnt, for people and for AI agents, 
 | Piece | What it does | What it is | State |
 | --- | --- | --- | --- |
 | The architect | Writes the project's charter: its goal, what counts as progress, its directions and priorities, the lowest goal a task may set (the floor), and what it asks of volunteers | the project's lead | exists; tooling planned |
-| The tally | Counts, from the ledger and the tasks alone: deals, expiries, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
+| The tally | Counts, from the ledger and the tasks alone: deals, expiries, deals given back, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
 | The deterministic cutter | Applies the rules: closes a stuck task and cuts it again with a lower goal where the project's floors allow, publishes the architect's planned tasks once their prerequisites are done, up to the project's target of open tasks, and says what it could not do | code of the hive | built (`hive.py cut`) |
 | The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new tasks and goals | the architect's own agent, trusted | its guide is built (`.claude/skills/bee-cutter/`); it proposes, the gate decides |
 | The gate (`cut-check`) | Passes or refuses every proposed change of the tasks, the AI's included; nothing overrides it | code of the hive | built (`hive.py cut-check`) |
@@ -91,12 +91,11 @@ The rules that keep the ledger's history true:
 
 ## Probes
 
-A `work` task bets on a threshold: « do this idea, gain at least X ». When the bet is wrong, nothing is learnt: a
-worker that cannot reach the goal stops without submitting, and the deal runs out with no line but its expiry. The
-member holds the task until then and waits after it, as after any deal that ends without an accepted candidate; each
-run of its worker that finds the deal with an hour left starts the same task again; and the task stays open. A
-**probe** (`"kind": "probe"`) asks one named thing to be tried without knowing whether it helps, and records what was
-found, even nothing.
+A `work` task bets on a threshold: « do this idea, gain at least X ». When the bet is wrong, little is learnt: a
+worker that cannot reach the goal gives the deal back as out of its reach ("Deals given back", below), its member
+waits as after a judged refusal, and the task is open again, with a line that says it was given back and no figure:
+what the worker measured is its own word, and the ledger holds none. A **probe** (`"kind": "probe"`) asks one named
+thing to be tried without knowing whether it helps, and records what the judge measured, even nothing.
 
 - **Its line** is a task's: a title and a context that name the one thing to try, the files, and a goal on a figure
   (`metric`), held to the same rules as any goal, the project's floors included. It may say how many `answers` it
@@ -152,6 +151,30 @@ found, even nothing.
 - `hunt` (a divergence from a reference, an input that breaks a change) is not built: the hive checks the word and
   reads nothing of it.
 
+## Deals given back
+
+A worker that finds its task out of its reach, after an honest try checked as the task's check allows, gives the
+deal back (`hive.py release`, [protocol.md](protocol.md), "What a worker pushes"), and so does one whose machine
+cannot run the project's sandbox. The deal ends at the next run, the task is free for others, and the ledger's line is
+the deal's `expired` line with `released` (`out_of_reach` or `cannot_run`) and the release's commit id. A code alone:
+why the worker could not, and what it measured, are its own words, and the ledger holds none.
+
+- **What the tally gives**, for each task: `released` (how many deals were given back), `released_for` (by code), and
+  `released_established` (of them, those by a member with an acceptance on the project before it; the others are
+  `released` less these). A deal given back is not counted under `expired`. `health` adds them up, by code too, and
+  counts a deal given back as out of reach as an ending in the acceptance share of a kind or size of task; one given
+  back for want of a machine, which says nothing of the task, is left out of it.
+- **Stuck**: a deal given back as out of reach by a member with an acceptance before it counts as a deal left to run
+  out does ("The loop"). One given back because a machine cannot run the sandbox says nothing of the task, and
+  counts for nothing there: many of them say the project's sandbox is hard to run, which is for the architect.
+- **How to read it.** Given back as out of reach by established members, a task's goal is likely beyond what the
+  idea gives, or the task too large for a deal: cut it smaller, or turn the idea into a probe ("Probes"), whose
+  answer records the judge's figures. One release from one member is weak evidence, as one short answer is.
+- **A probe is never given back as out of reach**: its answer is a correct try, which the worker submits. It may be
+  given back because the machine cannot run the sandbox.
+- **The pin.** A hive at an older commit reads no release: the worker's tool then gives nothing back, and the deal runs
+  out as before.
+
 ## The backlog and the charter
 
 Two files of the project's repository, under `hive/` on the branch it publishes, which no contribution may change
@@ -202,9 +225,10 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
    apart, judged the tip as a candidate for it and saw it fail ("The proof at the tip"): the cutter runs nothing of the
    project, and waits for that answer.
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** were
-     refused on it, or let a deal on it run out: the rule of the feed's `hint`. A refusal or an expiry from an
-     account that never had an acceptance never counts, so throwaway accounts cannot make a task stuck, and a
-     `not_proven` refusal (the judge's stopwatch could not give a proof) is not a failure.
+     refused on it, let a deal on it run out, or gave a deal on it back as out of their reach: the rule of the feed's
+     `hint`. A refusal, an expiry or a release from an account that never had an acceptance never counts, so
+     throwaway accounts cannot make a task stuck; a `not_proven` refusal (the judge's stopwatch could not give a
+     proof) is not a failure, nor is a deal given back because a machine cannot run the project's sandbox.
      A project with fewer than three members who ever had a candidate accepted never has a stuck
      task: its architect closes one by hand.
    - The project is **starving** when nothing is left to do, open or dealt. That is an alarm for the architect:
@@ -424,19 +448,20 @@ hive reads; it is sent nothing, and it posts nothing for anyone.
   It adds up what the tally says of each project (above) and prints JSON. For each project: the two commits it read;
   its tasks by status; what is left to do, what can be dealt now and in how many separate areas; the stuck tasks, by
   id; whether it starves, whether it is paused; how many members are active (each project counts its own: an
-  account active in two projects is two in the totals); its deals, acceptances, refusals by
-  reason, and deals run out at the member's cost or at nobody's; the ledger's `error` marks by kind (`judge`: the
+  account active in two projects is two in the totals); its deals, acceptances, refusals by reason, deals run out at
+  the member's cost or at nobody's, and deals given back, by code; the ledger's `error` marks by kind (`judge`: the
   judge did not answer; `hive`: the hive's machine; `push`: the project's repository declined the commit; `none`: the
   judge started and gave no answer in the run) and the tasks they fell on; acceptance by kind and by size of task;
   the hours from a deal to its acceptance, and their median. Acceptance is counted by answer: of the candidates
-  answered and the deals run out at the member's cost, the share accepted. A refusal the protocol puts on the hive's
-  or the project's side (`not_answered`, `task_closed`) is left out; `judge_failed` and `push_refused`, which it
-  charges to the candidate, count; a candidate a guardian admitted after its refusal is one answer more. Then the
-  totals, each the sum of the projects', and the projects it could not read, each with a code: among them a project
-  whose name or a task's id is longer than 64 characters, whose file names more than 1000 accounts as its members or
-  banned, or whose tasks name more than 2000 entries in their files (what the tally costs grows with the square of
-  those, or with the accounts named times the members). It keeps only what the tally keeps of a ledger line: no login, no
-  account number, no candidate's commit, no text a volunteer wrote. Later, what the gate refused.
+  answered, the deals run out at the member's cost and the deals given back as out of reach, the share accepted. A
+  refusal the protocol puts on the hive's or the project's side (`not_answered`, `task_closed`) is left out;
+  `judge_failed` and `push_refused`, which it charges to the candidate, count; a candidate a guardian admitted after
+  its refusal is one answer more. Then the totals, each the sum of the projects', and the projects it could not read,
+  each with a code: among them a project whose name or a task's id is longer than 64 characters, whose file names
+  more than 1000 accounts as its members or banned, or whose tasks name more than 2000 entries in their files (what
+  the tally costs grows with the square of those, or with the accounts named times the members). It keeps only what
+  the tally keeps of a ledger line: no login, no account number, no candidate's commit, no text a volunteer wrote.
+  Later, what the gate refused.
 - **What numbers do not say comes from the architect, by hand: `hive.py report`.** Three issue templates in this
   repository (`.github/ISSUE_TEMPLATE/`): a judge or machine error, an optimisation of the hive, feedback on the
   cutter. `hive.py report --template error|optimisation|cutter [--project <owner/name>]` prints one of them with its
