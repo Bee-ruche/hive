@@ -762,6 +762,11 @@ class TestTheJudgeInContainers(Base):
                     code, report, err = self.judge(candidate, tip=tip)
                     self.assertEqual((code, report["step"]), (2, step), err)
                     self.assertIn(said, report["reason"])
+                    # the project's own builds and runs in steps 2 and 3: on the tip's side; a tree it cannot read, and
+                    # anything from step 4 on: said as before
+                    tips_own = name in ("broken-reference", "broken-skeleton", "driver-fails", "driver-writes")
+                    self.assertEqual(("on the tip's side (not the candidate's)" in report["reason"], report.get("fault")),
+                                     (tips_own, "tip" if tips_own else None), report["reason"])
         # the task and the manifest must agree; the bounds must fit the time a judgement is given
         for options, said in (({"unit": "lower"}, "names no unit"), ({"files": ["port/"]}, "not exactly its unit's files"),
                               ({"files": ["port/upper.c", "port/squeeze.c"]}, "not exactly its unit's files"), ({"budget": 700}, "add up to 830 s")):
@@ -825,6 +830,11 @@ class TestTheJudgeInContainers(Base):
         self.assertEqual(judge(base, write_tree(trees / "more", {"port/upper.c": UPPER, "port/squeeze.c": SQUEEZE}), task, "T" * 40, "F" * 40), {"code": 1, "report": {}})
         self.assertEqual(judge(base, base, task, "T" * 40, "T" * 40), {"code": 0, "report": {"cases_compared": 0, "builds": 0, "runs": 0}})
         self.assertEqual(judge(base, base, {**task, "files": ["port/"]}, "T" * 40, "T" * 40)["code"], 2, "a task that is not its unit's files")
+        # the project's own reference that does not build: on the tip's side, as the hive's call carries it, for a candidate and for the tip
+        broken = write_tree(trees / "broken", {"reference/original.c": "#error broken\n"})
+        self.assertEqual(judge(broken, write_tree(trees / "right-on-broken", {"port/upper.c": UPPER}, source=broken), task, "T" * 40, "G" * 40),
+                         {"code": 2, "report": {}, "fault": "tip"})
+        self.assertEqual(judge(broken, broken, task, "T" * 40, "T" * 40), {"code": 2, "report": {}, "fault": "tip"})
 
 
     def test_the_image_for_rust_holds_its_compiler_and_its_linker(self):
