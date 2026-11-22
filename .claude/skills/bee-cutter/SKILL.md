@@ -126,9 +126,9 @@ writes its `goal`, whatever the published lines do.
   allows it, so that several volunteers can work at once (`areas` in the tally).
 - `goal`: a shape the project already uses. Copy a published goal on the same figures and change only its bounds;
   a goal on a figure holds the same proof (`sure_…`, `min` 1) as the published ones. Never a figure the project's
-  `judge.metrics` does not list, never below `cutter.floors`. A bound taken from no figure of the tally is a guess,
-  and makes the task a probe ("Probes", below). A goal « correct » (the judge's tests pass) goes to
-  the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now, and
+  `judge.metrics` does not list, never below `cutter.floors`. The bound of a goal on a figure, when no measure
+  gives it, is a guess, and makes the task a probe ("Probes", below). A goal « correct » (the judge's tests pass)
+  has no bound and is never a probe; it goes to the backlog, never to the proposal: only a run of the judge at the tip can show that the project fails it now, and
   you cannot run it. The project's own run asks its judge (docs/cutter.md, "The proof at the tip"), and the `hive cut`
   of a later cycle publishes the task once the judge showed it to fail there. Never pass `--failing` yourself: it is
   the architect's word, for a project whose judge cannot answer (the common kind) or for a run they made by hand.
@@ -169,14 +169,21 @@ writes its `goal`, whatever the published lines do.
   cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its
   answer: the judge's figures, recorded, at no cost to the member.
-  **A threshold you would have to guess makes the task a probe.** A `work` task's bound comes from a figure the
-  tally holds for that kind of change on this project (an accepted task's report, a probe's answer). Likeness alone
-  (« the same change gained 1.4 % in the file beside it ») is a guess: a worker that falls short of a `work` task's
-  goal submits nothing, its member holds the task until the deal runs out and waits after it, and nothing is
-  recorded. Cut the probe instead, its goal at the least the project takes (`cutter.floors`, or the charter's least
-  step): a try that reaches it is integrated as a task's would be. Where the tally does give a threshold, write the
-  `work` task: a short answer costs a judgement and integrates nothing, costs its member nothing, and ends the probe
-  for that member. Ask `"answers": 2` or `3` when one answer
+  **A threshold you would have to guess makes the task a probe.** A `work` task's bound comes from a measure of
+  that very change: a figure the charter gives for it, or one the tally holds on the goal's own figure for the task's
+  own files (an accepted task's report, a probe's answer). Likeness alone (« the same change gained 1.4 % in the
+  file beside it »), or a published goal's bounds changed with no such measure, is a guess; the half `hive cut` takes
+  off a stuck task's goal is not. A worker that falls short of a `work` task's goal submits nothing, its member
+  holds the task until the deal runs out and waits after it, and nothing is recorded. Cut the probe instead, its
+  goal at the least the project takes on that figure: `cutter.floors`, or, without one, the least step the charter
+  names. With neither, do not cut the idea: name it to the architect in your report. A try that reaches the probe's
+  goal is integrated as a task's would be.
+  When no probe may be cut (the tally shows no task done, or the architect has not said the caller's commit holds
+  probes), or when the open tasks would be probes alone: write the idea as a `work` task with its goal at that same
+  least, and say in your report that its threshold is a guess.
+  Where such a measure does give a threshold, write the `work` task, not a probe: a probe's short answer costs a
+  judgement and integrates nothing, and ends the probe for that member, who is never dealt it again.
+  Ask `"answers": 2` or `3` when one answer
   would not be enough to close a direction (5 at most), never more than the project has established members (members
   with an accepted task). A probe is dealt to them alone, and only their answers complete it: cut no probe while the
   tally shows no task done, and never leave a project with probes alone open, which deals nothing.
