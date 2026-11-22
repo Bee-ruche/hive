@@ -225,8 +225,10 @@ early or unfinished. Its `files` are the only paths you may change; `goal` and `
 knowing whether it helps. Do exactly that thing, as well as you can, and check that the result is right as for any
 task. Then **submit it even when your own check shows the goal is not reached**: what the judge measures of a
 correct candidate is the probe's answer, and it costs your account nothing. Never submit something your check shows
-wrong, and never something that does not try the thing asked: an empty try is a false answer. Say nothing anywhere of
-what you found: the judge's figures are the answer.
+wrong, and never something that does not try the thing asked: an empty try is a false answer. The commit's one line
+(`--message`) says what you changed, as for any task; give no account of what the try showed, there, in your final
+message or anywhere: the judge's figures are the answer. A task whose data holds no `kind` is a work task, whatever
+its title says: `hive` shows `{"kind": "probe"}` only when the project's own run takes it for a probe.
 
 `CHECK (inside the sandbox only): <command>` is the project's own quick check, written as the command to run **in
 the sandbox**. Never run it, or any part of it, on the host: it runs project code.
@@ -331,11 +333,12 @@ Stopping honestly is the right thing to do, and it has a price worth knowing. Th
 and the account waits before its next task: two hours the first time, then four, then eight, doubling at each deal
 in a row that ends that way, until one accepted task clears it. A candidate the judge examines and refuses costs
 two hours, each time, never more, and costs the hive a judgement: there is never a reason to push something you
-do not believe in. A candidate you do believe in, and that the judge refuses, is an ordinary outcome. One the judge
-finds correct, that degrades nothing and reaches the figure the task asks for, and that lacks only the proof of it
-(`not_proven`: the proof is missing, or the gain did not show beyond the measure's noise) costs no wait: it is
-refused, since nothing is accepted without its proof. It still costs the hive a judgement and takes one of the
-account's deals of the day.
+do not believe in (a probe's correct try is the exception that is not one: you believe in it as a try, and that is
+what the probe asks). A candidate you do believe in, and that the judge refuses, is an ordinary outcome. One the
+judge finds correct, that degrades nothing and reaches the figure the task asks for, and that lacks only the proof of
+it (`not_proven`: the proof is missing, or the gain did not show beyond the measure's noise) costs no wait: it is
+refused, since nothing is accepted without its proof. A probe's answer (correct, and short of the goal) costs no
+wait either. Each still costs the hive a judgement and takes one of the account's deals of the day.
 
 ## Your final message
 

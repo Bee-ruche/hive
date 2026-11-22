@@ -207,7 +207,7 @@ What ends a deal, and what it costs its member:
 | --- | --- |
 | its candidate is accepted | none; it clears any wait |
 | the judge examined its candidate and refused it (`judge_refused`, `goal_not_met`, `requirement_not_met`) | a wait of two hours, each time, never doubled: a refusal there is ordinary, on tasks that ask for a measured gain |
-| its task is a probe, and the judge found its candidate correct, within every figure the project requires, and short of the probe's goal: the probe's answer ("How a candidate is judged and integrated") | **no wait**, and no credit either: the class is left as it was, and the deal counts in the day's limit |
+| its task is a probe, and the judge found its candidate correct, within every figure the project requires, and short of the probe's goal (`goal_not_met`): the probe's answer ("How a candidate is judged and integrated") | **no wait**, and no credit either: the class is left as it was, and the deal counts in the day's limit |
 | the judge examined its candidate, found it correct, nothing degraded and the figure the task asks for reached, and only the proof of it is missing or did not come out beyond the measure's noise (`not_proven`) | **no wait**: the hive does not charge a member for what its own stopwatch could not tell. It cost the hive a judgement all the same, and it is a deal that did not end in an acceptance: it counts in the day's limit and in the member's class |
 | its candidate is refused before the judge could examine it: on a structural rule, because it does not merge or changes nothing, after three failures that are its own (`judge_failed`) or three pushes the project's repository declined (`push_refused`) | a wait that doubles |
 | its time is up and the fork holds no candidate | the same wait that doubles |
@@ -372,17 +372,22 @@ the hive runs those git commands with an empty attribute source.
   a proof leads nothing.
 - **A probe's answer is what the judge measured.** A task of the kind `probe` asks one named thing to be tried,
   without knowing whether it helps; its goal is on a figure, as a `work` task's is. A member's candidate for it that
-  the judge finds correct, within every figure the project requires, and short of the probe's goal (`goal_not_met`,
-  or `not_proven`) is the probe's **answer**:
+  the judge finds correct, within every figure the project requires, and short of the probe's goal (`goal_not_met`)
+  is the probe's **answer**. A candidate short of its proof alone (`not_proven`) reached the goal: a working idea, not
+  an answer, and on a probe it is what it is on any task (no wait, and the probe stays open). An answer:
   - Its line is the refusal's, with the judge's figures, and one number more, `probe` ("The ledger and the feed").
     Nothing is integrated.
   - It costs its member no wait and leaves its class as it was. It is no acceptance: it makes nobody active, follows
-    no preference and counts for nobody's standing. It still counts in the day's limit, so an account answers five
-    probes a day at most.
+    no preference and counts for nobody's standing. It still counts in the day's limit, so an account answers no more
+    probes in a day than the project's `members.deals_per_day` (5 by default).
   - A member who answered a probe is never dealt it again, even when it is the one task left.
-  - The probe is **done** once as many distinct members answered as it asks (`answers` on its line, 1 by default, 5 at
-    most), or once a candidate reaches its goal with its proof, which is accepted and integrated as any other. Done
-    means done for everything that reads it: no deal, the `needs` of other tasks, the feed, the tally.
+  - The probe is **done** once as many distinct **established** members answered as it asks (`answers` on its
+    line, 1 by default, 5 at most), or once a candidate reaches its goal with its proof, which is accepted and
+    integrated as any other. A member is established for an answer when a candidate of its own was accepted on the
+    project before it, as the hint and « stuck » count members. An answer from another member is recorded and shown,
+    costs it nothing, and completes nothing: an answer that tries nothing costs its author nothing, so it must not close
+    the question for everyone. On a project's first day, before any acceptance, no probe can be done. Done means done
+    for everything that reads it: no deal, the `needs` of other tasks, the feed, the tally.
   - A refusal by the judge, a figure the project requires that is not met, and everything refused before the judge
     (a change that changes nothing among them) are the refusals they are, for a probe as for any task. A ruling
     reviews a refusal for a figure the project requires: a probe's answer is none, and a ruling brings no probe an
@@ -681,9 +686,9 @@ The hive's files there:
   accepted one**, the same numbers bounded the same way: how far it fell short is what its member needs to know,
   and whoever is dealt the task next. `judge_refused` and every refusal before the judge carry none. A refusal's
   line written before this rule has no `report`; it stays valid, and whatever reads the ledger takes both. **A
-  probe's answer** ("How a candidate is judged and integrated") is such a line, refused for `goal_not_met` or
-  `not_proven`, with one number more: `probe`, how many answers the probe asks, from 1 to 5. A hive at an older
-  commit reads it as the refusal it also is.
+  probe's answer** ("How a candidate is judged and integrated") is such a line, refused for `goal_not_met`, with one
+  number more: `probe`, how many answers the probe asks, from 1 to 5. A hive at an older commit reads it as the
+  refusal it also is.
 
   A commit has one verdict as a candidate. One that a guardian admitted and the hive then accepted has a second,
   which names the ruling (`ruling`, `guardian_id`, `guardian`, `waived`: "Guardians") and is recorded once per
@@ -708,7 +713,7 @@ The hive's files there:
   `active_marks` (the active members, under the same hash of their logins): whole numbers, a yes or a no, and
   hashes. A member is found there, as in `deals` and `wait`, under the login of the line of its latest deal: one
   that changed its login since is found there again once it is dealt a task under the new one.
-- `stats.json`: candidates judged and accepted by declared model, and, for each account with accepted work, how many were accepted (what was refused is added up for a model, not for a member).
+- `stats.json`: candidates judged and accepted by declared model, and, for each account with accepted work, how many were accepted (what was refused is added up for a model, not for a member). A probe's answer is counted apart, under `answered` (where there is one), and not under `judged`: accepted over judged stays the share of candidates meant to be accepted that were. The project's page counts the same, and the hive's `health` gives each kind of task its answers apart and an acceptance share that leaves them out.
 - `ignored.json`: fork by fork, the branch tips the hive does not read again (no marker, a marker for another
   member, an ask that was used, a submit that is not a candidate, a commit shaped like a ruling in a fork whose
   owner the project does not name a guardian, under another account's name, or at another branch than its task's

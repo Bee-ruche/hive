@@ -101,14 +101,24 @@ found, even nothing.
   asks, from distinct members: 1 by default, 5 at most.
 - **Its answer** is what the judge measured on a correct candidate. A candidate that reaches the goal with its proof
   is accepted and integrated, as for a `work` task. One the judge finds correct, within the project's requirements,
-  and short of the goal is refused and not integrated, and its line is the probe's answer: the judge's figures and
-  `probe` ([protocol.md](protocol.md), "How a candidate is judged and integrated"). The member pays nothing for it
-  and earns nothing by it. A member who answered is never dealt the same probe again.
-- **It is done** once as many distinct members answered as it asks. An answered probe satisfies what `needs` it:
-  the question was answered, whichever way.
+  and short of the goal (`goal_not_met`) is refused and not integrated, and its line is the probe's answer: the
+  judge's figures and `probe` ([protocol.md](protocol.md), "How a candidate is judged and integrated"). The member
+  pays nothing for it and earns nothing by it. A member who answered is never dealt the same probe again. One short
+  of its proof alone (`not_proven`) reached the goal: no answer, and the probe stays open, as a work task would.
+- **It is done** once as many distinct **established** members answered as it asks: members with an acceptance of
+  their own on the project before their answer. Another member's answer is shown and completes nothing, so on a
+  project's first day, before any acceptance, no probe can be done: cut none then. An answered probe satisfies what
+  `needs` it, whatever was found: so do not put `needs` on a probe when the task that follows depends on what was
+  found; write that task once you have read the answer.
 - **What the cutter reads**: `hive tally` gives, for each probe, how many answers it asks, each answer (its
   instant, its reason, the judge's figures, and whether its member had an acceptance on the project before it),
-  and how many distinct members answered, of them how many had. Numbers and codes, as everything the tally gives.
+  how many distinct members answered and of them how many had, how many answers it still needs from established
+  members (`answers_needed`), and how many established members have not answered it (`answerers_left`). Numbers and
+  codes, as everything the tally gives.
+- **A probe short of members** (`short_of_members` in the tally): it still needs more answers than there are
+  established members who have not answered it, for instance two answers in a project with one member. It would stay
+  open for ever and count as left to do. The cutter closes it, and cuts it again asking fewer answers if a direction
+  is still worth trying.
 - **How to read it.** One short answer from one member is weak evidence: nobody can check that the thing was
   really tried, and a correct candidate that changes nothing the judge counts answers « nothing gained ». A
   direction is closed on several answers from established members, or on the architect's word. A later task states

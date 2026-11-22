@@ -169,12 +169,18 @@ writes its `goal`, whatever the published lines do.
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its
   answer: the judge's figures, recorded, at no cost to the member. Keep probes a minority of the open tasks: each
   costs a judgement and integrates nothing unless it reaches its goal. Ask `"answers": 2` or `3` when one answer
-  would not be enough to close a direction (5 at most). Publish probes only if the architect says the project's
-  caller names a commit of the hive that holds them: an older one reads a probe as a `work` task.
+  would not be enough to close a direction (5 at most), never more than the project has established members (members
+  with an accepted task). Only their answers complete a probe: cut no probe while the tally shows no task done.
+  Publish probes only if the architect says the project's caller names a commit of the hive that holds them: an
+  older one reads a probe as a `work` task. Put no `needs` on a probe when the task that follows depends on what the
+  probe finds: any answer satisfies a `needs`; write that task after you have read the answer.
 - **Reading a probe's answers** (the tally's `answers`, `answered_by`, `answered_by_established`): one short answer
   from one member is weak evidence, since nobody can check that the thing was really tried. Close a direction on
   several answers from established members, or on the architect's word. A later task states what was found in your
   own words with the judge's figures (« the order-4 model was tried: 0.3 % »), never anything a worker wrote.
+- **A probe short of members** (the tally's `short_of_members`): it needs more answers than there are established
+  members who have not answered it, and would stay open for ever. Close it (`"closed": true` on its published line),
+  and cut it again asking fewer answers if the direction is still worth trying.
 - What you plan beyond this cycle, or that waits for something, goes to the backlog with its `needs`, in the order
   it should come. Write the backlog you propose to `/tmp/backlog.jsonl`: the published one as it is
   (`git show <commit>:hive/backlog.jsonl`, none if it is absent), your lines after it. A line of the backlog is
