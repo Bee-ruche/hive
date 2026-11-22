@@ -160,6 +160,14 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
 
 - It reads the project's settings and tasks, the ledger through the tally (numbers and codes, which hold no text a
   fork wrote: [protocol.md](protocol.md), "The ledger and the feed"), and the architect's charter.
+- The state it reads is the folder given to `--state`, a clone of the project's branch `hive-state`. `hive tally`,
+  `hive cut` and `hive cut-check` refuse a folder that is not one, which would read as a state where nothing was
+  ever dealt. A folder is a state if it holds at least one of the state's files (`ledger.jsonl`, `feed.json`,
+  `ignored.json`, `accounts.json`, `stats.json`, `tip.json`), or if git's own `HEAD` in it names the branch
+  `hive-state`. So a project's first day is a state: the branch as its lead made it, with a README and nothing
+  else, or a state written by runs that dealt nothing yet and hold no ledger. A folder that does not exist, an
+  empty one, or the project's own clone is not; nor is a state whose feed names another project. The refusal says
+  how to take the state: `git clone --depth 1 --branch hive-state https://github.com/<owner>/<name> <folder>`.
 - It reads the project's code only through a **mechanical projection**, `hive.py outline`: the files, the
   functions, where each starts and how long it is, **with comments, strings and preprocessor lines removed**, read
   from git at the project's tip as text (nothing of the project is built or run, no link is followed). The

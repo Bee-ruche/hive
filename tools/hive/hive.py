@@ -4513,6 +4513,28 @@ def cmd_feed(args):
     write_state(state, "stats.json", build_stats(ledger))
 
 
+def cutters_state(folder, config):
+    """The folder a cutter's command was given as the project's state (tally, cut, cut-check), refused unless it is
+    one. A state is a folder that holds at least one of the state's files (STATE_FILES), or a clone of the branch
+    hive-state (git's own HEAD file names that branch): before its first run writes, a project's state holds only what
+    its lead put there. Anything else (a folder that does not exist, an empty one, the project's own clone) would read
+    as a state where nothing was ever dealt, and every task would look open. A state whose feed names another project
+    is that project's. Nothing of the folder is run: two small files are read, as data."""
+    state = Path(folder)
+    take = (f"take the project's state with: git clone --depth 1 --branch {STATE_BRANCH} https://github.com/{config['repo']} "
+            "<folder>, and give that folder")
+    if not state.is_dir():
+        raise HiveError(f"the folder given to --state does not exist: {take}")
+    status, head = read_untrusted_bytes(state / ".git" / "HEAD", 256)
+    if not any((state / name).is_file() for name in STATE_FILES) and not (status == "ok" and head.strip() == f"ref: refs/heads/{STATE_BRANCH}".encode()):
+        raise HiveError(f"the folder given to --state holds none of the state's files ({', '.join(STATE_FILES)}) and is not a clone of "
+                        f"the branch {STATE_BRANCH}: it is not the project's state; {take}")
+    status, feed = read_untrusted(state / "feed.json", STATE_BYTES)
+    if status == "ok" and isinstance(feed, dict) and isinstance(feed.get("repo"), str) and feed["repo"].casefold() != config["repo"].casefold():
+        raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: {take}")
+    return state
+
+
 def cmd_tally(args):
     """Prints the tally of the project's tasks (tally), as JSON: for its cutter (docs/cutter.md). The settings and the
     tasks are read where a run reads them, on the project's published branch at its tip; the ledger is the state's.
@@ -4520,7 +4542,7 @@ def cmd_tally(args):
     repository = repository_of(args)
     branch, commit = published_tip(args.repo, "origin")
     config, tasks = settings_on(args.repo, commit, branch, repository)
-    ledger, instant = Ledger(Path(args.state)), now()
+    ledger, instant = Ledger(cutters_state(args.state, config)), now()
     lines = [line for line in map(tally_line, ledger.events) if line is not None]
     result = tally(tasks, lines, instant, active=len(active_members(ledger, instant, config)))
     print(json.dumps({"project": config["project"], "published": commit, **result}, sort_keys=True, indent=1, ensure_ascii=True))
@@ -4717,7 +4739,7 @@ def cmd_cut_check(args):
     except (OSError, ValueError, TypeError, RecursionError) as error:
         raise HiveError(f"the proposal cannot be read ({type(error).__name__}): publish nothing of it") from None
     held = backlog_held(args, config, commit, proposal) if args.backlog else None
-    ledger = Ledger(Path(args.state))
+    ledger = Ledger(cutters_state(args.state, config))
     live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
     tip = work_tip(args.repo, config)
     paths = tip_paths(args.repo, tip)
@@ -4905,7 +4927,7 @@ def cmd_cut(args):
     config, published = settings_on(args.repo, commit, branch, repository)
     listed = blob_at(args.repo, commit, TASKS_FILE)
     backlog, unread = backlog_at(args.repo, commit, config, published)
-    ledger, instant = Ledger(Path(args.state)), now()
+    ledger, instant = Ledger(cutters_state(args.state, config)), now()
     lines = [line for line in map(tally_line, ledger.events) if line is not None]
     live, done = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}, ledger.done()
     tip = work_tip(args.repo, config)
@@ -7329,6 +7351,18 @@ def instant(value):
 def read_untrusted(path, most):
     """("ok", data), ("absent", None) or ("unreadable", None) for a JSON file of the hive's state, which a worker
     reads as it reads a stranger's: too large, not UTF-8, not JSON or nested too deep all come to « unreadable »."""
+    status, raw = read_untrusted_bytes(path, most)
+    if status != "ok":
+        return status, None
+    try:
+        return "ok", json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return "unreadable", None
+
+
+def read_untrusted_bytes(path, most):
+    """("ok", bytes), ("absent", None) or ("unreadable", None) for a file read as a stranger's: a link is not
+    followed, a file that is not a plain one or holds more than `most` bytes is « unreadable »."""
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
@@ -7350,10 +7384,7 @@ def read_untrusted(path, most):
         os.close(descriptor)
     if len(raw) > most:
         return "unreadable", None
-    try:
-        return "ok", json.loads(raw.decode("utf-8"))
-    except (ValueError, RecursionError):
-        return "unreadable", None
+    return "ok", raw
 
 
 def my_deal(feed, login):

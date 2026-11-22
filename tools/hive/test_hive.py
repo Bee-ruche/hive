@@ -473,6 +473,16 @@ class Base(unittest.TestCase):
         self.assertEqual(len(results), 1, results)
         return results[0]
 
+    def first_day(self, world=None):
+        """The world's state as a project's lead makes it, before any run: a clone of the branch hive-state that holds
+        a README (docs/hosting.md)."""
+        state = (world or self.w).state
+        state.mkdir(exist_ok=True)
+        (state / "README.md").write_text("The hive's state, as its lead made it.")
+        sh("git", "init", "--quiet", "--initial-branch", hive.STATE_BRANCH, cwd=state)
+        sh("git", "add", "README.md", cwd=state)
+        sh("git", "commit", "--quiet", "-m", "The hive's state: an empty start", cwd=state)
+
     def job(self, name, world=None):
         """A job's folder, as the workflow makes it: the protocol's tree and the state under the names the workflow
         gives them, and a clone of the project of its own (its settings published as they stand), which knows the
@@ -13488,6 +13498,73 @@ class TestTheTallyCommand(Base):
         self.assertNotIn("alice", printed, "no login")
 
 
+class TestTheCuttersState(Base):
+    """`tally`, `cut` and `cut-check` refuse a folder that is not the project's state, which would read as a state
+    where nothing was ever dealt; they take a project's first day as it is."""
+
+    def run_cutter(self, command, state):
+        """(exit code, what it printed or the one line it said) for a cutter's command given `state` as --state."""
+        self.jobs = getattr(self, "jobs", 0) + 1
+        folder = self.job(f"{command}-{self.jobs}")
+        more = {"tally": [], "cut": ["--out", str(Path(self.tmp.name) / "proposal.jsonl")],
+                "cut-check": ["--proposal", str(self.w.tasks_file)]}[command]
+        with mock.patch("sys.stderr") as said:
+            try:
+                printed, _ = self.step(folder, command, "--project", "Bee-ruche/toy", "--repo", "project", "--state", state, *more)
+                return 0, printed
+            except SystemExit as ended:
+                return ended.code, "".join(c.args[0] for c in said.write.call_args_list)
+
+    def test_a_folder_that_is_not_a_state_is_refused_by_the_three_commands(self):
+        take = "take the project's state with: git clone --depth 1 --branch hive-state https://github.com/Bee-ruche/toy <folder>, and give that folder"
+        for command in ("tally", "cut", "cut-check"):
+            with self.subTest(command, folder="none"):
+                code, said = self.run_cutter(command, "nowhere")
+                self.assertEqual(code, 2)
+                self.assertTrue(said.startswith("hive: the folder given to --state does not exist: " + take), said)
+                self.assertNotIn(self.tmp.name, said, "the folder's path is not repeated")
+            with self.subTest(command, folder="empty"):
+                self.assertEqual(list(self.w.state.iterdir()), [])
+                code, said = self.run_cutter(command, "state")
+                self.assertEqual(code, 2)
+                self.assertIn("the folder given to --state holds none of the state's files (accounts.json, feed.json, ignored.json, "
+                              "ledger.jsonl, stats.json, tip.json) and is not a clone of the branch hive-state: it is not the "
+                              "project's state; " + take, said)
+            with self.subTest(command, folder="the project's clone"):
+                self.assertEqual(self.run_cutter(command, "project")[0], 2, "the project's own clone holds no state file and is on its own branch")
+
+    def test_what_tells_a_state_from_a_folder_that_is_not_one(self):
+        state = self.w.state
+        state.mkdir(exist_ok=True)
+        (state / "README.md").write_text("The hive's state.\n")
+        self.assertEqual(self.run_cutter("tally", "state")[0], 2, "a README alone, in a folder that is no clone, is no state")
+        (state / ".git").mkdir()
+        (state / ".git/HEAD").write_text("ref: refs/heads/main\n")
+        self.assertEqual(self.run_cutter("tally", "state")[0], 2, "a clone of another branch is no state")
+        shutil.rmtree(state / ".git")
+        self.first_day()
+        code, printed = self.run_cutter("tally", "state")
+        self.assertEqual(code, 0, "a project's first day, before its first run: the branch hive-state as its lead made it")
+        self.assertNotIn("done", {t["status"] for t in json.loads(printed)["tasks"].values()})
+        self.assertEqual(self.run_cutter("cut", "state")[0], 0)
+        self.assertEqual(self.run_cutter("cut-check", "state")[0], 0)
+        shutil.rmtree(state)
+        state.mkdir()
+        for name in ("README.md", "accounts.json", "ignored.json", "stats.json"):
+            (state / name).write_text("{}\n")
+        self.assertEqual(self.run_cutter("tally", "state")[0], 0, "a state written by runs that dealt nothing yet: no ledger")
+        (state / "feed.json").write_text(json.dumps({"protocol": hive.PROTOCOL, "repo": "bee-ruche/TOY"}))
+        self.assertEqual(self.run_cutter("tally", "state")[0], 0, "GitHub's names do not tell case")
+        (state / "feed.json").write_text(json.dumps({"protocol": hive.PROTOCOL, "repo": "Bee-ruche/leaf"}))
+        for command in ("tally", "cut", "cut-check"):
+            code, said = self.run_cutter(command, "state")
+            self.assertEqual(code, 2)
+            self.assertIn("the folder given to --state holds another project's state, not Bee-ruche/toy's", said)
+            self.assertNotIn("leaf", said, "the folder's own word is compared, never repeated")
+        (state / "feed.json").write_text("{not json")
+        self.assertEqual(self.run_cutter("tally", "state")[0], 0, "a feed it cannot read says nobody's name: the state's other files stand")
+
+
 class TestTheMap(unittest.TestCase):
     """The links between tasks (hive.check_links): a parent and needs that name other tasks of the file, no cycle, a
     kind the hive knows; a run reads no task file that says otherwise."""
@@ -13621,6 +13698,7 @@ class TestTheCutGate(unittest.TestCase):
 
 class TestTheCutCheckCommand(Base):
     def test_the_gate_reads_the_published_tasks_and_the_deals(self):
+        self.first_day()
         proposal = Path(self.tmp.name) / "proposal.jsonl"
         published = [json.loads(line) for line in (self.w.published / "hive/tasks.jsonl").read_text().splitlines() if line.strip()]
         lines = [{**task, "closed": True} if task["id"] == "toy-0001" else task for task in published]
@@ -13815,6 +13893,7 @@ class TestTheOutline(unittest.TestCase):
 
 class TestTheCutCommand(Base):
     def test_the_gate_holds_the_backlog_proposed_with_the_tasks(self):
+        self.first_day()
         planned = {"id": "toy-0009", "title": "f1: fewer branches", "files": ["lib.c"], "goal": PROVED_GAIN, "needs": ["toy-0004"]}
         (self.w.published / hive.BACKLOG_FILE).write_text(json.dumps(planned) + "\n")
         proposal, backlog = Path(self.tmp.name) / "proposal.jsonl", Path(self.tmp.name) / "backlog.jsonl"
@@ -13831,6 +13910,7 @@ class TestTheCutCommand(Base):
             self.assertEqual(stopped.exception.code, 2)
 
     def test_the_cut_publishes_the_backlog_and_the_gate_passes_it(self):
+        self.first_day()
         planned = {"id": "toy-0009", "title": "f1: fewer branches", "files": ["lib.c"], "goal": PROVED_GAIN}
         (self.w.published / hive.BACKLOG_FILE).write_text(json.dumps(planned) + "\n")
         before = self.w.tasks_file.read_text()
