@@ -139,7 +139,8 @@ Each run, after the forks were read, in this order:
    refused, a deal it left without one), the draw is among these alone: a task that failed in a member's hands
    goes first to another member, or waits. With fewer than two, the draw is among all of them: the rule narrows
    a draw, it never names a task. An ending that was the hive's or the project's doing is not held against the
-   task, and what a member held in vain stays so. The draws use a key drawn *after* the forks were
+   task, and what a member held in vain stays so. A probe is among them only for a member with an acceptance of its
+   own on the project, and never for one who answered it ("How a candidate is judged and integrated"). The draws use a key drawn *after* the forks were
    read: nobody can push something that steers them. An ask is used once.
 
 **A project's trusted base keeps pace with its members.** A project that names guardians ("Guardians") may say how
@@ -380,14 +381,17 @@ the hive runs those git commands with an empty attribute source.
   - It costs its member no wait and leaves its class as it was. It is no acceptance: it makes nobody active, follows
     no preference and counts for nobody's standing. It still counts in the day's limit, so an account answers no more
     probes in a day than the project's `members.deals_per_day` (5 by default).
-  - A member who answered a probe is never dealt it again, even when it is the one task left.
+  - A probe is dealt only to a member with an acceptance of its own on the project already, in the ordinary and the
+    conditional deal alike, and a member who answered a probe is never dealt it again, even when it is the one task
+    left. On a project's first day, with probes alone open and nobody established, nobody is dealt anything.
   - The probe is **done** once as many distinct **established** members answered as it asks (`answers` on its
     line, 1 by default, 5 at most), or once a candidate reaches its goal with its proof, which is accepted and
     integrated as any other. A member is established for an answer when a candidate of its own was accepted on the
-    project before it, as the hint and « stuck » count members. An answer from another member is recorded and shown,
-    costs it nothing, and completes nothing: an answer that tries nothing costs its author nothing, so it must not close
-    the question for everyone. On a project's first day, before any acceptance, no probe can be done. Done means done
-    for everything that reads it: no deal, the `needs` of other tasks, the feed, the tally.
+    project before it: the answer counts only after its member's first acceptance, as a failure counts towards
+    « stuck ». Since a probe is dealt only to such members, every answer counts when it is given; a line that says
+    otherwise (written by hand, or under an earlier rule) still completes nothing. An answer that tries nothing costs
+    its author nothing, so it must not close the question for everyone. Done means done for everything that reads
+    it: no deal, the `needs` of other tasks, the feed, the tally.
   - A refusal by the judge, a figure the project requires that is not met, and everything refused before the judge
     (a change that changes nothing among them) are the refusals they are, for a probe as for any task. A ruling
     reviews a refusal for a figure the project requires: a probe's answer is none, and a ruling brings no probe an

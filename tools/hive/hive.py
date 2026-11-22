@@ -965,6 +965,8 @@ def deal_prefer(deal, tasks, config=None, ledger=None):
     if config is not None and ledger is not None:
         offered, earned = config["members"]["preferences"], ledger.last_deal_accepted(deal.get("member_id"))
         done = ledger.done()
+        # (A kept preference needs the member's last deal accepted, so its member is established: the probes the plan
+        # deals to established members alone are in this listing as the plan saw them.)
         listing = {identifier for identifier, task in tasks.items() if part in task["files"] and not task.get("closed") and identifier not in done}
         said = "not_offered" if not offered else "needs_an_accepted_deal" if not earned else None
         if (said is not None and because != said) or (said is None and because in ("not_offered", "needs_an_accepted_deal")):
@@ -1091,7 +1093,8 @@ class Ledger:
             asked = probe_answer(e)
             if asked is not None:
                 members = answered.get(e.get("task"), (set(), asked))[0]
-                if e.get("member_id") in first and first[e.get("member_id")] < e.get("at", ""):
+                at = instant_text(e.get("at"))  # (the tally's reading of an instant; an answer without one counts nothing)
+                if at is not None and e.get("member_id") in first and first[e.get("member_id")] < at:
                     members = members | {e.get("member_id")}
                 answered[e.get("task")] = (members, asked)
         return accepted | {task for task, (members, asked) in answered.items() if len(members) >= asked}
@@ -2685,12 +2688,16 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     # leaves the window, the project turns an account away or names one more guardian). The askers come in the
     # order above, which reads none of this: the bound holds an asker back, and moves nobody ahead.
     cover, active, admitted = cover_of(config), active_members(ledger, instant, config), set()
+    established = ledger.accepted_members()  # (before this plan: what a probe's answer needs to count, Ledger.done)
     for klass, _, member_id, tier, conditional in askers:
         if cover is not None and member_id not in active and len(active) + len(admitted) >= cover:
             continue
-        # (A probe this member answered is never its again, whatever else is left: its answer would be the same evidence twice.)
+        # A probe is dealt only to a member with an acceptance of its own on the project already: only its answer
+        # completes the probe (Ledger.done), and a member who answered is never dealt it again, whatever else is left
+        # (its answer would be the same evidence twice). In the ordinary and the conditional deal alike.
         answered = ledger.answered(member_id)
-        mine = [t for t in dealable if int(tasks[t].get("tier", 1)) <= tier and t not in answered]
+        mine = [t for t in dealable if int(tasks[t].get("tier", 1)) <= tier and t not in answered
+                and (tasks[t].get("kind") != "probe" or member_id in established)]
         if not mine:
             continue
         # First the tasks this member has not already held in vain, while two at least are left: with one alone the
@@ -3026,8 +3033,9 @@ def established_since(events):
     established, and since when (Ledger.done; the tally reads its own lines the same way)."""
     first = {}
     for e in events:
-        if e.get("type") == "verdict" and e.get("result") == "accepted" and isinstance(e.get("at"), str):
-            first[e.get("member_id")] = min(first.get(e.get("member_id"), e["at"]), e["at"])
+        at = instant_text(e.get("at")) if e.get("type") == "verdict" and e.get("result") == "accepted" else None
+        if at is not None:  # (read as the tally reads an instant: instant_text; a line without one is no acceptance here)
+            first[e.get("member_id")] = min(first.get(e.get("member_id"), at), at)
     return first
 
 
@@ -3955,11 +3963,25 @@ def tally_line(entry):
     return line
 
 
-def tally(tasks, lines, instant, active=None):
+def taken_accounts(ledger, config):
+    """The accounts with an acceptance on the project that its file still takes today: neither banned nor, where it is
+    open by invitation, left out (barred), asked with the account's number and every login its acceptances and deals
+    give for it. What the tally counts as answerers left for a probe (tally: `taken`)."""
+    logins, accepted = {}, ledger.accepted_members()
+    for event in ledger.events:
+        if type(event.get("member_id")) is int and event["member_id"] in accepted and \
+                (event.get("type") == "deal" or (event.get("type") == "verdict" and event.get("result") == "accepted")):
+            logins.setdefault(event["member_id"], set()).add(event["member"] if isinstance(event.get("member"), str) else "")
+    return {member_id for member_id, named in logins.items() if not any(barred({"id": member_id, "login": login}, config) for login in named)}
+
+
+def tally(tasks, lines, instant, active=None, taken=None):
     """What the ledger says of each of the project's tasks, in numbers and ids alone (docs/cutter.md, "The loop"): the
     cutter's reading of the judge's answers, and the project page's section on the tasks that need attention. `lines`
     are tally_line()'s, in the ledger's order; a line dated after `instant` says nothing yet. `active` is how many
-    members are active (active_members), given by a caller that read the project's file.
+    members are active (active_members), given by a caller that read the project's file, and `taken` the accounts with an
+    acceptance that the project's file still takes (taken_accounts), given by such a caller too: without it, every
+    account with an acceptance counts as one that could still answer a probe.
 
     For each task: its status as the feed gives it; how many deals it had and how many members held it; how many of
     those deals ran out at their member's cost (`expired`) and at nobody's (`expired_free`); its acceptances; its
@@ -4066,7 +4088,7 @@ def tally(tasks, lines, instant, active=None):
             # Who could still complete it: the established members who have not answered it (a member is never dealt a
             # probe it answered). Fewer than the answers it still needs, and it can no longer be done by the members the
             # project has: « short_of_members », for the cutter to close.
-            row["answerers_left"] = len(set(first) - set(answered.get(task_id, {})))
+            row["answerers_left"] = len((set(first) if taken is None else set(first) & set(taken)) - set(answered.get(task_id, {})))
             row["answers_needed"] = max(0, asked.get(task_id, row["answers_asked"]) - sum(answered.get(task_id, {}).values()))
     left = {task_id for task_id, row in rows.items() if row["status"] in ("open", "dealt")}
     short = sorted(task_id for task_id in left if "answers" in rows[task_id] and rows[task_id]["answerers_left"] < rows[task_id]["answers_needed"])
@@ -4689,7 +4711,7 @@ def cmd_tally(args):
     config, tasks = settings_on(args.repo, commit, branch, repository)
     ledger, instant = Ledger(cutters_state(args.state, config)), now()
     lines = [line for line in map(tally_line, ledger.events) if line is not None]
-    result = tally(tasks, lines, instant, active=len(active_members(ledger, instant, config)))
+    result = tally(tasks, lines, instant, active=len(active_members(ledger, instant, config)), taken=taken_accounts(ledger, config))
     print(json.dumps({"project": config["project"], "published": commit, **result}, sort_keys=True, indent=1, ensure_ascii=True))
 
 
@@ -5088,7 +5110,8 @@ def cmd_cut(args):
                              integrations(ledger))
     judged, passing = ({t for t, answer in shown.items() if answer == kind} for kind in ("failing", "passing"))
     failing = judged | word
-    proposal, said = cut(config, published, backlog, tally(published, lines, instant), live, done, paths, failing, passing)
+    proposal, said = cut(config, published, backlog, tally(published, lines, instant, taken=taken_accounts(ledger, config)), live, done, paths,
+                         failing, passing)
     for entry in said["added"]:  # whose word a task « correct » from the backlog is published on: the judge's, or the architect's
         if entry["from"] == "backlog" and (backlog[entry["id"]].get("goal") or {"kind": "correct"}).get("kind") != "metric":
             entry["shown"] = "judge" if entry["id"] in judged else "word"
@@ -5920,7 +5943,8 @@ def health(projects, read, instant):
             except (KeyError, TypeError, AttributeError, ValueError):  # (a line of the ledger that is not as the hive writes it)
                 raise Unread("ledger") from None
             try:
-                tallied = tally(tasks, [line for line in map(tally_line, ledger.events) if line is not None], instant, active=active)
+                tallied = tally(tasks, [line for line in map(tally_line, ledger.events) if line is not None], instant, active=active,
+                                taken=taken_accounts(ledger, config))
             except (KeyError, TypeError, AttributeError, ValueError, OverflowError):  # (a value of the tasks the tally cannot count)
                 raise Unread("tasks") from None
         except Unread as error:

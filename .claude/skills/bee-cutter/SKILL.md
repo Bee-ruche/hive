@@ -170,7 +170,8 @@ writes its `goal`, whatever the published lines do.
   answer: the judge's figures, recorded, at no cost to the member. Keep probes a minority of the open tasks: each
   costs a judgement and integrates nothing unless it reaches its goal. Ask `"answers": 2` or `3` when one answer
   would not be enough to close a direction (5 at most), never more than the project has established members (members
-  with an accepted task). Only their answers complete a probe: cut no probe while the tally shows no task done.
+  with an accepted task). A probe is dealt to them alone, and only their answers complete it: cut no probe while the
+  tally shows no task done, and never leave a project with probes alone open, which deals nothing.
   Publish probes only if the architect says the project's caller names a commit of the hive that holds them: an
   older one reads a probe as a `work` task. Put no `needs` on a probe when the task that follows depends on what the
   probe finds: any answer satisfies a `needs`; write that task after you have read the answer.

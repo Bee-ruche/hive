@@ -1304,7 +1304,8 @@ WHAT = ("A project of La Ruche: volunteers' AI coding assistants do its tasks on
 ENDED_BY_HIVE = "Ended by the hive, at no cost to the member"  # the name of what HIVE_SIDE counts
 TOO_FEW = "too few members to show"  # in place of a model's judged count and rate (model_rows)
 MODELS_NOTE = (f"How many candidates of a model were judged, and its rate, are shown once at least {MODEL_MEMBERS_MIN} members stand "
-               "behind them: with fewer, they would be figures about those members.")
+               "behind them: with fewer, they would be figures about those members. A probe's answers are not counted here: a model "
+               "whose candidates were all answers shows 0 judged.")
 
 
 def reasons_cell(refused):

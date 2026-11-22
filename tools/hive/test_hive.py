@@ -14660,7 +14660,8 @@ class TestProbes(Base):
 
     def tallied(self):
         config, tasks, ledger = self.w.load()
-        return hive.tally(tasks, [line for line in map(hive.tally_line, ledger.events) if line is not None], hive.now())
+        return hive.tally(tasks, [line for line in map(hive.tally_line, ledger.events) if line is not None], hive.now(),
+                          taken=hive.taken_accounts(ledger, config))
 
     def established(self, fork, task="toy-0002", path=None):
         """An acceptance of the member's own, on a task « correct » in a folder of its own: from then on it is established."""
@@ -14819,6 +14820,9 @@ class TestProbes(Base):
         self.with_tasks({**PROBE, "answers": 2}, ELSEWHERE)
         self.established(bob, "toy-0008")
         self.assertEqual(self.tallied()["short_of_members"], [], "a second established member who has not answered: it can be done again")
+        self.w.set_config({"members": {"banned": [102]}})
+        self.assertEqual((self.tallied()["short_of_members"], self.tallied()["tasks"]["toy-0006"]["answerers_left"]), (["toy-0006"], 0),
+                         "an account the project's file no longer takes is no answerer left")
 
     def test_an_answer_behind_a_push_that_did_not_land_is_answered_at_the_next_run(self):
         """A probe's answer judged after an accepted candidate whose push did not land is unused, as any candidate there:
@@ -14843,6 +14847,46 @@ class TestProbes(Base):
             with contextlib.suppress(hive.HiveError):
                 self.w.apply(verdicts)
         self.assertEqual([(e["type"], e.get("probe")) for e in self.w.events() if e.get("sha") == answer], [("unused", None), ("verdict", 1)])
+
+    def test_a_probe_is_dealt_only_to_a_member_with_an_acceptance_of_its_own(self):
+        """Only an established member's answer completes a probe, so the dealing deals a probe to such a member alone, in
+        the ordinary deal and the conditional one alike: a member with no acceptance is dealt the work task beside it,
+        and the probe once an acceptance of its own is in the ledger. Every answer then counts when it is given."""
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in [PROBE, TASKS[1], TASKS[2]]))
+        self.w.publish()
+        carol = self.w.fork("carol", 103)
+        carol.ready()
+        self.w.run()
+        self.assertEqual(self.w.deals(), {"toy-0002": ("carol", "live")}, "the work task, not the probe")
+        carol.fresh("hive/submit/toy-0002").submit("toy-0002", path="src/c.c", content="int c;\n")
+        carol.ready()
+        outcomes = self.w.run()  # accepted in this run: dealt conditionally, and an acceptance of this run is none before it
+        self.assertEqual([(o["task"], o["result"]) for o in outcomes], [("toy-0002", "accepted")])
+        self.assertNotIn("toy-0006", self.w.deals(), "no conditional deal of a probe")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": LATER}):
+            self.w.run()
+        self.assertEqual(self.w.deals()["toy-0006"], ("carol", "live"), "established now: dealt the probe")
+        self.alice.ready()
+        with mock.patch.dict(os.environ, {"HIVE_NOW": LATER}):
+            self.w.run()
+        self.assertEqual(self.w.deals()["toy-0006"], ("carol", "live"), "and to nobody without an acceptance")
+
+    def test_done_and_the_tally_read_an_instant_alike(self):
+        """Ledger.done reads an instant as the tally does (instant_text): an acceptance whose instant is not one the
+        hive writes is none for either, and an answer without an instant counts for neither."""
+        self.with_tasks(PROBE)
+        answer = {"type": "verdict", "at": NOW, "task": "toy-0006", "deal": NOW, "member_id": 102, "repo_id": 1102, "sha": "a" * 40,
+                  "result": "refused", "judged": True, "model": None, "reason": "goal_not_met", "detail": {}, "report": {}, "probe": 1}
+        accepted = {"type": "verdict", "task": "toy-0002", "deal": NOW, "member_id": 102, "repo_id": 1102, "sha": "c" * 40, "result": "accepted",
+                    "judged": True, "model": None, "member": "bob", "commit": "d" * 40, "figures": {}, "report": {}}
+        for name, lines, done in (("an acceptance at an instant written otherwise", [{**accepted, "at": "2026-11-12T11:00:00+00:00"}, answer], False),
+                                  ("an answer without an instant", [{**accepted, "at": "2026-11-12T11:00:00Z"}, {**answer, "at": 5}], False),
+                                  ("both as the hive writes them", [{**accepted, "at": "2026-11-12T11:00:00Z"}, answer], True)):
+            with self.subTest(name):
+                ledger = hive.Ledger(self.w.state).first(0)
+                ledger.append(lines, write=False)
+                row = hive.tally(self.w.load()[1], [line for line in map(hive.tally_line, ledger.events) if line is not None], hive.now())["tasks"]["toy-0006"]
+                self.assertEqual(("toy-0006" in ledger.done(), row["status"] == "done"), (done, done))
 
     def test_the_line_alone_says_an_answer(self):
         """Ledger.done and the tally read the line: a refusal for a goal short that does not say « probe » (written by

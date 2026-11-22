@@ -106,14 +106,17 @@ found, even nothing.
   pays nothing for it and earns nothing by it. A member who answered is never dealt the same probe again. One short
   of its proof alone (`not_proven`) reached the goal: no answer, and the probe stays open, as a work task would.
 - **It is done** once as many distinct **established** members answered as it asks: members with an acceptance of
-  their own on the project before their answer. Another member's answer is shown and completes nothing, so on a
-  project's first day, before any acceptance, no probe can be done: cut none then. An answered probe satisfies what
-  `needs` it, whatever was found: so do not put `needs` on a probe when the task that follows depends on what was
-  found; write that task once you have read the answer.
+  their own on the project before their answer. A probe is dealt only to such members, so every answer counts when
+  it is given. On a project's first day nobody is established: a project whose open tasks are probes alone deals
+  nothing, so never open a project with probes alone, and cut none before a task is done. An answered probe
+  satisfies what `needs` it, whatever was found: so do not put `needs` on a probe when the task that follows
+  depends on what was found; write that task once you have read the answer.
 - **What the cutter reads**: `hive tally` gives, for each probe, how many answers it asks, each answer (its
   instant, its reason, the judge's figures, and whether its member had an acceptance on the project before it),
   how many distinct members answered and of them how many had, how many answers it still needs from established
-  members (`answers_needed`), and how many established members have not answered it (`answerers_left`). Numbers and
+  members (`answers_needed`), and `answerers_left`. That number is exactly the accounts with an acceptance on the
+  project that its file still takes (neither banned nor left out where it is open by invitation) and that have not
+  answered the probe. It does not know the tier a member asks for, nor whether a member will come back. Numbers and
   codes, as everything the tally gives.
 - **A probe short of members** (`short_of_members` in the tally): it still needs more answers than there are
   established members who have not answered it, for instance two answers in a project with one member. It would stay
