@@ -130,8 +130,9 @@ writes its `goal`, whatever the published lines do.
   gives it, is a guess, and makes the task a probe ("Probes", below). A goal « correct » (the judge's tests pass)
   has no bound and is never a probe; it goes to the backlog, never to the proposal: only a run of the judge at the
   tip can show that the project fails it now, and you cannot run it. The project's own run asks its judge
-  (docs/cutter.md, "The proof at the tip"), and the `hive cut` of a later cycle publishes the task once the judge showed it to fail there. Never pass `--failing` yourself: it is
-  the architect's word, for a project whose judge cannot answer (the common kind) or for a run they made by hand.
+  (docs/cutter.md, "The proof at the tip"), and the `hive cut` of a later cycle publishes the task once the judge
+  showed it to fail there. Never pass `--failing` yourself: it is the architect's word, for a project whose judge
+  cannot answer (the common kind) or for a run they made by hand.
 - `options`: only names and values the published tasks already use, with one exception: a new value of the option
   `unit`, when the charter or the architect's prompt gives that value word for word and says that the judge checks
   that piece (in a project that ports or builds, a piece the judge has just learned to check). The value is a plain
