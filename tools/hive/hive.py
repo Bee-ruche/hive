@@ -4075,7 +4075,8 @@ def the_reference_judge(registry_root, settings, workdir):
 
 
 RELAY_FIGURES = ("total_bytes", "tip_total_bytes", "gain_total_bytes", "sure_total_bytes", "message_bytes", "program_bytes",
-                 "encode_seconds", "decode_seconds", "encode_memory_kb", "decode_memory_kb", "builds", "runs")
+                 "encode_seconds", "decode_seconds", "encode_memory_kb", "decode_memory_kb", "builds", "runs", "tip_retried")
+TIP_RETRIED_MOST = 4  # the most steps of the tip's one relay judgement runs once more: its build, its two encodings and its decoding
 
 
 def relay_judge(registry_root, workdir=None, timeout=3600):
@@ -4085,7 +4086,11 @@ def relay_judge(registry_root, workdir=None, timeout=3600):
     The report holds numbers only (RELAY_FIGURES): total_bytes, its gain against the tip judged in the same
     judgement (gain_total_bytes) and the proof (sure_total_bytes: 1 when the candidate's exact total is below the
     tip's and the same at each of its runs). The tip against itself is asked with --tip-itself; the tip judged as a
-    candidate (`question`) is a candidate's whole judgement, as for the second kind."""
+    candidate (`question`) is a candidate's whole judgement, as for the second kind.
+
+    A step of the tip's that the judge ran once more (tip_retried, in the report it wrote, whatever its answer) is
+    said in the run's log by this call, in its own words: the judge's own line about it stays in the output this
+    call does not show. The judge's output is not read for it: it can hold what the programs judged wrote."""
     judge_py = Path(registry_root) / "tools/judge/relay.py"
 
     def run(base, candidate, task, tip, commit, question=False):
@@ -4114,6 +4119,10 @@ def relay_judge(registry_root, workdir=None, timeout=3600):
         # The judge's own word that its failure is the tip's doing: in the report it wrote, which agrees with its exit status.
         if code == 2 and ran.returncode == 2 and isinstance(report, dict) and report.get("code") == 2 and report.get("fault") == TIP_FAULT:
             said["fault"] = TIP_FAULT
+        retried = report.get("tip_retried") if isinstance(report, dict) and report.get("code") == ran.returncode else None
+        if type(retried) is int and 0 < retried <= TIP_RETRIED_MOST:
+            log(f"judge: {retried} step(s) of the tip's failed once in a way their bytes do not decide and were run once more, judging "
+                f"{commit} for {task['id']} (docs/relay-judge.md, \"When the tip is at fault\")")
         return said
 
     return run

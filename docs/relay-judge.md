@@ -138,7 +138,7 @@ The verdict:
 
 Of the report the base keeps numbers only: `total_bytes`, `tip_total_bytes`, `gain_total_bytes`,
 `sure_total_bytes`, `message_bytes`, `program_bytes`, `encode_seconds`, `decode_seconds` (processor time, the
-larger of the candidate's two runs), `encode_memory_kb`, `decode_memory_kb`, `builds`, `runs`.
+larger of the candidate's two runs), `encode_memory_kb`, `decode_memory_kb`, `builds`, `runs`, `tip_retried`.
 
 ## Time, and which side a doubt falls on
 
@@ -163,8 +163,9 @@ the clock is ended with its shell and counted with it.
 | status 137 and no line without that record (Docker restarted, a run cancelled) | the machine's | 2 |
 
 The same measurements of the tip's own build or phases are failures on the tip's side (2: below, "When the tip is
-at fault"), and those its bytes do not decide (past its processor time, a signal, the memory record) are run once
-more first; the two that are no one's doing stay the machine's.
+at fault"), and those its bytes do not decide (past its processor time, a signal, the memory record, and two exit
+statuses: the gate's own 126, and a build's 137) are run once more first; the two that are no one's doing stay the
+machine's.
 
 The fourth line is the only doubt. Behind the gate a phase cannot wait: no call that sleeps, polls with a delay or
 waits on anything is let through, and no signal that would stop it (it may send itself SIGABRT alone). A phase
@@ -303,13 +304,31 @@ the candidate's) » in the reason, and `"fault": "tip"` in the report it writes.
 does not prove the tip's code wrong. Some of those failures may be the machine's: a kill for memory (above, the
 memory record), processor time stretched past the tip's bound by a slow or crowded machine, a fault of the hardware.
 
-So a step of the tip's that fails in a way its bytes do not decide (ended by a signal, past its processor time, its
-container ended by the kernel for its memory, a build stopped at its clock with its time used) is **run once more**
-first. If the second run passes, the judgement goes on with it, and the judge's log says the first failed (« the
-tip's own step failed once and is run once more », with the first failure's words: a line a person can search for).
-If it fails again, the failure is on the tip's side. What the tip's bytes decide is not run again: an exit status
-that is not 0, a build that leaves no program, a phase that leaves no file, two encodings that differ (rule 3 keeps
-its meaning), a decoding that is not the data. A candidate's steps are never run twice.
+So a step of the tip's that fails in a way its bytes do not decide is **run once more** first:
+- ended by a signal, past its processor time, its container ended by the kernel for its memory, a build stopped at
+  its clock with its time used;
+- exit status 126, the gate's own when it could not set itself up before the program started (a file, a page, its
+  filter): the program has not run yet;
+- for a build, exit status 137: the build's shell saying that a process of the build, its compiler for instance, was
+  ended by SIGKILL. That is how the kernel ends a process for memory, the build's bound or the host's, and the same
+  event one process down from a build ended by signal 9. A phase is one process that starts no other: its 137 is its
+  program's own status.
+
+If the second run passes, the judgement goes on with it, and the judge's log says the first failed (« the tip's own
+step failed once and is run once more », with the first failure's words: a line a person can search for). The
+report counts those steps, `tip_retried`, whatever the judgement then answers, and the hive's call says it in the
+run's log: « judge: 1 step(s) of the tip's failed once … and were run once more, judging <commit> for <task> ». The
+hive does not show the judge's own log, and it does not read it for this: that log can hold what the programs judged
+wrote. A project that lists `tip_retried` in `judge.metrics` keeps it on a verdict's line, as `builds` and `runs`.
+If it fails again, the failure is on the tip's side. What the tip's bytes decide is not run again: any other exit
+status that is not 0, a build that leaves no program, a phase that leaves no file, two encodings that differ (rule 3
+keeps its meaning), a decoding that is not the data.
+
+A candidate's steps are never run twice, for the same causes: the tip is treated more gently than a candidate. Its
+program was judged correct before, and a false failure on its side stops the run's judging for every candidate. A
+second run of a candidate's step would be a second chance for a program that fails at random, and the candidate's
+own program can end with status 126 or 137 itself. A false refusal costs that candidate alone, and its member can
+submit again.
 
 By then nothing of the candidate's has been built or run in that judgement, so nothing of that candidate's brings
 it about within it. Two things are shared beyond the judgement: the machine, with the run's earlier judgements; and
@@ -330,7 +349,9 @@ machine's costs the run, and the next run on a sound machine judges again.
 A candidate's judgement: the launcher's build, two builds and **seven passes over the data** (the tip's two
 encodings and one decoding, the candidate's two encodings and two decodings), each in its own container, plus the
 host's reading and comparing (the data a few times). A step of the tip's run once more ("When the tip is at
-fault") adds a build or a pass; the report's `builds` and `runs` count every one started. Its worst case, which the
+fault") adds a build or a pass; the report's `builds` and `runs` count every one started, and `tip_retried` how
+many were such a second run (so `builds + runs` is `9 + tip_retried` for a candidate, `4 + tip_retried` for the tip
+against itself). Its worst case, which the
 manifest must fit in `judge.timeout_seconds`, is every container at its clock and every step of the tip's run twice:
 `70 + 3 × (build clock + 15 + 10) + 6 × (encode clock + 10) + 4 × (decode clock + 10) + 60` seconds. The tip
 against itself: one build and three passes, two builds and six at most. A project keeps that worst case well under

@@ -4807,6 +4807,39 @@ class TestDealing(Base):
                 with mock.patch.object(hive.subprocess, "run", side_effect=ran):
                     self.assertEqual(judge(base, base, {"id": "toy-0001", "files": ["src/"]}, "T" * 40, "C" * 40), expected)
 
+    def test_the_relay_kinds_call_says_in_the_runs_log_that_a_step_of_the_tips_was_run_once_more(self):
+        """The judge's own line about a step of the tip's run once more stays in its output, which the hive does not
+        show. Its report counts them (tip_retried), whatever it answers: the call says it in the run's log, in its own
+        words, when the report agrees with the judge's exit status; the judge's output is never read for it."""
+        judge = hive.judge_of("/registry", {"kind": "relay", "timeout_seconds": 900}, None)
+        line = ("judge: {} step(s) of the tip's failed once in a way their bytes do not decide and were run once more, judging "
+                + "c" * 40 + " for toy-0001 (docs/relay-judge.md, \"When the tip is at fault\")\n")
+        figures = {"total_bytes": 9, "tip_total_bytes": 10, "gain_total_bytes": 0.1, "sure_total_bytes": 1, "message_bytes": 4, "program_bytes": 5,
+                   "encode_seconds": 0.1, "decode_seconds": 0.1, "encode_memory_kb": 9, "decode_memory_kb": 9, "builds": 2, "runs": 8}
+        cases = ((0, {"code": 0, **figures, "tip_retried": 1}, {"code": 0, "report": {**figures, "tip_retried": 1}}, line.format(1)),
+                 (0, {"code": 0, **figures, "tip_retried": 0}, {"code": 0, "report": {**figures, "tip_retried": 0}}, ""),
+                 (1, {"code": 1, "tip_retried": 4}, {"code": 1, "report": {}}, line.format(4)),
+                 (2, {"code": 2, "fault": "tip", "tip_retried": 2}, {"code": 2, "report": {}, "fault": "tip"}, line.format(2)),
+                 (2, {"code": 1, "tip_retried": 1}, {"code": 2, "report": {}}, ""),
+                 (1, {"code": 1, "tip_retried": 5}, {"code": 1, "report": {}}, ""),
+                 (1, {"code": 1, "tip_retried": True}, {"code": 1, "report": {}}, ""),
+                 (1, {"code": 1, "tip_retried": 1.0}, {"code": 1, "report": {}}, ""),
+                 (1, {"code": 1, "tip_retried": "1"}, {"code": 1, "report": {}}, ""),
+                 (1, {"code": 1}, {"code": 1, "report": {}}, ""))
+        for exit_status, report, expected, said in cases:
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as folder:
+                base = Path(folder) / "base"
+                base.mkdir()
+
+                def ran(command, **options):
+                    (base.parent / "relay.json").write_text(json.dumps(report))
+                    return subprocess.CompletedProcess(command, exit_status, "", f"judge: {hive.relay_judge.__name__}\njudge: 3 step(s) of the tip's\n")
+
+                logged = io.StringIO()
+                with mock.patch.object(hive.subprocess, "run", side_effect=ran), contextlib.redirect_stderr(logged):
+                    self.assertEqual(judge(base, base, {"id": "toy-0001", "files": ["src/"]}, "c" * 40, "c" * 40, question=True), expected)
+                self.assertEqual(logged.getvalue(), said)
+
     def test_over_many_draws_a_kept_preference_gives_a_task_its_member_could_be_dealt_anyway_and_moves_nobodys_turn(self):
         """The invariant of the dealing, held over many keys on tasks that share files, differ in tier, are closed or
         held: whatever the asks prefer, each member dealt is dealt a task of `mine` (the tasks it could be dealt

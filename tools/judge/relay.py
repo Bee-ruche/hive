@@ -106,14 +106,22 @@ class TipFault(JudgeError):
 
 class Wavered(TipFault):
     """A failure of the tip's own build or phase that its bytes do not decide: ended by a signal, past its processor
-    time, its container ended by the kernel for its memory, a build stopped at its clock with its time used. The host
-    may be the cause (short of memory, a stalled processor): the same step is run once more before the tip is said to
-    be at fault (once_more). What its bytes decide (an exit status, two encodings that differ, a decoding that is not
-    the data, no file left) is not run again: the tip's two encodings keep meaning what they mean."""
+    time, its container ended by the kernel for its memory, a build stopped at its clock with its time used, a build
+    whose shell reports a process of it killed (status 137), the gate that could not set itself up (status 126). The
+    host may be the cause (short of memory, a stalled processor): the same step is run once more before the tip is said
+    to be at fault (once_more). What its bytes decide (another exit status, two encodings that differ, a decoding that
+    is not the data, no file left) is not run again: the tip's two encodings keep meaning what they mean."""
 
 
 # The line the log holds when a step of the tip's failed once and was run again: a person can search for it.
 ONCE_MORE = "the tip's own step failed once and is run once more"
+# Two exit statuses that are no answer of the program's bytes. The gate's own, when it could not set itself up before
+# the program started (gate.c: a file, a page, the filter). And, for a build alone, a shell's word for a process of
+# the build ended by SIGKILL: the kernel's way to end one for memory, which a build's processes do not use on each
+# other (at the clock the gate ends itself with the build, and the launcher reads a signal, not a status). A phase is
+# one process that cannot start another: its 137 is its program's own exit status.
+GATE_FAILED = 126
+KILLED_IN_A_BUILD = 128 + signal.SIGKILL
 
 
 def undecided(blame, text):
@@ -125,11 +133,14 @@ def undecided(blame, text):
 def once_more(step):
     """A step of the tip's (its build, one of its phases), run once more when it fails in a way its bytes do not decide
     (Wavered): if the second run passes, the judgement goes on with it, and the log says the first failed (ONCE_MORE);
-    if it fails again, the tip is at fault. A step that fails in a way its bytes decide is not run again."""
+    if it fails again, the tip is at fault. A step that fails in a way its bytes decide is not run again. The report
+    counts the steps run once more (`tip_retried`), whatever the judgement then answers: the hive's call says so in
+    its own log, where the judge's log is not shown."""
     try:
         return step()
     except Wavered as first:
         log(f"{ONCE_MORE}: {clean(str(first), 400)}")
+        STATE["tip_retried"] = STATE.get("tip_retried", 0) + 1
     try:
         return step()
     except Wavered as second:
@@ -498,10 +509,12 @@ def measured(ran, token, label, blame, what):
     return m
 
 
-def outcome(m, cpu_most, wall, blame, what, said=b""):
+def outcome(m, cpu_most, wall, blame, what, said=b"", build=False):
     """What a measurement means, of a phase or of a build. Past its processor time, ended by a signal, or a status
     that is not 0: `blame`'s (Refusal: the candidate's doing; TipFault: the tip's side, where the first three are run
-    once more before it is said: undecided). Stopped by the clock while it
+    once more before it is said: undecided, and so are the gate's own status and a build's 137: GATE_FAILED,
+    KILLED_IN_A_BUILD). A candidate's program can end with either status itself: for a candidate they stay its
+    refusal, as any other status is. Stopped by the clock while it
     had NOT used its processor time: behind the gate a phase has no call that waits and no signal that stops it, so
     the machine did not give it a processor; a build may also wait on its own processes. Neither is held against
     anyone: a failure to judge, after which the hive asks about the tip itself."""
@@ -516,6 +529,11 @@ def outcome(m, cpu_most, wall, blame, what, said=b""):
     if m["signal"]:
         killed = " (killed: past its memory bound, most likely)" if m["signal"] == signal.SIGKILL else ""
         raise undecided(blame, f"{what}: ended by signal {m['signal']}{killed}. {said}")
+    if m["code"] == GATE_FAILED:
+        raise undecided(blame, f"{what}: exit status {GATE_FAILED} (the gate could not set itself up, or the program said so). {said}")
+    if build and m["code"] == KILLED_IN_A_BUILD:
+        raise undecided(blame, f"{what}: exit status {KILLED_IN_A_BUILD} (a process of the build was killed: past its memory bound, "
+                               f"most likely). {said}")
     if m["code"]:
         raise blame(f"{what}: exit status {m['code']}. {said}")
     if cpu > cpu_most:
@@ -568,7 +586,7 @@ class Judgement:
         except Refusal:  # the launcher stops its command at the clock; a container that outlives both is not the command's doing
             raise JudgeError(f"{what}: its container outlived the judge's own clock ({wall} s)") from None
         m = measured(ran, token, "run", blame, what)
-        outcome(m, cpu_most, wall, blame, what, ran.stderr)
+        outcome(m, cpu_most, wall, blame, what, ran.stderr, build=many)
         return m
 
     def build(self, sources, blame, what):
@@ -646,7 +664,7 @@ def seconds_of(*measurements):
 
 def judge(args, work):
     """One judgement, step by step (docs/relay-judge.md). Returns the report's figures; Refusal: code 1; JudgeError: code 2."""
-    STATE["step"] = 1
+    STATE["step"], STATE["tip_retried"] = 1, 0
     manifest = read_manifest(args.tip)
     if any(not isinstance(path, str) or not PATH.fullmatch(path.rstrip("/")) or not under(path.rstrip("/"), manifest["program"])
            for path in args.task_file or []):
@@ -697,7 +715,7 @@ def judge(args, work):
         return {"message_bytes": len(tip_message), "program_bytes": tip_weight, "total_bytes": tip_total, "tip_total_bytes": tip_total,
                 "gain_total_bytes": 0.0, "sure_total_bytes": 0, "encode_seconds": seconds_of(tip_time, tip_again), "decode_seconds": seconds_of(back_time),
                 "encode_memory_kb": max(tip_time["maxrss_kb"], tip_again["maxrss_kb"]), "decode_memory_kb": back_time["maxrss_kb"],
-                "builds": judgement.builds, "runs": judgement.runs}
+                "builds": judgement.builds, "runs": judgement.runs, "tip_retried": STATE["tip_retried"]}
     del tip_message
 
     STATE["step"] = 5  # the candidate's build (the tip's skeleton, its program, not the data); then R3: the same data twice
@@ -731,7 +749,8 @@ def judge(args, work):
             "sure_total_bytes": 1 if total < tip_total else 0,
             "encode_seconds": seconds_of(first, second), "decode_seconds": seconds_of(*times),
             "encode_memory_kb": max(first["maxrss_kb"], second["maxrss_kb"]), "decode_memory_kb": max(m["maxrss_kb"] for m in times),
-            "builds": judgement.builds, "runs": judgement.runs}
+            # (every build and phase started; each step of the tip's run once more adds one of them, and is counted here too)
+            "builds": judgement.builds, "runs": judgement.runs, "tip_retried": STATE["tip_retried"]}
 
 
 def write_report(path, report):

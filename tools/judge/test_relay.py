@@ -9,8 +9,10 @@
 The hostile programs below are texts of C written here, built and run ONLY in the judge's containers.
 """
 
+import ast
 import contextlib
 import hashlib
+import inspect
 import io
 import json
 import math
@@ -21,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 import zipfile
@@ -683,6 +686,30 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
             relay.outcome(ended(signal=9, user_s=0.3, system_s=0.1, wall_s=11.02), 4, 11, relay.TipFault, "the tip's phase")
         self.assertIs(type(raised.exception), JudgeError)
 
+    def test_the_gates_own_status_and_a_builds_137_are_not_decided_by_the_bytes(self):
+        """126, the gate's status when it could not set itself up, and a build's 137, its shell's word for a process
+        killed (by the kernel, for memory): the tip's are run once more; a candidate's stay its refusal, as its
+        program can end so itself; and a phase's 137 is its program's own status, decided by its bytes."""
+        ended = self.measurement
+        for code, build, said in ((126, False, "exit status 126 \\(the gate could not set itself up, or the program said so\\)"),
+                                  (126, True, "exit status 126 \\(the gate could not set itself up"),
+                                  (137, True, "exit status 137 \\(a process of the build was killed: past its memory bound, most likely\\)")):
+            with self.subTest(code=code, build=build):
+                with self.assertRaisesRegex(relay.TipFault, "the step: " + said) as raised:
+                    relay.outcome(ended(code=code), 4, 11, relay.TipFault, "the step", build=build)
+                self.assertIs(type(raised.exception), relay.Wavered, "the tip's: run once more")
+                for blame in (Refusal, JudgeError):
+                    with self.assertRaisesRegex(blame, "the step: " + said) as raised:
+                        relay.outcome(ended(code=code), 4, 11, blame, "the step", build=build)
+                    self.assertIs(type(raised.exception), blame, "a candidate's: its refusal, as before")
+        with self.assertRaisesRegex(relay.TipFault, r"the phase: exit status 137\. ") as raised:
+            relay.outcome(ended(code=137), 4, 11, relay.TipFault, "the phase")
+        self.assertIs(type(raised.exception), relay.TipFault, "a phase's 137 is its program's own: not run again")
+        for code in (1, 125, 127, 136, 138):
+            with self.subTest(code=code), self.assertRaises(relay.TipFault) as raised:
+                relay.outcome(ended(code=code), 4, 11, relay.TipFault, "the build", build=True)
+            self.assertIs(type(raised.exception), relay.TipFault, "every other status is the bytes' answer")
+
     def test_the_launchers_line_is_the_only_measurement(self):
         def ran(code, out):
             return subprocess.CompletedProcess(["chrono"], code, out, b"")
@@ -810,18 +837,27 @@ class TestAStepOfTheTipsRunOnceMore(Base):
                 ("the second encoding past its processor time", {"encode": {2: {"user_s": 6.0}}},
                  r"the tip's second encoding: took 6\.0 s of processor time; its bound is 5 s", 1, 4),
                 ("the decoding's container ended for its memory", {"decode": {1: "memory"}},
-                 r"the tip's decoding: its container was ended by the kernel for its memory", 1, 4)):
+                 r"the tip's decoding: its container was ended by the kernel for its memory", 1, 4),
+                ("the build's compiler killed, as its shell says", {"build": {1: {"code": 137}}},
+                 r"the tip's build: exit status 137 \(a process of the build was killed", 2, 3),
+                ("the gate of the decoding could not set itself up", {"decode": {1: {"code": 126}}},
+                 r"the tip's decoding: exit status 126 \(the gate could not set itself up", 1, 4)):
             with self.subTest(failed=name):
                 figures, log, _ = self.judge_with(ends)
                 self.assertIsInstance(figures, dict, figures)
-                self.assertEqual((figures["total_bytes"], figures["builds"], figures["runs"]), (len(pairs(DATA)) + len(self.PROGRAM), builds, runs),
-                                 "the judgement goes on with the second run, and counts both")
+                self.assertEqual((figures["total_bytes"], figures["builds"], figures["runs"], figures["tip_retried"]),
+                                 (len(pairs(DATA)) + len(self.PROGRAM), builds, runs, 1), "the judgement goes on with the second run, and counts both")
                 self.assertEqual(log.count(relay.ONCE_MORE), 1, log)
                 self.assertRegex(log, re.escape(relay.ONCE_MORE) + ": " + said)
         # the same with a candidate: judged as if nothing had happened, the tip's step that was run twice counted
         figures, log, _ = self.judge_with({"encode": {1: {"signal": 11, "wall_s": 1.0}}}, candidate=True)
-        self.assertEqual((figures["sure_total_bytes"], figures["builds"], figures["runs"]), (0, 2, 8), figures)
+        self.assertEqual((figures["sure_total_bytes"], figures["builds"], figures["runs"], figures["tip_retried"]), (0, 2, 8, 1), figures)
         self.assertIn(relay.ONCE_MORE, log)
+        figures, log, _ = self.judge_with({}, candidate=True)
+        self.assertEqual((figures["builds"], figures["runs"], figures["tip_retried"]), (2, 7, 0), "nothing run once more: nothing counted")
+        figures, log, _ = self.judge_with({"build": {1: {"code": 126}}, "encode": {2: {"signal": 9, "wall_s": 1.0}}, "decode": {1: "memory"}})
+        self.assertEqual((figures["builds"], figures["runs"], figures["tip_retried"], log.count(relay.ONCE_MORE)), (2, 5, 3, 3),
+                         "each step run once more is counted once")
 
     def test_the_same_failure_twice_is_on_the_tips_side(self):
         for name, ends, said, started_then in (
@@ -836,6 +872,7 @@ class TestAStepOfTheTipsRunOnceMore(Base):
                 self.assertIn("run twice", str(error))
                 self.assertEqual(log.count(relay.ONCE_MORE), 1, log)
                 self.assertEqual(started, started_then, "the step twice, and nothing after it")
+                self.assertEqual(relay.STATE["tip_retried"], 1, "the report the judge then writes counts it")
 
     def test_what_its_bytes_decide_is_not_run_again_and_a_candidates_step_never_is(self):
         for name, ends, said, started_then in (
@@ -844,19 +881,88 @@ class TestAStepOfTheTipsRunOnceMore(Base):
                 ("two encodings that differ", {"encode": {2: "another message"}}, "the tip's own two encodings of the data are not the same bytes",
                  {"build": 1, "encode": 2, "decode": 0}),
                 ("a decoding that is not the data", {"decode": {1: "another message"}}, "the tip's own program does not give the data back",
-                 {"build": 1, "encode": 2, "decode": 1})):
+                 {"build": 1, "encode": 2, "decode": 1}),
+                ("a phase's own status 137", {"encode": {1: {"code": 137}}}, "the tip's first encoding: exit status 137. ",
+                 {"build": 1, "encode": 1, "decode": 0})):
             with self.subTest(failed=name):
                 error, log, started = self.judge_with(ends, candidate=True)
                 self.assertIs(type(error), relay.TipFault, error)
                 self.assertIn(said, str(error))
                 self.assertNotIn(relay.ONCE_MORE, log)
                 self.assertEqual(started, started_then)
+                self.assertEqual(relay.STATE["tip_retried"], 0)
         # the candidate's first encoding killed: refused at once, never run again
         error, log, started = self.judge_with({"encode": {3: {"signal": 9, "wall_s": 1.0}}}, candidate=True)
         self.assertIs(type(error), Refusal, error)
         self.assertIn("the candidate's first encoding: ended by signal 9", str(error))
         self.assertNotIn(relay.ONCE_MORE, log)
         self.assertEqual(started, {"build": 2, "encode": 3, "decode": 1})
+        # nor its build whose compiler was killed, nor a phase whose gate could not set itself up
+        for ends, said, started_then in (({"build": {2: {"code": 137}}}, "the candidate's build: exit status 137", {"build": 2, "encode": 2, "decode": 1}),
+                                         ({"decode": {2: {"code": 126}}}, "the candidate's first decoding: exit status 126",
+                                          {"build": 2, "encode": 4, "decode": 2})):
+            error, log, started = self.judge_with(ends, candidate=True)
+            self.assertIs(type(error), Refusal, error)
+            self.assertIn(said, str(error))
+            self.assertNotIn(relay.ONCE_MORE, log)
+            self.assertEqual(started, started_then)
+
+    def test_a_retried_encoding_is_compared_with_the_other_one(self):
+        """The tip's two encodings are each a step of their own: the one run once more gives the message the other is
+        held to, and two that differ are the tip's fault however each came, never run again for that."""
+        for name, ends, started_then in (
+                ("the first retried, the second another message", {"encode": {1: {"signal": 9, "wall_s": 1.0}, 3: "another message"}},
+                 {"build": 1, "encode": 3, "decode": 0}),
+                ("the second retried, and its second run another message", {"encode": {2: {"user_s": 6.0}, 3: "another message"}},
+                 {"build": 1, "encode": 3, "decode": 0}),
+                ("the first retried, its second run another message", {"encode": {1: "memory", 2: "another message"}},
+                 {"build": 1, "encode": 3, "decode": 0})):
+            with self.subTest(name):
+                error, log, started = self.judge_with(ends, candidate=True)
+                self.assertIs(type(error), relay.TipFault, error)
+                self.assertIn("the tip's own two encodings of the data are not the same bytes", str(error))
+                self.assertNotIn("run twice", str(error), "the difference is decided by the bytes: said as such")
+                self.assertEqual((log.count(relay.ONCE_MORE), started, relay.STATE["tip_retried"]), (1, started_then, 1))
+        # both retried, and each second run the same message: the judgement goes on
+        figures, log, started = self.judge_with({"encode": {1: {"signal": 9, "wall_s": 1.0}, 3: {"signal": 6}}}, candidate=True)
+        self.assertEqual((figures["sure_total_bytes"], figures["tip_retried"], started), (0, 2, {"build": 2, "encode": 6, "decode": 3}))
+
+    def test_a_wavered_never_leaves_once_more(self):
+        """Wavered is once_more's own: a step that wavers twice ends as TipFault, never as Wavered; what is not
+        Wavered goes through at once, the step run once; and every step the judgement blames on the tip is run
+        inside once_more."""
+        calls = []
+
+        def step(*answers):
+            def run():
+                calls.append(1)
+                answer = answers[len(calls) - 1]
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+            calls.clear()
+            return run
+
+        relay.STATE["tip_retried"] = 0
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual((relay.once_more(step(relay.Wavered("first"), "second")), len(calls)), ("second", 2))
+            with self.assertRaises(relay.TipFault) as raised:
+                relay.once_more(step(relay.Wavered("first"), relay.Wavered("again")))
+            self.assertIs(type(raised.exception), relay.TipFault)
+            self.assertEqual(str(raised.exception), "again (run twice: it failed the first time too)")
+            for error in (relay.TipFault("decided"), Refusal("no"), JudgeError("machine"), ValueError("defect")):
+                with self.subTest(error=type(error).__name__), self.assertRaises(type(error)) as raised:
+                    relay.once_more(step(error, "never"))
+                self.assertIs(raised.exception, error)
+                self.assertEqual(len(calls), 1, "not run again")
+        self.assertEqual(relay.STATE["tip_retried"], 2)
+        # every call in judge() that names TipFault is the body of a lambda that once_more is given
+        tree = ast.parse(textwrap.dedent(inspect.getsource(relay.judge)))
+        wrapped = {id(node) for call in ast.walk(tree) if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "once_more"
+                   for lam in call.args if isinstance(lam, ast.Lambda) for node in ast.walk(lam.body)}
+        blamed = [call for call in ast.walk(tree) if isinstance(call, ast.Call) and any(getattr(arg, "id", None) == "TipFault" for arg in call.args)]
+        self.assertGreaterEqual(len(blamed), 4, "the tip's build, its two encodings and its decoding")
+        self.assertTrue(all(id(call) in wrapped for call in blamed), [ast.unparse(call) for call in blamed if id(call) not in wrapped])
 
 
 @unittest.skipUnless(CONTAINERS, "the whole judge: BEE_JUDGE_INTEGRATION=1 and Docker")
@@ -878,6 +984,15 @@ class TestTheJudgeInContainers(Base):
         self.assertEqual(os.listdir(self.root / "work"), [], "nothing of a judgement stays")
         self.assertNotIn(str(self.root), Path("/proc/mounts").read_text(), "nothing stays mounted")
         return ran.returncode, report, ran.stderr
+
+    def assertSteps(self, report, builds, runs, message=None):
+        """The builds and phases a judgement started: `builds` and `runs`, and one more of either for each step of the
+        tip's run once more (tip_retried), which a slow or crowded runner may cause and the judgement forgives. With
+        none run once more, exactly those numbers."""
+        retried = report["tip_retried"]
+        self.assertTrue(type(retried) is int and 0 <= retried <= 4, report)
+        self.assertTrue(builds <= report["builds"] <= builds + retried and runs <= report["runs"] <= runs + retried
+                        and report["builds"] + report["runs"] == builds + runs + retried, message or report)
 
     def candidate(self, changes, tip=None):
         self.made = getattr(self, "made", 0) + 1
@@ -935,12 +1050,13 @@ class TestTheJudgeInContainers(Base):
         code, report, err = self.judge()
         tip_total = tip_message + report["program_bytes"]
         self.assertEqual((code, report["message_bytes"], report["total_bytes"], report["tip_total_bytes"], report["gain_total_bytes"],
-                          report["sure_total_bytes"], report["builds"], report["runs"], report["step"]),
-                         (0, tip_message, tip_total, tip_total, 0.0, 0, 1, 3, 4), err)
+                          report["sure_total_bytes"], report["step"]),
+                         (0, tip_message, tip_total, tip_total, 0.0, 0, 4), err)
+        self.assertSteps(report, 1, 3)
         self.assertGreater(report["program_bytes"], 4096, "the program weighs what the build left: a whole executable")
         better = self.answered(BETTER, 0)
-        self.assertEqual((better["tip_total_bytes"], better["builds"], better["runs"], better["step"]), (tip_total, 2, 7, 7),
-                         "the tip encodes twice and decodes once; the candidate encodes twice and decodes twice")
+        self.assertEqual((better["tip_total_bytes"], better["step"]), (tip_total, 7))
+        self.assertSteps(better, 2, 7, "the tip encodes twice and decodes once; the candidate encodes twice and decodes twice")
         self.assertLess(better["message_bytes"], tip_message)
         self.assertEqual(better["total_bytes"], better["message_bytes"] + better["program_bytes"], "the figure is the message and the program")
         self.assertEqual((better["gain_total_bytes"], better["sure_total_bytes"]), (math.floor((1 - better["total_bytes"] / tip_total) * 1e6) / 1e6, 1),
@@ -948,7 +1064,8 @@ class TestTheJudgeInContainers(Base):
         self.assertTrue(0 <= better["encode_seconds"] < 4 and 0 <= better["decode_seconds"] < 4 and better["encode_memory_kb"] > 0)
         # the tip judged as a candidate (the hive's question about the tip): right, the same figure, and no proof of a gain
         same = self.answered(TIP_PROGRAM, 0)
-        self.assertEqual((same["total_bytes"], same["gain_total_bytes"], same["sure_total_bytes"], same["runs"]), (tip_total, 0.0, 0, 7))
+        self.assertEqual((same["total_bytes"], same["gain_total_bytes"], same["sure_total_bytes"]), (tip_total, 0.0, 0))
+        self.assertSteps(same, 2, 7)
         # what does not reach the built program weighs nothing: a comment of a thousand letters is the same program
         commented = self.answered(TIP_PROGRAM + "/* " + "".join(random.Random(3).choice("abcdefghij") for _ in range(1000)) + " */\n", 0)
         self.assertEqual((commented["total_bytes"], commented["sure_total_bytes"]), (tip_total, 0))
@@ -1199,8 +1316,13 @@ class TestTheJudgeInContainers(Base):
                     tips_own = not name.startswith(("data", "bounds"))
                     self.assertEqual(("on the tip's side (not the candidate's)" in report["reason"], report.get("fault")),
                                      (tips_own, "tip" if tips_own else None), report["reason"])
-                    # past its time is run once more first; what the tip's bytes decide is not
-                    self.assertEqual(relay.ONCE_MORE in err, name == "a program past its time", err)
+                    # past its time is run once more first; what the tip's bytes decide is not (another step of the tip's
+                    # may still be run once more, on a slow runner: the failure said is the one asked about)
+                    self.assertEqual("(run twice: it failed the first time too)" in report["reason"], name == "a program past its time",
+                                     report["reason"])
+                    if name == "a program past its time":
+                        self.assertIn(relay.ONCE_MORE, err)
+                        self.assertGreaterEqual(report["tip_retried"], 1)
         code, report, err = self.judge(self.candidate({"codec/codec.c": BETTER}), files=["bee/relay/main.c"])
         self.assertEqual(code, 2, err)
         self.assertRegex(report["reason"], "the task lists a path that is not the program's")
@@ -1216,8 +1338,8 @@ class TestTheJudgeInContainers(Base):
         base = write_tree(trees / "base")
         itself = judge(base, base, task, "T" * 40, "T" * 40)
         tip_total = itself["report"]["total_bytes"]
-        self.assertEqual((itself["code"], itself["report"]["message_bytes"], itself["report"]["sure_total_bytes"], itself["report"]["runs"]),
-                         (0, len(pairs(DATA)), 0, 3))
+        self.assertEqual((itself["code"], itself["report"]["message_bytes"], itself["report"]["sure_total_bytes"]), (0, len(pairs(DATA)), 0))
+        self.assertSteps(itself["report"], 1, 3)
         answer = judge(base, write_tree(trees / "right", {"codec/codec.c": BETTER}), task, "T" * 40, "C" * 40)
         self.assertEqual((answer["code"], answer["report"]["sure_total_bytes"], answer["report"]["tip_total_bytes"]), (0, 1, tip_total))
         self.assertEqual(answer["report"]["gain_total_bytes"], math.floor((1 - answer["report"]["total_bytes"] / tip_total) * 1e6) / 1e6)
