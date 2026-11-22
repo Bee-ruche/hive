@@ -157,6 +157,11 @@ hive ready --project <PROJECT> --login <LOGIN>
 It makes the ask, pushes it to the user's fork itself, and prints `ASKED <commit>`. Then stop. The hive deals you a
 task at its next run; your next run will find it.
 
+If it answers `hive: the push to your fork did not land: the fork's branch hive leaves no room for hive/ready …`
+(or `submit` does, for `hive/submit/<id>`), stop and tell the user, with that line. The fork holds a copy of the
+project's branches, made when it was forked with every branch. Only the user deletes them, on GitHub: you write
+nothing but the two branches of rule 2.
+
 **Ask only if the user's prompt says this worker runs at least every two hours** (hourly is best). The hive deals
 a task at one run and you do it at the next: a deal lasts three hours, and `next` starts on one only with an hour
 of it left. If the prompt does not say how often the worker runs, ask once, and say in your final message that the

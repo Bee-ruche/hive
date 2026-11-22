@@ -7252,13 +7252,44 @@ def copied_out(clone, folder, *commits):
     return store
 
 
+# (A line the tool prints is cut at 400 characters: this one keeps under 300 before the two names, which the tool's own
+# constants and the task's id make.)
+IN_THE_WAY = ("the push to your fork did not land: the fork's branch {found} leaves no room for {branch}. Nothing was pushed. Stop, "
+              "and tell the user to delete from the fork, on GitHub, every branch but its default one: a fork made with every branch "
+              "copied holds the project's, which a worker does not need (this tool deletes no branch)")
+
+
+def in_the_way(clone, url, branch):
+    """The fork's branches that leave no room for `branch`, as the fork itself lists them: one named as a folder of its
+    name (« hive » or « hive/submit » for « hive/submit/<task> »), by that name, which is a part of the tool's own; and
+    any below it, as « <branch>/... » (their names are the fork's: not repeated). git keeps a branch's name as a path,
+    so such a branch stops the push, whatever words GitHub or git then give the refusal. Nothing if the fork cannot
+    be asked: the push's own failure is said then."""
+    parts = branch.split("/")
+    above = [f"refs/heads/{'/'.join(parts[:n])}" for n in range(1, len(parts))]
+    try:
+        listed = clone.git("ls-remote", "--heads", url, *above, f"refs/heads/{branch}/*", to=url, check=False, timeout=60)
+    except HiveError:
+        return []
+    if listed.returncode != 0:
+        return []
+    refs = {line.partition("\t")[2] for line in listed.stdout.splitlines()}
+    return [ref[len("refs/heads/"):] for ref in above if ref in refs] + \
+        ([f"{branch}/..."] if any(ref.startswith(f"refs/heads/{branch}/") for ref in refs) else [])
+
+
 def push(clone, url, source, branch):
     """Pushes one commit (or, with an empty source, a deletion) to one branch of the member's own fork, over what was
-    there. To the address own_fork derived, never to a remote's name: a name is resolved through settings."""
+    there. To the address own_fork derived, never to a remote's name: a name is resolved through settings. A push
+    that does not land repeats nothing git said (Clone.git); a branch of the fork that leaves no room for this one is
+    told from the other causes by asking the fork (in_the_way)."""
     try:
         clone.git("push", "--quiet", "--force", "--no-verify", "--no-follow-tags", "--no-signed", "--recurse-submodules=no", url,
                   f"{source}:refs/heads/{branch}", to=url, timeout=300)
     except HiveError as error:
+        found = in_the_way(clone, url, branch) if source else []
+        if found:
+            raise HiveError(IN_THE_WAY.format(found=" and ".join(found), branch=branch)) from None
         raise HiveError(f"the push to your fork did not land ({error}). Nothing else was pushed: run the command again; if it "
                         "fails again, stop and tell the user to check that this machine may push to the fork, and if it may, to "
                         "take a fresh clone of the fork") from None

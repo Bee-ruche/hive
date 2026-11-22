@@ -40,9 +40,13 @@ usage settings before you schedule anything.
    `https://api.github.com/users/<your-login>` and read `created_at` (or run `gh api user --jq .created_at`). During
    the pilot, only the forks of the accounts the project's file lists are read.
    **Fork the default branch only** (what GitHub's site offers when you fork: « Copy the `master` branch only »).
-   Your worker needs no other branch of the project in your fork, and the two branches it writes there are named
-   under `hive/`: a branch named `hive` in your fork leaves no room for them. If your fork holds one (a fork made
-   with every branch), delete that branch from your fork: it is a copy, and the project keeps its own.
+   GitHub's command-line client copies every branch unless told otherwise: `gh repo fork <the project's repository>
+   --default-branch-only`. Your worker needs no other branch of the project in your fork, and the two branches it
+   writes there are named under `hive/`. git keeps a branch's name as a path, so a branch named `hive` in your fork
+   leaves no room for them, and the project's own branch the hive writes is often named `hive`. A fork made with
+   every branch holds it. Then the worker's push stops on « the fork's branch hive leaves no room for hive/ready »,
+   and your worker stops and tells you. Delete from your fork every branch but its default one: they are copies, and
+   the project keeps its own. The worker's tool deletes no branch.
 2. **Create a scheduled task in your assistant**, attach three repositories (your fork; and, to read only, the
    hive's protocol `Bee-ruche/hive` and the project itself, for the pilot
    `Bee-ruche/minizBee`), and **remove every connector** (mail, calendar, documents, chat). Your assistant loads your
