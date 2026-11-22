@@ -3267,10 +3267,14 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
             log("the time allowed for judging is used up: the questions about the tip wait for the next run")
         if state["down"]:
             return None
-        code = ask(tip, tree_of(repo, tip), task, tip, f"{task['id']}: the tip as a candidate", question=True)["code"]
-        if code not in (0, 1):
+        answer = ask(tip, tree_of(repo, tip), task, tip, f"{task['id']}: the tip as a candidate", question=True)
+        code = answer["code"]
+        if code not in (0, 1) and answer.get("fault") == TIP_FAULT:
+            log(f"{task['id']}: the judge found the fault on the tip's own side (the project's programs, measured as the tip's), before "
+                "it judged the tip as a candidate for it: \"unknown\", asked again in a day")
+        elif code not in (0, 1):
             log(f"{task['id']}: the judge could not judge the tip as a candidate for it (the task names a piece it does not know, or its "
-                "machine fails): « unknown », asked again in a day")
+                "machine fails): \"unknown\", asked again in a day")
         return {1: "failing", 0: "passing"}.get(code, "unknown")
     verdict_of.machine_down = lambda: state["machine"]  # (for the run's own account of itself: judge_plan)
     verdict_of.about_the_tip = about_the_tip
@@ -4543,6 +4547,9 @@ def cutters_state(folder, config):
             "<folder>, and give that folder")
     if not state.is_dir():
         raise HiveError(f"the folder given to --state does not exist: {take}")
+    # (A clone in git's reftable format keeps « ref: refs/heads/.invalid » in that file and its true HEAD elsewhere: on
+    # its first day, before a run writes a file of the state, it reads as no state. So does a linked work tree, whose
+    # .git is a file.)
     status, head = read_untrusted_bytes(state / ".git" / "HEAD", 256)
     if not any((state / name).is_file() for name in STATE_FILES) and not (status == "ok" and head.strip() == f"ref: refs/heads/{STATE_BRANCH}".encode()):
         raise HiveError(f"the folder given to --state holds none of the state's files ({', '.join(STATE_FILES)}) and is not a clone of "
@@ -7270,30 +7277,43 @@ def copied_out(clone, folder, *commits):
     return store
 
 
-# (A line the tool prints is cut at 400 characters: this one keeps under 300 before the two names, which the tool's own
-# constants and the task's id make.)
-IN_THE_WAY = ("the push to your fork did not land: the fork's branch {found} leaves no room for {branch}. Nothing was pushed. Stop, "
-              "and tell the user to delete from the fork, on GitHub, every branch but its default one: a fork made with every branch "
-              "copied holds the project's, which a worker does not need (this tool deletes no branch)")
+# What a push that a branch of the fork leaves no room for says (in_the_way). A line the tool prints is cut at 400
+# characters: each keeps « deletes no branch » in its first 70, and its fixed text under 230, beside two names the tool's
+# own constants and the task's id make. Only the branch in the way is to go: the fork's other branches may be the user's.
+IN_THE_WAY = ("the push to your fork did not land, and this tool deletes no branch: {found} no room for {branch}. Nothing was "
+              "pushed. Stop, and tell the user to delete or rename {that} in the fork, on GitHub, and no other")
+DEFAULT_IN_THE_WAY = ("the push to your fork did not land, and this tool deletes no branch: the fork's default branch, {found}, leaves "
+                      "no room for {branch}, and cannot be deleted. Nothing was pushed. The worker cannot work from this fork: stop, "
+                      "and tell the user")
 
 
 def in_the_way(clone, url, branch):
-    """The fork's branches that leave no room for `branch`, as the fork itself lists them: one named as a folder of its
-    name (« hive » or « hive/submit » for « hive/submit/<task> »), by that name, which is a part of the tool's own; and
-    any below it, as « <branch>/... » (their names are the fork's: not repeated). git keeps a branch's name as a path,
-    so such a branch stops the push, whatever words GitHub or git then give the refusal. Nothing if the fork cannot
-    be asked: the push's own failure is said then."""
+    """What to say when a branch of the fork leaves no room for `branch`, as the fork itself lists its branches, or
+    None: a branch named as a folder of its name (« hive » or « hive/submit » for « hive/submit/<task> »), said by that
+    name, which is a part of the tool's own; or branches below it, said as « below <branch>/ » (their names are the
+    fork's: not repeated). git keeps a branch's name as a path, so such a branch stops the push, whatever words GitHub
+    or git then give the refusal. When it is the fork's default branch (its HEAD), it cannot be deleted, and the line
+    says the worker cannot work from this fork. None if the fork cannot be asked: the push's own failure is said."""
     parts = branch.split("/")
     above = [f"refs/heads/{'/'.join(parts[:n])}" for n in range(1, len(parts))]
     try:
-        listed = clone.git("ls-remote", "--heads", url, *above, f"refs/heads/{branch}/*", to=url, check=False, timeout=60)
+        listed = clone.git("ls-remote", "--symref", url, "HEAD", *above, f"refs/heads/{branch}/*", to=url, check=False, timeout=60)
     except HiveError:
-        return []
+        return None
     if listed.returncode != 0:
-        return []
-    refs = {line.partition("\t")[2] for line in listed.stdout.splitlines()}
-    return [ref[len("refs/heads/"):] for ref in above if ref in refs] + \
-        ([f"{branch}/..."] if any(ref.startswith(f"refs/heads/{branch}/") for ref in refs) else [])
+        return None
+    lines = [line.partition("\t") for line in listed.stdout.splitlines()]
+    refs = {name for _, _, name in lines if name.startswith("refs/heads/")}
+    default = next((value[len("ref: "):] for value, _, name in lines if name == "HEAD" and value.startswith("ref: ")), None)
+    named = [ref for ref in above if ref in refs]
+    below = sorted(ref for ref in refs if ref.startswith(f"refs/heads/{branch}/"))
+    if named or below:
+        if default in named or default in below:
+            return DEFAULT_IN_THE_WAY.format(found=named[0][len("refs/heads/"):] if default in named else f"named below {branch}/", branch=branch)
+        if named:
+            return IN_THE_WAY.format(found=f"the fork's branch {named[0][len('refs/heads/'):]} leaves", that="that branch", branch=branch)
+        return IN_THE_WAY.format(found=f"the fork's branches below {branch}/ leave", that="those branches", branch=branch)
+    return None
 
 
 def push(clone, url, source, branch):
@@ -7305,9 +7325,9 @@ def push(clone, url, source, branch):
         clone.git("push", "--quiet", "--force", "--no-verify", "--no-follow-tags", "--no-signed", "--recurse-submodules=no", url,
                   f"{source}:refs/heads/{branch}", to=url, timeout=300)
     except HiveError as error:
-        found = in_the_way(clone, url, branch) if source else []
-        if found:
-            raise HiveError(IN_THE_WAY.format(found=" and ".join(found), branch=branch)) from None
+        said = in_the_way(clone, url, branch) if source else None
+        if said:
+            raise HiveError(said) from None
         raise HiveError(f"the push to your fork did not land ({error}). Nothing else was pushed: run the command again; if it "
                         "fails again, stop and tell the user to check that this machine may push to the fork, and if it may, to "
                         "take a fresh clone of the fork") from None

@@ -165,9 +165,12 @@ random among the open tasks a member may take. A draw weighted by the cutter is 
   ever dealt. A folder is a state if it holds at least one of the state's files (`ledger.jsonl`, `feed.json`,
   `ignored.json`, `accounts.json`, `stats.json`, `tip.json`), or if git's own `HEAD` in it names the branch
   `hive-state`. So a project's first day is a state: the branch as its lead made it, with a README and nothing
-  else, or a state written by runs that dealt nothing yet and hold no ledger. A folder that does not exist, an
-  empty one, or the project's own clone is not; nor is a state whose feed names another project. The refusal says
-  how to take the state: `git clone --depth 1 --branch hive-state https://github.com/<owner>/<name> <folder>`.
+  else, or a state written by runs that dealt nothing yet and hold no ledger. A state whose feed names another
+  project is refused. The test is only that (a file of the state at the folder's root, or the branch `hive-state`
+  checked out), so it refuses a folder that does not exist, an empty one, and the project's own clone unless that
+  holds a file of one of those names at its root; and it cannot tell another project's state on its first day (no
+  feed yet), or any repository on a branch of that name, from this project's. The refusal says how to take the
+  state: `git clone --depth 1 --branch hive-state https://github.com/<owner>/<name> <folder>`.
 - It reads the project's code only through a **mechanical projection**, `hive.py outline`: the files, the
   functions, where each starts and how long it is, **with comments, strings and preprocessor lines removed**, read
   from git at the project's tip as text (nothing of the project is built or run, no link is followed). The

@@ -45,8 +45,9 @@ usage settings before you schedule anything.
    writes there are named under `hive/`. git keeps a branch's name as a path, so a branch named `hive` in your fork
    leaves no room for them, and the project's own branch the hive writes is often named `hive`. A fork made with
    every branch holds it. Then the worker's push stops on « the fork's branch hive leaves no room for hive/ready »,
-   and your worker stops and tells you. Delete from your fork every branch but its default one: they are copies, and
-   the project keeps its own. The worker's tool deletes no branch.
+   and your worker stops and tells you. Delete or rename the branch that line names, on GitHub, and no other: your
+   own branches stay. If the line says it is your fork's default branch, GitHub does not let you delete it, and the
+   worker cannot work from that fork. The worker's tool deletes no branch.
 2. **Create a scheduled task in your assistant**, attach three repositories (your fork; and, to read only, the
    hive's protocol `Bee-ruche/hive` and the project itself, for the pilot
    `Bee-ruche/minizBee`), and **remove every connector** (mail, calendar, documents, chat). Your assistant loads your

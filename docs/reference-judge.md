@@ -94,7 +94,11 @@ That is taken as the tip's; it does not prove the tip's code wrong (a time bound
 machine's). Docker's own failure stays the machine's, and a tree the judge cannot read is said as before. From step 4
 on, the candidate's build has run, and no failure is said to be on the tip's side: there the question about the tip
 itself, with the same seed, tells the machine and the tip from the candidate. Unlike the relay kind, no step is run
-once more first.
+once more first. A retry would count those steps twice in the worst case the manifest must fit in
+`judge.timeout_seconds`, and the control alone is two builds at three times a unit's build time. A project whose
+bounds fit today could then fit no longer, and every judgement would be a 2 (cjson's worst case would go from 1,730 s
+to 2,630 s, above the 2,280 s it has). So a time bound reached once in those steps, on a slow or crowded machine,
+costs the run's judging: every candidate of the run waits for the next one, and none is charged.
 
 **The tip as a candidate.** For the project's cutter, in a quiet run (no candidate, no task held), the base also asks
 whether the tip already does what a planned task asks ([cutter.md](cutter.md), "The proof at the tip"). That is not the tip against itself: it is a candidate's
