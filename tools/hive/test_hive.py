@@ -4807,6 +4807,33 @@ class TestDealing(Base):
                 with mock.patch.object(hive.subprocess, "run", side_effect=ran):
                     self.assertEqual(judge(base, base, {"id": "toy-0001", "files": ["src/"]}, "T" * 40, "C" * 40), expected)
 
+    def test_the_reference_kinds_call_carries_the_judges_word_that_the_tip_is_at_fault(self):
+        """The reference kind's judge says a failure of its steps 2 and 3 (the project's reference and its control,
+        before anything of the candidate's) is on the tip's side. Its call carries `"fault": "tip"` as the relay
+        kind's does: on a failure to judge alone, when the report's own code and the judge's exit status agree (2)."""
+        judge = hive.judge_of("/registry", {"kind": "reference", "timeout_seconds": 900}, None)
+        task = {"id": "toy-0001", "files": ["port/upper.c"], "options": {"unit": "upper"}}
+        cases = ((2, {"code": 2, "fault": "tip", "reason": "x", "step": 2}, {"code": 2, "report": {}, "fault": "tip"}),
+                 (2, {"code": 2, "reason": "x", "step": 2}, {"code": 2, "report": {}}),
+                 (2, {"code": 1, "fault": "tip"}, {"code": 2, "report": {}}),
+                 (1, {"code": 1, "fault": "tip"}, {"code": 1, "report": {}}),
+                 (0, {"code": 0, "fault": "tip", "seed_origin": "drawn", "cases_compared": 4, "builds": 2, "runs": 4},
+                  {"code": 0, "report": {"cases_compared": 4, "builds": 2, "runs": 4}}),
+                 (2, {"code": 2, "fault": "Tip"}, {"code": 2, "report": {}}),
+                 (2, ["code", 2, "fault", "tip"], {"code": 2, "report": {}}))
+        for exit_status, report, expected in cases:
+            for commit, named in (("C" * 40, {}), ("T" * 40, {}), ("T" * 40, {"question": True})):
+                with self.subTest(report=report, commit=commit, **named), tempfile.TemporaryDirectory() as folder:
+                    base = Path(folder) / "base"
+                    base.mkdir()
+
+                    def ran(command, **options):
+                        (base.parent / "reference.json").write_text(json.dumps(report))
+                        return subprocess.CompletedProcess(command, exit_status, "", "")
+
+                    with mock.patch.object(hive.subprocess, "run", side_effect=ran):
+                        self.assertEqual(judge(base, base, task, "T" * 40, commit, **named), expected)
+
     def test_the_relay_kinds_call_says_in_the_runs_log_that_a_step_of_the_tips_was_run_once_more(self):
         """The judge's own line about a step of the tip's run once more stays in its output, which the hive does not
         show. Its report counts them (tip_retried), whatever it answers: the call says it in the run's log, in its own

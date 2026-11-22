@@ -4022,7 +4022,11 @@ def reference_judge(registry_root, workdir=None, timeout=3600):
     `question`: the tip judged AS A CANDIDATE for a planned task (judging: about_the_tip), where `candidate` is the
     tip's own tree, written out as a candidate's is: the whole judgement a candidate has, the unit the tip holds built
     and run as a candidate's would be, on cases drawn then; never --tip-itself, which stops before any unit is built.
-    Correct (0) means the tip already does what the task asks; refused (1), that it does not."""
+    Correct (0) means the tip already does what the task asks; refused (1), that it does not.
+
+    A failure the judge says is on the tip's side (`"fault": "tip"` in its report, from its steps 2 and 3: the
+    project's reference and its control, before anything of the candidate's is built or run) is carried as the relay
+    kind's is: the base then asks no question about the tip itself, stops judging and charges no candidate."""
     judge_py, kept = Path(registry_root) / "tools/judge/reference.py", {"seed": None}
 
     def run(base, candidate, task, tip, commit, question=False):
@@ -4062,7 +4066,12 @@ def reference_judge(registry_root, workdir=None, timeout=3600):
             kept["seed"] = drawn  # (a question about the tip as a candidate is followed by no question about the tip itself)
         figures = {name: report[name] for name in ("cases_compared", "builds", "runs")
                    if code == 0 and type(report.get(name)) is int and 0 <= report[name] < 10 ** 12}
-        return {"code": code, "report": figures}
+        said = {"code": code, "report": figures}
+        # The judge's own word that its failure is the tip's doing (its reference or its control, built and run before
+        # anything of the candidate's): in the report it wrote, which agrees with its exit status. (relay_judge, the same.)
+        if code == 2 and ran.returncode == 2 and isinstance(report, dict) and report.get("code") == 2 and report.get("fault") == TIP_FAULT:
+            said["fault"] = TIP_FAULT
+        return said
 
     return run
 

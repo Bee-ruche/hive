@@ -66,6 +66,16 @@ SEED = re.compile(r"[0-9a-f]{64}")
 STATE = {}               # what the report says of a judgement that stops: the step, the seed
 
 
+class TipFault(JudgeError):
+    """A failure to judge on the TIP's side: the project's own reference, or its skeleton with its blank unit in the
+    unit's place (the control), failed to build or to run, in steps 2 and 3. Nothing of the candidate's has been
+    built or run by then in the judgement: its files were only read. Still a 2 (the candidate is not judged), said as
+    such in the reason (« on the tip's side ») and in the report (`"fault": "tip"`), as the relay kind says it: the
+    base then stops judging and charges no candidate. It is taken as the tip's; it does not prove the tip's code
+    wrong (a time bound reached on a slow machine is the machine's). Docker's own failure stays the machine's
+    (MachineFailure), and a tree the judge cannot read is said as before: the steps that build or run alone say it."""
+
+
 # ---------------------------------------------------------------- the manifest: data, every field checked
 
 def whole(value, bounds, name):
@@ -339,16 +349,16 @@ class Judgement:
         self.count += 1
         return os.path.join(self.work, f"{self.count:03d}-{name}")
 
-    def build_reference(self, sources):
+    def build_reference(self, sources, blame=JudgeError):
         """The reference's driver and the generator, as the tip's own script leaves them: a folder to mount."""
         kept = self.folder("reference")
         with bounded_folder(self.folder("out"), self.manifest["output_mb"]) as out:
             launch(self.docker, ["sh", "/src/" + BUILD_REFERENCE], [(sources, "/src", True), (out, "/out", False)],
-                   self.manifest["build_processes"], self.manifest["reference_seconds"], JudgeError, "the reference's build")
+                   self.manifest["build_processes"], self.manifest["reference_seconds"], blame, "the reference's build")
             for name in ("reference", "generate"):
-                data = left(out, name, self.manifest["output_mb"] << 20, JudgeError, f"the reference's build: /out/{name}")
+                data = left(out, name, self.manifest["output_mb"] << 20, blame, f"the reference's build: /out/{name}")
                 if data is None:
-                    raise JudgeError(f"the reference's build left no /out/{name}")
+                    raise blame(f"the reference's build left no /out/{name}")
                 keep_file(kept, name, data, executable=True)
         return kept
 
@@ -488,10 +498,13 @@ def judge(args, work):
         candidate_sources = judgement.folder("candidate-sources")
         copy_paths(args.candidate, unit["files"], candidate_sources, Refusal, file_limit=manifest["unit_bytes"], files_only=True)
 
+    # Steps 2 and 3 build and run the project's own programs alone, before anything of the candidate's is built or
+    # run: what fails there in a build or a run is on the tip's side (TipFault), and the base may take it for that (it
+    # stops judging, and charges no candidate). Never after: from step 4 on, the candidate's build has run.
     STATE["step"] = 2
     sources = judgement.folder("reference-sources")
     copy_paths(args.tip, manifest["reference"], sources, JudgeError)
-    reference = judgement.build_reference(sources)
+    reference = judgement.build_reference(sources, TipFault)
 
     # The control: the skeleton with the project's BLANK unit in the unit's place builds, twice, into two different
     # binaries, and its driver starts. Never the unit the tip holds: that one was a candidate's, and nothing a
@@ -509,12 +522,12 @@ def judge(args, work):
         if data is None:
             raise JudgeError(f"the project's tip holds no blank unit {blank}")
         keep_file(os.path.dirname(os.path.join(control_sources, path)), os.path.basename(path), data)
-    (control, first), (_, second) = (judgement.build_unit(control_sources, args.unit, JudgeError, CONTROL) for _ in range(2))
+    (control, first), (_, second) = (judgement.build_unit(control_sources, args.unit, TipFault, CONTROL) for _ in range(2))
     if first == second:
-        raise JudgeError("the project's build gives the same binary for two nonces: it must make the binary follow the nonce")
-    nothing = judgement.answers(["/unit/driver"], control, "/unit", b"", 1, manifest["run_seconds"], JudgeError, "the project's driver, given no case")
+        raise TipFault("the project's build gives the same binary for two nonces: it must make the binary follow the nonce")
+    nothing = judgement.answers(["/unit/driver"], control, "/unit", b"", 1, manifest["run_seconds"], TipFault, "the project's driver, given no case")
     if nothing:
-        raise JudgeError("the project's driver, given no case, wrote something")
+        raise TipFault("the project's driver, given no case, wrote something")
 
     binaries = []
     if not args.tip_itself:
@@ -606,11 +619,11 @@ def main(argv=None):
     return 0
 
 
-def stop(code, message, json_path):
+def stop(code, message, json_path, fault=None):
     """The judge stops (1 refused, 2 failure to judge): the reason on the error output, and in the report."""
     print(message, file=sys.stderr)
     try:
-        write_report(json_path, {"kind": "reference", "code": code, "reason": message, **STATE})
+        write_report(json_path, {"kind": "reference", "code": code, "reason": message, **({"fault": fault} if fault else {}), **STATE})
     except (OSError, ValueError):
         pass
     return code
@@ -622,6 +635,8 @@ if __name__ == "__main__":
         sys.exit(main())
     except Refusal as refusal:
         sys.exit(stop(1, f"judge: REFUSED: {clean(str(refusal), 2000)}", where))
+    except TipFault as error:
+        sys.exit(stop(2, f"judge: failure to judge, on the tip's side (not the candidate's): {clean(str(error), 2000)}", where, "tip"))
     except JudgeError as error:
         sys.exit(stop(2, f"judge: failure to judge: {clean(str(error), 2000)}", where))
     except Exception:  # noqa: BLE001 — a defect of the judge itself: never a success, never a raw trace

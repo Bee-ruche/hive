@@ -83,6 +83,19 @@ The verdict:
   control, the machine. The base then asks about the tip itself ([protocol.md](protocol.md)); that question is
   asked with the seed of the judgement that failed, so that the same cases are drawn.
 
+**On the tip's side.** Steps 2 and 3 build and run the project's own programs alone: the reference, and the
+skeleton with the blank unit. By then the candidate's files have only been read, and nothing of the candidate's has
+been built or run in the judgement. So when one of those builds or runs fails (an exit status that is not 0, a time
+bound reached, nothing left where a file is expected, the same binary for two nonces, a driver that writes when given
+no case), the judge says the failure is on the tip's side: « on the tip's side (not the candidate's) » in the reason,
+and `"fault": "tip"` in the report, as the relay kind says it ([relay-judge.md](relay-judge.md), "When the tip is at
+fault"). The base then asks no question about the tip itself: it stops judging for the run and charges no candidate.
+That is taken as the tip's; it does not prove the tip's code wrong (a time bound reached on a slow machine is the
+machine's). Docker's own failure stays the machine's, and a tree the judge cannot read is said as before. From step 4
+on, the candidate's build has run, and no failure is said to be on the tip's side: there the question about the tip
+itself, with the same seed, tells the machine and the tip from the candidate. Unlike the relay kind, no step is run
+once more first.
+
 **The tip as a candidate.** For the project's cutter, in a quiet run (no candidate, no task held), the base also asks
 whether the tip already does what a planned task asks ([cutter.md](cutter.md), "The proof at the tip"). That is not the tip against itself: it is a candidate's
 whole judgement (steps 0 to 8), where the candidate's tree is the tip's own, written out as a candidate's is. The unit

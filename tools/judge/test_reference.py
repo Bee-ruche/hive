@@ -9,14 +9,20 @@
 The hostile units below are texts of C written here, built and run ONLY in the judge's containers.
 """
 
+import ast
+import contextlib
+import inspect
+import io
 import json
 import os
+import runpy
 import shutil
 import stat
 import struct
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -420,6 +426,140 @@ class TestWhatAnOutcomeMeans(unittest.TestCase):
         with mock.patch.object(reference, "image_of", return_value="sha256:" + "0" * 64) as image:
             self.assertEqual(reference.main(["--tip", str(TOY), "--image-only"]), 0)
         self.assertEqual(image.call_args[0][0]["image"], "common")
+
+
+class TestWhatFailsOnTheTipsSide(Base):
+    """Steps 2 and 3 build and run the project's own programs alone (its reference, and its skeleton with its blank
+    unit: the control), before anything of the candidate's is built or run. What fails there in a build or a run is
+    said to be on the tip's side (TipFault, `"fault": "tip"` in the report), as the relay kind says it; Docker's own
+    failure stays the machine's, and nothing from step 4 on is ever said so. Docker's launch alone is played here,
+    and the memory file systems are plain folders."""
+
+    @staticmethod
+    def played(ends, started):
+        """Docker's launch, played: the n-th container of a step (« reference », « unit », « driver », « generate »,
+        counted from 1 over the judgement) ends as `ends` says: {step: {n: an exit status, « clock » (stopped at its
+        time), « machine » (Docker's own failure), « same » (a build that ignores its nonce), « says » (a driver that
+        writes), « no generate »}}; the others leave what the toy's would."""
+        def launch(docker, command, mounts, pids=2, entry=None, timeout_seconds=3600):
+            words = command[4:]  # (after « timeout -s KILL <seconds> »)
+            if words[0] == "sh":
+                step = "reference" if words[1] == "/src/" + reference.BUILD_REFERENCE else "unit"
+            else:
+                step = {"/unit/driver": "driver", "/ref/generate": "generate", "/ref/reference": "answers"}[words[0]]
+            started[step] = started.get(step, 0) + 1
+            folders = {target: host for host, target, _ in mounts}
+            end = ends.get(step, {}).get(started[step])
+            if end == "clock":
+                raise Refusal(f"timeout of {timeout_seconds} s exceeded in the container (timeout)")
+            if end == "machine":
+                raise MachineFailure("failure of the judge's machine (Docker, its runtime or the image; code 125)")
+            if isinstance(end, int):
+                return subprocess.CompletedProcess(command, end, b"", b"said")
+            if step == "reference":
+                for name in ("reference", "generate"):
+                    if end != f"no {name}":
+                        Path(folders["/out"], name).write_bytes(b"\x7fELF " + name.encode())
+            elif step == "unit":
+                Path(folders["/out"], "driver").write_bytes(b"\x7fELF driver " + (b"" if end == "same" else entry))
+            elif step == "driver" and end == "says":
+                Path(folders["/answers"], "answers").write_bytes(b"x")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        return launch
+
+    @staticmethod
+    def mount_point(*command):  # a plain folder for a memory file system: emptied where it would be unmounted
+        if command[0] == "umount":
+            shutil.rmtree(command[-1])
+            os.mkdir(command[-1])
+
+    def judge_with(self, ends, candidate=True, tip_changes=None):
+        """One judgement of the toy's unit « upper », every container played: (the figures or the error raised, how
+        many containers of each step were started)."""
+        count = len(list(self.root.iterdir()))
+        tip = write_tree(self.root / f"tip-{count}", tip_changes)
+        other = write_tree(self.root / f"candidate-{count}", {"port/upper.c": UPPER}) if candidate else None
+        work = self.root / f"work-{count}"
+        work.mkdir()
+        args = mock.Mock(tip=str(tip), candidate=str(other) if other else None, unit="upper", task_file=["port/upper.c"], budget=3600,
+                         tip_itself=not candidate, seed=None)
+        started = {}
+        with mock.patch.object(reference.container.Docker, "launch", self.played(ends, started)), \
+                mock.patch.object(reference.container, "mount_point", self.mount_point), \
+                mock.patch.object(reference, "image_of", return_value="sha256:" + "0" * 64):
+            try:
+                result = reference.judge(args, str(work))
+            except (JudgeError, Refusal) as error:
+                result = error
+        return result, started
+
+    def test_a_failure_of_the_reference_or_the_control_is_on_the_tips_side(self):
+        for name, ends, said, started_then in (
+                ("the reference does not build", {"reference": {1: 1}}, "the reference's build: exit status 1", {"reference": 1}),
+                ("the reference's build at its time bound", {"reference": {1: "clock"}}, "the reference's build: stopped at its time bound",
+                 {"reference": 1}),
+                ("the reference's build leaves no generator", {"reference": {1: "no generate"}}, "the reference's build left no /out/generate",
+                 {"reference": 1}),
+                ("the control does not build", {"unit": {2: 2}}, "the build of unit upper: exit status 2", {"reference": 1, "unit": 2}),
+                ("the control ignores its nonce", {"unit": {1: "same", 2: "same"}}, "the same binary for two nonces", {"reference": 1, "unit": 2}),
+                ("the driver given no case fails", {"driver": {1: 1}}, "the project's driver, given no case: exit status 1",
+                 {"reference": 1, "unit": 2, "driver": 1}),
+                ("the driver given no case writes", {"driver": {1: "says"}}, "the project's driver, given no case, wrote something",
+                 {"reference": 1, "unit": 2, "driver": 1})):
+            for candidate in (True, False):
+                with self.subTest(failed=name, candidate=candidate):
+                    error, started = self.judge_with(ends, candidate)
+                    self.assertIs(type(error), reference.TipFault, error)
+                    self.assertIn(said, str(error))
+                    self.assertEqual(started, started_then, "nothing of the candidate's built or run before it")
+
+    def test_the_machine_and_what_comes_after_the_candidates_build_are_never_the_tips(self):
+        error, started = self.judge_with({"reference": {1: "machine"}})
+        self.assertIs(type(error), MachineFailure, "Docker's own failure stays the machine's")
+        error, started = self.judge_with({}, candidate=False, tip_changes={"harness/blank_unit.c": None})
+        self.assertIs(type(error), JudgeError, "a tree that lacks a file is said as before")
+        self.assertIn("the project's tip holds no blank unit", str(error))
+        error, started = self.judge_with({"unit": {3: 1}})
+        self.assertIs(type(error), Refusal, "the candidate's own build: its refusal")
+        self.assertEqual(started, {"reference": 1, "unit": 3, "driver": 1})
+        error, started = self.judge_with({"generate": {1: 1}})
+        self.assertIs(type(error), JudgeError, "after the candidate's build, a failure is never said to be the tip's")
+        self.assertIn("the generator: exit status 1", str(error))
+        self.assertEqual(started, {"reference": 1, "unit": 2 + MANIFEST["variants"], "driver": 1, "generate": 1})
+        # and in the judgement's own text: TipFault is named in steps 2 and 3 alone, before the candidate's build
+        source = textwrap.dedent(inspect.getsource(reference.judge))
+        tree = ast.parse(source)
+        fourth = next(node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                      and node.value.value == 4 and ast.unparse(node.targets[0]) == "STATE['step']")
+        second = next(node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                      and node.value.value == 2 and ast.unparse(node.targets[0]) == "STATE['step']")
+        named = [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "TipFault"]
+        self.assertGreaterEqual(len(named), 5)
+        self.assertTrue(all(second < line < fourth for line in named), (second, fourth, named))
+
+    def test_the_report_says_the_fault_is_the_tips(self):
+        """The judge run as the base runs it (its own way out, __main__): the reason says « on the tip's side », and
+        the report says `"fault": "tip"`; a machine's failure says neither."""
+        for ends, code, fault, said in (({"reference": {1: 1}}, 2, "tip", "judge: failure to judge, on the tip's side (not the candidate's): "
+                                                                         "the reference's build: exit status 1"),
+                                        ({"reference": {1: "machine"}}, 2, None, "judge: failure to judge: failure of the judge's machine"),
+                                        ({"unit": {3: 1}}, 1, None, "judge: REFUSED: the build of unit upper: exit status 1")):
+            with self.subTest(ends=ends):
+                count = len(list(self.root.iterdir()))
+                tip, other = write_tree(self.root / f"tip-{count}"), write_tree(self.root / f"candidate-{count}", {"port/upper.c": UPPER})
+                out = self.root / f"report-{count}.json"
+                argv = ["reference.py", "--tip", str(tip), "--candidate", str(other), "--unit", "upper", "--task-file", "port/upper.c",
+                        "--workdir", str(self.root / f"work-{count}"), "--json", str(out)]
+                with mock.patch.object(reference.container.Docker, "launch", self.played(ends, {})), \
+                        mock.patch.object(reference.container, "mount_point", self.mount_point), \
+                        mock.patch.object(reference.container, "build_image", return_value="bee-judge:test"), \
+                        mock.patch.object(reference.container, "image_id", return_value="sha256:" + "0" * 64), \
+                        mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()) as err, \
+                        self.assertRaises(SystemExit) as ended:
+                    runpy.run_path(str(HERE / "reference.py"), run_name="__main__")
+                report = json.loads(out.read_text())
+                self.assertEqual((ended.exception.code, report["code"], report.get("fault")), (code, code, fault))
+                self.assertTrue(report["reason"].startswith(said) and err.getvalue().startswith(said), report["reason"])
 
 
 @unittest.skipUnless(CONTAINERS, "the whole judge: BEE_JUDGE_INTEGRATION=1 and Docker")
