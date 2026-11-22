@@ -148,6 +148,15 @@ JUDGED_REASONS = ("judge_refused", "goal_not_met", "requirement_not_met")  # the
 NEAR_REASONS = ("not_proven",)  # examined, correct, the task's own figure reached: only a proof is missing or short
 MEASURED_REASONS = ("goal_not_met", "requirement_not_met", "not_proven")  # the judge ran, the candidate is correct, a figure is short: the line keeps the figures
 HIVE_SIDE_REASONS = ("not_answered", "task_closed")  # the hive's or the project's doing: no cost at all
+# A probe (a task of the kind « probe ») asks one named thing to be tried, without knowing whether it helps: its answer
+# is what the judge measured. A member's candidate for a probe that the judge found correct, within every requirement
+# of the project, and short of the task's goal (ANSWER_REASONS) is refused, as any such candidate is, and its line
+# keeps the judge's figures and says « probe »: how many answers, from distinct members, the probe asks. That line is
+# an ANSWER (probe_answer): it costs its member no wait, earns nothing (it is no acceptance), and the probe is done
+# once it has as many answers from distinct members as it asks. A hive at an older commit reads the same line as the
+# ordinary refusal it also is.
+ANSWER_REASONS = ("goal_not_met", "not_proven")
+PROBE_ANSWERS_MOST = 5  # the most answers a probe may ask (its « answers », 1 by default)
 ACTIONS = ("ready", "submit")
 # A ruling's marker (read_ruling): a guardian's, in the guardian's own fork. It is no member's marker: read_marker knows
 # two actions, and a commit that says « admit » is an ask or a candidate for nobody.
@@ -810,8 +819,9 @@ def check_links(tasks):
     """The links between the project's tasks, which make its map (docs/cutter.md, "The map: links between tasks"): a
     task's `parent`, the task it was cut from, and its `needs`, the tasks to be done before it, name other tasks of
     the file; neither the parents nor the needs go round in a cycle; a task's `kind` is one the hive knows (TASK_KINDS:
-    work, the default, probe or hunt). And what the hive counts by needs to be a count: a tier is a whole number from
-    1 to 3, a size a short word. A file that says otherwise is a mistake to fix, not to run."""
+    work, the default, probe or hunt); a probe's goal is on a figure, and only a probe says how many `answers` it asks
+    (1 to PROBE_ANSWERS_MOST). And what the hive counts by needs to be a count: a tier is a whole number from 1 to 3, a
+    size a short word. A file that says otherwise is a mistake to fix, not to run."""
     for task in tasks.values():
         parent, needs, kind = task.get("parent"), task.get("needs"), task.get("kind", "work")
         needs = [] if needs is None else needs
@@ -826,6 +836,10 @@ def check_links(tasks):
             raise HiveError(f"task {task['id']}: needs: a list of the ids of other tasks of the file, each once")
         if not (isinstance(kind, str) and kind in TASK_KINDS):
             raise HiveError(f"task {task['id']}: kind: one of {', '.join(TASK_KINDS)}")
+        if "answers" in task and not (kind == "probe" and type(task["answers"]) is int and 1 <= task["answers"] <= PROBE_ANSWERS_MOST):
+            raise HiveError(f"task {task['id']}: answers: said of a probe alone, a whole number from 1 to {PROBE_ANSWERS_MOST}")
+        if kind == "probe" and not (isinstance(task.get("goal"), dict) and task["goal"].get("kind") == "metric"):
+            raise HiveError(f"task {task['id']}: a probe's goal is on a figure (« metric »): its answer is what the judge measures")
     for links in ("parent", "needs"):
         done = set()
         for start in tasks:
@@ -1063,7 +1077,19 @@ class Ledger:
                      and e.get("at") == at), None)
 
     def done(self):
-        return {e["task"] for e in self.events if e.get("type") == "verdict" and e.get("result") == "accepted"}
+        """The tasks done: those with an accepted candidate, and the probes answered by as many distinct members as they
+        ask (probe_answer; the count the latest answer's line gives)."""
+        accepted = {e["task"] for e in self.events if e.get("type") == "verdict" and e.get("result") == "accepted"}
+        answered = {}
+        for e in self.events:
+            asked = probe_answer(e)
+            if asked is not None:
+                answered[e.get("task")] = (answered.get(e.get("task"), (set(), asked))[0] | {e.get("member_id")}, asked)
+        return accepted | {task for task, (members, asked) in answered.items() if len(members) >= asked}
+
+    def answered(self, member_id):
+        """The probes a member answered (probe_answer): it is never dealt one of them again, whatever else is left."""
+        return {e.get("task") for e in self.events if e.get("member_id") == member_id and probe_answer(e) is not None}
 
     def accepted_members(self):
         return {e.get("member_id") for e in self.events if e.get("type") == "verdict" and e.get("result") == "accepted"}
@@ -1099,7 +1125,8 @@ class Ledger:
           - a deal held for nothing (no candidate in time, or a candidate refused before the judge could examine
             it): the same wait, doubled at each such deal in a row, until an acceptance.
           What the hive's own side caused (a task closed meanwhile, a candidate it could not answer, a fork it could
-          not read) costs nothing.
+          not read) costs nothing. Neither does a probe's answer (probe_answer), which earns nothing either: it is
+          left out of the class as those are, and it stays a deal of the day.
           A candidate that was refused and that a guardian then admitted has a second verdict, an acceptance,
           which names the deal the candidate answered when it was refused and stands in the ledger where it was
           written: after every ending the member had meanwhile. Endings are read in the ledger's order, so that
@@ -1121,7 +1148,8 @@ class Ledger:
             if e.get("type") == "expired":
                 ends.append((e["at"], "fault" if e.get("fault") else "penalty"))
             elif e.get("type") == "verdict" and e.get("deal"):
-                ends.append((e["at"], "accepted" if e.get("result") == "accepted" else "judged" if e.get("reason") in JUDGED_REASONS
+                ends.append((e["at"], "answer" if probe_answer(e) is not None
+                             else "accepted" if e.get("result") == "accepted" else "judged" if e.get("reason") in JUDGED_REASONS
                              else "near" if e.get("reason") in NEAR_REASONS
                              else "fault" if e.get("reason") in HIVE_SIDE_REASONS else "penalty"))
         streak, last, judged = 0, None, None
@@ -1138,7 +1166,7 @@ class Ledger:
         if judged:
             waits.append(parse_iso(judged) + dt.timedelta(hours=config["backoff_hours"]))
         wait = iso(max(waits)) if waits and instant < max(waits) else None
-        counted = [kind for _, kind in ends if kind != "fault"]
+        counted = [kind for _, kind in ends if kind not in ("fault", "answer")]
         return (1 if not counted else 0 if counted[-1] == "accepted" else 2), wait, sum(1 for deal in today if deal not in accepted)
 
     def last_deal_accepted(self, member_id):
@@ -1155,7 +1183,7 @@ class Ledger:
                 continue
             if e.get("type") == "expired":
                 last = False
-            elif e.get("type") == "verdict" and e.get("deal"):
+            elif e.get("type") == "verdict" and e.get("deal") and probe_answer(e) is None:  # (a probe's answer: neither)
                 last = e.get("result") == "accepted"
         return last is True
 
@@ -2426,7 +2454,8 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        gives it: among those it has not already held in vain (a candidate of its own refused, a deal it left
        without one: Ledger.held_in_vain) while two at least of them are left; among all of them otherwise. A task
        that failed in a member's hands goes first to another member, or waits. The rule never names a task: it
-       narrows the draw only where the draw still has two tasks to choose from. These tasks are `mine` below.
+       narrows the draw only where the draw still has two tasks to choose from. A probe the member answered
+       (Ledger.answered) is never among them, however few are left. These tasks are `mine` below.
        Tasks that share a file are never held by two members at
        once: such a task is dealt only when the others are free too. A member that holds a candidate in this run is dealt
        conditionally: its new deal is recorded, and its ask used, only if that candidate is accepted in this run.
@@ -2650,7 +2679,9 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     for klass, _, member_id, tier, conditional in askers:
         if cover is not None and member_id not in active and len(active) + len(admitted) >= cover:
             continue
-        mine = [t for t in dealable if int(tasks[t].get("tier", 1)) <= tier]
+        # (A probe this member answered is never its again, whatever else is left: its answer would be the same evidence twice.)
+        answered = ledger.answered(member_id)
+        mine = [t for t in dealable if int(tasks[t].get("tier", 1)) <= tier and t not in answered]
         if not mine:
             continue
         # First the tasks this member has not already held in vain, while two at least are left: with one alone the
@@ -2981,6 +3012,23 @@ def goal_met(task, report):
     return goal.get("kind") == "correct" or (goal.get("kind") == "metric" and condition_met(goal, report))
 
 
+def answers_asked(task):
+    """How many answers a task asks as a probe, from distinct members, before it is done: its « answers » (1 by
+    default) for a task of the kind « probe », and 0 for any other (check_links holds the field to its bounds)."""
+    return task.get("answers", 1) if task.get("kind") == "probe" else 0
+
+
+def probe_answer(event):
+    """How many answers the probe asked, when this ledger line is a probe's answer: a verdict that refused a member's
+    candidate (not a ruling's) for a goal short (ANSWER_REASONS), whose line says « probe », a whole number from 1 to
+    PROBE_ANSWERS_MOST; else None. Read by the hive's own rules alone; a line that says anything else is what it says."""
+    asked = event.get("probe")
+    if event.get("type") == "verdict" and event.get("result") == "refused" and event.get("reason") in ANSWER_REASONS \
+            and event.get("ruling") is None and type(asked) is int and 1 <= asked <= PROBE_ANSWERS_MOST:
+        return asked
+    return None
+
+
 def short_of_a_proof_alone(task, report, config):
     """True if the judge's figures reach everything the task's goal asks but its proofs: the goal's own figure is
     within its bounds, and so is every further condition that is not one of the proofs the project takes
@@ -3094,6 +3142,8 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
             if not all(requirement_met(condition, verdict["report"], waived) for condition in config["judge"]["require"]):
                 raise Refusal("requirement_not_met")
             if not goal_met(task, verdict["report"]):
+                if answers_asked(task) and not admit:  # a probe's answer: what the judge measured is what the probe asked
+                    outcome["probe"] = answers_asked(task)
                 raise Refusal("not_proven" if short_of_a_proof_alone(task, verdict["report"], config) else "goal_not_met")
             outcome["result"] = "accepted"
             done.add(entry["task"])
@@ -3104,6 +3154,9 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
             halt = entry["declined"]
         except Refusal as refusal:
             outcome.update(result="refused", reason=refusal.reason, detail=clean_detail(refusal.detail))
+            if outcome.get("probe") and len({e.get("member_id") for e in ledger.events if probe_answer(e) is not None
+                                             and e.get("task") == entry["task"]} | {member_id}) >= outcome["probe"]:
+                done.add(entry["task"])  # (the probe's last answer: done, as Ledger.done will say once it is written)
         except HiveError as error:
             log(f"{entry['sha'][:12]}: {error}")
             # A failure to derive is the candidate's doing only if the hive's machine works: it is asked to derive the
@@ -3468,7 +3521,9 @@ def verdict_event(outcome, instant, kind="verdict"):
     lists, bounded the same way (clean_report, by whichever step handed the judge's answer over). How far a candidate
     fell short is what its member needs to know, and whoever is dealt the task next. Every other refusal carries no
     report: one the judge itself refused (judge_refused) was not found correct, so its figures say nothing; one refused
-    before the judge has none.
+    before the judge has none. A probe's answer (a member's candidate for a probe, correct, within the project's
+    requirements, short of its goal: ANSWER_REASONS) is that same line with one number more, `probe`: how many answers
+    the probe asks (probe_answer). Nothing the member wrote: the answer is the judge's figures.
 
     A commit a guardian admitted and the hive accepted has this same line, the credit of the member who wrote it,
     and four fields more: `ruling` (the ruling's commit id, by which the line is told from the refusal the same
@@ -3483,6 +3538,8 @@ def verdict_event(outcome, instant, kind="verdict"):
         event.update(reason=outcome["reason"], detail=outcome["detail"])
         if outcome["reason"] in MEASURED_REASONS:
             event["report"] = outcome["report"]
+        if outcome.get("probe") and outcome["reason"] in ANSWER_REASONS:
+            event["probe"] = outcome["probe"]  # a probe's answer: how many answers it asks (probe_answer)
     else:
         event.update(member=outcome["login"], commit=outcome["commit"], figures=outcome["figures"], report=outcome["report"])
         if outcome.get("admit"):
@@ -3739,12 +3796,15 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
     (trusted) texts: nothing a contributor wrote. « members » says where the project's trusted base stands
     (cover_of): how many members are active, for how many days an acceptance keeps one so, how many its guardians cover
     (none where the project sets no bound), whether a new member is dealt a task now, and the active members under
-    the same hash of their logins: whole numbers, a yes or a no, and hashes."""
+    the same hash of their logins: whole numbers, a yes or a no, and hashes. A probe's answers (probe_answer) are
+    counted apart from its refusals, and raise no hint: a probe lists how many answers it asks and how many it has."""
     instant = now()
     done, refusals, deals, proven = ledger.done(), {}, ledger.deals(), ledger.accepted_members()
-    refused_members = {}
+    refused_members, answers = {}, {}
     for event in ledger.events:
-        if event.get("type") == "verdict" and event.get("result") == "refused" and event.get("judged") \
+        if probe_answer(event) is not None:  # a probe's answer: what the judge measured, no refusal (and no hint)
+            answers[event["task"]] = answers.get(event["task"], 0) + 1
+        elif event.get("type") == "verdict" and event.get("result") == "refused" and event.get("judged") \
                 and event.get("reason") in REASONS:
             reasons = refusals.setdefault(event["task"], {})
             reasons[event["reason"]] = reasons.get(event["reason"], 0) + 1
@@ -3766,7 +3826,10 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
         listed.append({"id": task["id"], "title": task.get("title", ""), "files": task["files"], "size": task.get("size", "S"),
                        "tier": tier, "hint": min(3, tier + len(refused_members.get(task["id"], ())) // 3), "status": status,
                        "refusals": sum(refusals.get(task["id"], {}).values()), "refused_for": refusals.get(task["id"], {}),
-                       "context": task.get("context", "")})
+                       "context": task.get("context", ""),
+                       # A probe says so, how many answers it asks, and how many it has: numbers and a word the hive checked.
+                       **({"kind": "probe", "answers_asked": answers_asked(task), "answers": answers.get(task["id"], 0)}
+                          if task.get("kind") == "probe" else {})})
     members = {}
     for event in ledger.events:
         if event.get("type") == "deal":
@@ -3862,7 +3925,8 @@ def tally_line(entry):
         report = entry.get("report") if isinstance(entry.get("report"), dict) else {}
         line.update(result=entry["result"], judged=entry.get("judged") is True, ruling=is_sha(entry.get("ruling")),
                     reason=entry.get("reason") if isinstance(entry.get("reason"), str) and entry["reason"] in REASONS else None,
-                    report={name: value for name, value in report.items() if isinstance(name, str) and FIGURE_NAME.match(name) and number(value)})
+                    report={name: value for name, value in report.items() if isinstance(name, str) and FIGURE_NAME.match(name) and number(value)},
+                    answer=probe_answer(entry))  # a probe's answer: how many answers the probe asks; else None
     return line
 
 
@@ -3877,6 +3941,10 @@ def tally(tasks, lines, instant, active=None):
     refusals by reason; the runs spent on its candidates without an answer (`errors`, by kind); how many members failed
     on it among those the judge accepted something from (`established_failures`); the best value its candidates reached
     of the figure its goal is on, beside the goal's own bound (`best`); and the hours from the deal to its acceptance.
+    For a probe, also: how many answers it asks (`answers_asked`); its answers, each with its instant, its reason, the
+    judge's figures and whether its member had an acceptance on the project before it (`answers`); and how many
+    distinct members answered, and of them how many had (`answered_by`, `answered_by_established`). A probe's answer
+    (probe_answer) is no refusal and no failure; the probe is done once as many distinct members answered as it asks.
 
     A task is STUCK when STUCK_MEMBERS distinct members, each with a candidate accepted on the project, failed on it:
     the judge examined their candidate and refused it (FAILING_REASONS), or their deal on it ran out at their cost.
@@ -3898,7 +3966,7 @@ def tally(tasks, lines, instant, active=None):
     for line in lines:
         if line["type"] == "verdict" and line["result"] == "accepted" and line["member_id"] not in first:
             first[line["member_id"]] = line["at"]
-    rows, failed, holders, latest = {}, {}, {}, {}
+    rows, failed, holders, latest, answered, asked = {}, {}, {}, {}, {}, {}
     for task_id, task in tasks.items():
         goal = task.get("goal") if isinstance(task.get("goal"), dict) else {}
         figure = goal.get("name") if goal.get("kind") == "metric" and isinstance(goal.get("name"), str) else None
@@ -3910,6 +3978,8 @@ def tally(tasks, lines, instant, active=None):
                          "expired": 0, "expired_free": 0, "accepted": 0, "refused": {}, "errors": {},
                          "established_failures": 0, "hours_to_accept": None,
                          "best": {"figure": figure, "value": None, bound: goal[bound]} if figure and bound else None}
+        if rows[task_id]["kind"] == "probe":  # what was found, even nothing: each answer's figures, and by whom, in numbers
+            rows[task_id].update(answers_asked=answers_asked(task), answers=[], answered_by=0, answered_by_established=0)
         failed[task_id], holders[task_id] = {}, set()
     for line in lines:
         row = rows.get(line["task"])
@@ -3935,6 +4005,16 @@ def tally(tasks, lines, instant, active=None):
                 row["accepted"] += 1
                 if row["hours_to_accept"] is None and not line["ruling"] and line["deal"] and line["deal"] <= line["at"]:
                     row["hours_to_accept"] = round((parse_iso(line["at"]) - parse_iso(line["deal"])).total_seconds() / 3600, 1)
+            elif line.get("answer"):
+                # A probe's answer (its line says so, as Ledger.done reads it): no refusal and no failure. Its figures,
+                # and whether its member had an acceptance on the project before it (one short answer from one member
+                # is weak evidence: the cutter weighs it).
+                member, at = line["member_id"], line["at"]
+                established = member in first and first[member] < at
+                if "answers" in row:
+                    row["answers"].append({"at": at, "reason": line["reason"], "report": line["report"], "established": established})
+                answered.setdefault(line["task"], {})[member] = established or answered.get(line["task"], {}).get(member, False)
+                asked[line["task"]] = line["answer"]
             else:
                 reason = line["reason"] or "unknown"
                 row["refused"][reason] = row["refused"].get(reason, 0) + 1
@@ -3947,7 +4027,10 @@ def tally(tasks, lines, instant, active=None):
                     best["value"] = value
     for task_id, row in rows.items():
         live = latest.get(task_id, {}).get("live", False)
-        row["status"] = "done" if row["accepted"] else "closed" if tasks[task_id].get("closed") else "dealt" if live else "open"
+        if "answers" in row:  # as Ledger.done counts: distinct members, against what the latest answer's line asks
+            row["answered_by"], row["answered_by_established"] = len(answered.get(task_id, {})), sum(answered.get(task_id, {}).values())
+        answered_enough = task_id in asked and len(answered.get(task_id, {})) >= asked[task_id]
+        row["status"] = "done" if row["accepted"] or answered_enough else "closed" if tasks[task_id].get("closed") else "dealt" if live else "open"
         row["members"], row["established_failures"] = len(holders[task_id]), sum(member in first and first[member] < at for member, at in failed[task_id].items())
     left = {task_id for task_id, row in rows.items() if row["status"] in ("open", "dealt")}
     rivals = rivals_of(tasks)
@@ -4574,7 +4657,7 @@ def cmd_tally(args):
 
 
 TITLE_CHARS = 200  # the longest title a new task may carry
-NEW_TASK_KEYS = ("id", "title", "files", "size", "tier", "goal", "options", "context", "parent", "needs", "kind")
+NEW_TASK_KEYS = ("id", "title", "files", "size", "tier", "goal", "options", "context", "parent", "needs", "kind", "answers")
 OPTION_CHARS = 200  # the longest value an option of a new task may give
 LINE_SLACK = 8192  # what a new task's line may weigh beyond its context
 
@@ -4603,7 +4686,8 @@ def new_task_refusals(config, task_id, task, known_options):
     """What the gate holds a new task's own line to, wherever it stands (the task file a cut proposes, the backlog):
     it says nothing but what a task says (NEW_TASK_KEYS), within bounds; it is open, under an id of the project's own;
     its title is printable, its context within cutter.context_chars, its options under known names, each a short plain
-    value; and every condition of its goal on a figure the project floors asks at least that floor, with a « min »."""
+    value; every condition of its goal on a figure the project floors asks at least that floor, with a « min »; and a
+    probe's goal is on a figure, and only a probe says how many answers it asks (1 to PROBE_ANSWERS_MOST)."""
     cutter, refusals, goal = config["cutter"], [], task.get("goal") or {"kind": "correct"}
     extra = sorted(set(task) - set(NEW_TASK_KEYS))
     if extra:
@@ -4630,6 +4714,12 @@ def new_task_refusals(config, task_id, task, known_options):
         floor = cutter["floors"].get(condition.get("name"))
         if floor is not None and not ("min" in condition and "max" not in condition and condition["min"] >= floor):
             refusals.append(f"{task_id}: goal: at least {floor} on {condition['name']}, with « min » (cutter.floors)")
+    # A probe asks its goal as any task does, floors included: it is its answer that may come in below them.
+    kind = task.get("kind", "work")
+    if "answers" in task and not (kind == "probe" and type(task["answers"]) is int and 1 <= task["answers"] <= PROBE_ANSWERS_MOST):
+        refusals.append(f"{task_id}: answers: said of a probe alone, a whole number from 1 to {PROBE_ANSWERS_MOST}")
+    if kind == "probe" and goal.get("kind") != "metric":
+        refusals.append(f"{task_id}: a probe's goal is on a figure (« metric »): its answer is what the judge measures")
     return refusals
 
 
@@ -7627,7 +7717,10 @@ def cmd_next(args):
             raise HiveError("the project's check is not one plain command line")
         data = {"id": task["id"], "title": task.get("title", ""), "files": task["files"], "size": task.get("size", "S"),
                 "tier": max(1, int(task.get("tier", 1))), "goal": task.get("goal") or {"kind": "correct"},
-                "context": task.get("context", ""), **feed_counts(feed, task["id"])}
+                "context": task.get("context", ""),
+                # A probe asks one named thing to be tried: a correct candidate is its answer, short of the goal or not
+                # (the worker's guide says what that changes). The word is the hive's, checked when the tasks were read.
+                **({"kind": "probe"} if task.get("kind") == "probe" else {}), **feed_counts(feed, task["id"])}
         print(f"TASK {task['id']}")
         print(f"DEAL {deal['at']}")
         print(f"UNTIL {deal['until']}")

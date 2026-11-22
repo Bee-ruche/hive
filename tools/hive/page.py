@@ -691,7 +691,8 @@ def clean_event(raw, goals=None, proofs=None):
         reason, task = raw.get("reason"), matching(raw.get("task"), TASK_ID, TASK_ID_MAX)
         event.update(accepted=result == "accepted", judged=raw.get("judged") is True, task=task, model=matching(raw.get("model"), MODEL),
                      commit=matching(raw.get("commit"), SHA), headline=None, measured=None,
-                     reason=reason if isinstance(reason, str) and reason in hive.REASONS else None)
+                     reason=reason if isinstance(reason, str) and reason in hive.REASONS else None,
+                     answer=hive.probe_answer(raw) is not None)  # a probe's answer: measured, not refused (hive.probe_answer)
         # A candidate refused for a figure keeps what the judge measured: the line's report is read as an accepted
         # line's is. A line written before that rule has none, and so has any other refusal: nothing is read of them.
         if result == "refused" and event["reason"] in MEASURED and isinstance(raw.get("report"), dict):
@@ -868,8 +869,9 @@ def collect(state, now, tasks=None, project=None):
         return login if login is not None and holder[login.lower()][1] == member_id else None
 
     since = now - WEEK
-    members, models, refusals, ended, recent, firsts, short = {}, {}, {}, {}, [], {}, []
-    totals = dict.fromkeys(("verdicts", "judged", "accepted", "integrations", "refused", "ended_by_hive", "judge_failures", "judge_runs"), 0)
+    members, models, refusals, ended, recent, firsts, short, answers = {}, {}, {}, {}, [], {}, [], []
+    totals = dict.fromkeys(("verdicts", "judged", "accepted", "integrations", "refused", "answered", "ended_by_hive", "judge_failures",
+                            "judge_runs"), 0)
     week = {"integrations": 0, "judged": 0, "accepted": 0, "ids": set()}
     for position, event in enumerate(verdicts):
         accepted, judged, member_id = event["accepted"], event["judged"], event["member_id"]
@@ -878,7 +880,13 @@ def collect(state, now, tasks=None, project=None):
         totals["judged"] += judged
         totals["accepted"] += accepted and judged
         totals["integrations"] += accepted
-        if not accepted:
+        if not accepted and event.get("answer"):
+            # A probe's answer: the judge found the candidate correct and measured it, and that is what the probe asked.
+            # No refusal: counted apart, and listed with what the judge measured.
+            totals["answered"] += 1
+            if event["measured"] is not None and event["measured"]["measures"]:
+                answers.append((event["at"], position, event))
+        elif not accepted:
             # An answer the hive's own side caused (HIVE_SIDE) is no refusal of the candidate: it is counted apart.
             mine = event["reason"] in HIVE_SIDE
             totals["ended_by_hive" if mine else "refused"] += 1
@@ -915,6 +923,7 @@ def collect(state, now, tasks=None, project=None):
                    key=lambda item: (login_of(item[0]) is None, (login_of(item[0]) or "").lower(), item[0]))
     recent.sort(key=lambda item: (item[0], item[1]), reverse=True)
     short.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    answers.sort(key=lambda item: (item[0], item[1]), reverse=True)
     integrations = totals["integrations"]
     # The deals whose ask named a part of the project, the latest first: what each line says, and no member.
     named_parts = sorted(((event["at"], position, event) for position, event in enumerate(events)
@@ -965,6 +974,13 @@ def collect(state, now, tasks=None, project=None):
                                "measures": event["measured"]["measures"], "measures_left_out": event["measured"]["measures_left_out"]}
                               for at, _, event in short[:SHORT_SHOWN]],
         "short_of_a_figure_left_out": max(0, len(short) - SHORT_SHOWN),
+        # The probes' answers, line by line and without a member: what the judge measured of a correct candidate for a
+        # task that asked one thing to be tried (hive.probe_answer).
+        "probe_answers": [{"at": iso(at), "task": event["task"], "title": titles.get(event["task"], ""), "reason": event["reason"],
+                           "asked": {"metric": goals[event["task"]], **asked[event["task"]]} if event["task"] in asked else None,
+                           "measures": event["measured"]["measures"], "measures_left_out": event["measured"]["measures_left_out"]}
+                          for at, _, event in answers[:SHORT_SHOWN]],
+        "probe_answers_left_out": max(0, len(answers) - SHORT_SHOWN),
         "preferences": {"named": len(named_parts), "kept": sum(1 for _, _, event in named_parts if event["prefer"]["kept"]),
                         "not_kept": [{"because": because, "count": not_kept[because]} for because in PREFER_WORDS if because in not_kept],
                         "recent": [{"at": iso(at), "task": event["task"], "title": titles.get(event["task"], ""), **event["prefer"]}
@@ -1497,6 +1513,16 @@ def render_html(data, title, repo_url, join):
                             "requires of every contribution. « Measured » gives figures the ledger keeps for them, the task's own first when this "
                             "page was told which; « beyond the noise » and « within the noise » are the judge's own flags. A refusal the ledger "
                             "keeps no figure for is counted above and not listed here. No member is named."
+                            + (f" Earlier ones, not listed: {left:,}." if left else ""), class_="note")]
+    if data["probe_answers"]:  # a probe's answers: measured, not refused; line by line, and no member
+        rows = [[day(item["at"]), task_cell(item), el("code", item["reason"]), asked_words(item), measured_words(item)]
+                for item in data["probe_answers"]]
+        left = data["probe_answers_left_out"]
+        refusals = [refusals, el("p", el("strong", f"Probes answered: {totals['answered']}. What the judge measured.")),
+                    table([("Date", False), ("Probe", False), ("Short by", False), ("Asked", False), ("Measured", False)], rows),
+                    el("p", "A probe asks one named thing to be tried, without knowing whether it helps. A candidate the judge finds correct "
+                            "is its answer, whatever it measured: these were short of the probe's goal, and were neither refused nor "
+                            "integrated. One answer from one member is weak evidence. No member is named."
                             + (f" Earlier ones, not listed: {left:,}." if left else ""), class_="note")]
     sections.append(el("section", el("h2", "What was refused, and why"), refusals))
 

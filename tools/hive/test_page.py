@@ -306,7 +306,7 @@ class TestFigures(Case):
     def test_the_figures_of_a_hand_written_ledger(self):
         files = self.make("--repo-url", "https://github.com/Bee-ruche/toy")
         data, seen = self.summary(files), self.harmless(files)
-        self.assertEqual(data["totals"], {"verdicts": 6, "judged": 4, "accepted": 3, "integrations": 3, "refused": 3, "ended_by_hive": 0,
+        self.assertEqual(data["totals"], {"verdicts": 6, "judged": 4, "accepted": 3, "integrations": 3, "refused": 3, "answered": 0, "ended_by_hive": 0,
                                           "judge_failures": 2, "judge_runs": 8})
         self.assertEqual(data["tasks"], {"done": 3, "dealt": 1, "open": 2, "closed": 1, "total": 7})
         self.assertEqual(data["week"], {"since": "2026-11-05T12:00:00Z", "integrations": 2, "members": 2, "judged": 3, "accepted": 2,
@@ -877,6 +877,29 @@ class TestRefusals(Case):
     def short_rows(self, seen):
         return seen.rows[seen.rows.index(self.SHORT_HEAD) + 1:] if self.SHORT_HEAD in seen.rows else None
 
+    def test_a_probes_answer_is_counted_and_listed_as_measured_never_as_refused(self):
+        """A probe's answer (hive.probe_answer: the line says « probe ») is what the judge measured of a correct candidate
+        for a task that asked one thing to be tried: counted apart from the refusals, listed in a table of its own with
+        what was asked and what was measured, and naming nobody. The same line without « probe » is the refusal it is."""
+        goals = self.tasks([task("toy-0001", gain_goal("gain_instructions_n6"), kind="probe"), task("toy-0002", gain_goal("gain_x"))])
+        self.ledger([verdict(1, "2026-11-01T09:00:00Z", "bob", 102, "toy-0001", "refused", reason="goal_not_met", report=self.SHORT, probe=1),
+                     verdict(2, "2026-11-02T09:00:00Z", "carol", 103, "toy-0002", "refused", reason="goal_not_met", report=self.SHORT),
+                     verdict(3, "2026-11-03T09:00:00Z", "dave", 104, "toy-0001", "refused", reason="judge_refused", probe=1)])
+        self.put("feed.json", feed({"toy-0001": "done", "toy-0002": "open"}))
+        files = self.make("--tasks", goals)
+        data, seen = self.summary(files), self.harmless(files)
+        self.assertEqual({key: data["totals"][key] for key in ("verdicts", "refused", "answered")}, {"verdicts": 3, "refused": 2, "answered": 1})
+        self.assertEqual(data["refusals"], [{"reason": "goal_not_met", "count": 1}, {"reason": "judge_refused", "count": 1}],
+                         "the answer is no refusal; a line refused by the judge is one, whatever it says")
+        self.assertEqual([item["task"] for item in data["short_of_a_figure"]], ["toy-0002"])
+        self.assertEqual([(item["task"], item["reason"], item["asked"]["metric"], item["measures"][0]["metric"]) for item in data["probe_answers"]],
+                         [("toy-0001", "goal_not_met", "instructions_n6", "instructions_n6")])
+        head = ["Date", "Probe", "Short by", "Asked", "Measured"]
+        self.assertIn(head, seen.rows)
+        self.assertEqual(seen.rows[seen.rows.index(head) + 1][:3], ["2026-11-01", "toy-0001 Title of toy-0001", "goal_not_met"])
+        self.assertIn("Probes answered: 1. What the judge measured.", seen.said)
+        self.assertNotIn("bob", json.dumps(data["probe_answers"]), "no member is named")
+
     def test_a_candidate_refused_for_a_figure_is_listed_with_what_was_asked_and_what_the_judge_measured(self):
         goals = self.tasks([task("toy-0001", gain_goal("gain_instructions_n6")), task("toy-0002", gain_goal("gain_x", max=0.5))])
         data, seen, files = self.short_of_a_figure("--tasks", goals)
@@ -1232,7 +1255,7 @@ class TestHostile(Case):
         self.assertEqual([m["model"] for m in data["models"]], [None, "claude-fable-5-2"], "a model that is not an identifier is undeclared")
         self.assertEqual({r["task"] for r in data["recent"]}, {"toy-0001", "toy-0002", None}, "a task id that is not one is unknown")
         self.assertEqual(data["tasks"], {"done": 2, "dealt": 0, "open": 0, "closed": 0, "total": 2}, "a task counts once, under a real id and status")
-        self.assertEqual(data["totals"], {"verdicts": 38, "judged": 35, "accepted": 32, "integrations": 35, "refused": 3, "ended_by_hive": 0,
+        self.assertEqual(data["totals"], {"verdicts": 38, "judged": 35, "accepted": 32, "integrations": 35, "refused": 3, "answered": 0, "ended_by_hive": 0,
                                           "judge_failures": 0, "judge_runs": 35}, "« judged » is true or it is not; a line too long to be honest is not read")
         self.assertEqual({r["commit"] for r in data["recent"] if r["member_id"] == 300 and r["at"] == "2026-11-10T01:00:00Z"},
                          {None, sha(5040), sha(5041), sha(5042), sha(5055)})
@@ -2774,7 +2797,7 @@ class TestMap(Case):
 
     def test_the_tree_of_cuts_and_what_each_task_waits_for(self):
         tasks = [task("toy-0001", closed=True), task("toy-0006", parent="toy-0001"), task("toy-0007", parent="toy-0001", closed=True),
-                 task("toy-0009", parent="toy-0007"), task("toy-0002", needs=["toy-0006"]), task("toy-0003", needs=["toy-0009", "toy-0006"], kind="probe"),
+                 task("toy-0009", parent="toy-0007"), task("toy-0002", needs=["toy-0006"]), task("toy-0003", gain_goal("gain"), needs=["toy-0009", "toy-0006"], kind="probe"),
                  task("toy-0004", closed=True), task("toy-0005", parent="toy-0004"), task("toy-0008")]
         self.ledger([self.accepted(n, t) for n, t in enumerate(("toy-0006", "toy-0004", "toy-0005", "toy-0008"), 1)])
         files = self.make_map(tasks)
