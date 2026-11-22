@@ -139,9 +139,10 @@ found, even nothing.
   one, the least step the charter names. With neither, the idea is not cut: it goes to the architect, in the
   cutter's report. A try that reaches the probe's goal is integrated as a task's would be; one that falls short is
   recorded instead of lost, and its member waits for nothing.
-- **When no probe may be cut** (no task of the project is done yet, or its caller's commit does not hold probes), or
-  when the open tasks would be probes alone, which deal nothing to a new member: the same idea is written as a
-  `work` task with its goal at that same least, and the cutter's report says that its threshold is a guess.
+- **When no probe may be cut** (no task of the project is done yet, or the architect has not said that its caller's
+  commit holds probes), or when the open tasks would be probes alone, which deal nothing to a new member: the same
+  idea is written as a `work` task with its goal at that same least, and the cutter's report says that its
+  threshold is a guess. Where the project has no such least, it is not cut either.
 - **When not to**: where such a measure gives a threshold, write the `work` task. A probe's short answer costs the
   hive a judgement for no integration, counts in its member's deals of the day, and ends the probe for that member,
   who is never dealt it again; a task can be tried again. The open count counts probes as it counts tasks.

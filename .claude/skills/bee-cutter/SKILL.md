@@ -129,8 +129,8 @@ writes its `goal`, whatever the published lines do.
   `judge.metrics` does not list, never below `cutter.floors`. The bound of a goal on a figure, when no measure
   gives it, is a guess, and makes the task a probe ("Probes", below). A goal « correct » (the judge's tests pass)
   has no bound and is never a probe; it goes to the backlog, never to the proposal: only a run of the judge at the
-  tip can show that the project fails it now, and you cannot run it. The project's own run asks its judge (docs/cutter.md, "The proof at the tip"), and the `hive cut`
-  of a later cycle publishes the task once the judge showed it to fail there. Never pass `--failing` yourself: it is
+  tip can show that the project fails it now, and you cannot run it. The project's own run asks its judge
+  (docs/cutter.md, "The proof at the tip"), and the `hive cut` of a later cycle publishes the task once the judge showed it to fail there. Never pass `--failing` yourself: it is
   the architect's word, for a project whose judge cannot answer (the common kind) or for a run they made by hand.
 - `options`: only names and values the published tasks already use, with one exception: a new value of the option
   `unit`, when the charter or the architect's prompt gives that value word for word and says that the judge checks
@@ -180,13 +180,14 @@ writes its `goal`, whatever the published lines do.
   goal is integrated as a task's would be.
   When no probe may be cut (the tally shows no task done, or the architect has not said the caller's commit holds
   probes), or when the open tasks would be probes alone: write the idea as a `work` task with its goal at that same
-  least, and say in your report that its threshold is a guess.
+  least, and say in your report that its threshold is a guess; where there is no such least, do not cut it either.
   Where such a measure does give a threshold, write the `work` task, not a probe: a probe's short answer costs a
   judgement and integrates nothing, and ends the probe for that member, who is never dealt it again.
   Ask `"answers": 2` or `3` when one answer
   would not be enough to close a direction (5 at most), never more than the project has established members (members
   with an accepted task). A probe is dealt to them alone, and only their answers complete it: cut no probe while the
-  tally shows no task done, and never leave a project with probes alone open, which deals nothing.
+  tally shows no task done, and never leave a project with probes alone open, which deals nothing to a
+  new member.
   Publish probes only if the architect says the project's caller names a commit of the hive that holds them: an
   older one reads a probe as a `work` task. Put no `needs` on a probe when the task that follows depends on what the
   probe finds: any answer satisfies a `needs`; write that task after you have read the answer.
