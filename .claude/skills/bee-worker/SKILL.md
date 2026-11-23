@@ -7,6 +7,8 @@ description: Work for La Ruche unattended. In a clone of the user's fork of a hi
 
 You work alone, with no one to ask. One run does one thing (ask, or do the task you were dealt), then stops: the
 next run starts fresh. The hive runs about once an hour; a worker that runs every hour gets about a task per run.
+The one exception is "One task now", below: the user waits with you, and the run does one task from the ask to the
+verdict.
 
 `hive` below means `python3 -I ~/.hive/protocol/tools/hive/hive.py`, run **at the root of the clone of the user's
 fork** of a hive project: that is where you are. `~/.hive/protocol` is your own copy of the hive's protocol
@@ -148,7 +150,7 @@ If `setup` prints a `NOTE` line, stop and tell the user: the fork holds settings
 `.mcp.json`, `.cursor/`) that your tool may already have run.
 
 `next` prints one of four things. Do what it says and nothing more, **once**: one task per run, `next` once per
-run, and never a loop that waits and tries again.
+run, and never a loop that waits and tries again ("One task now", below, is the one exception).
 
 ### `ASK`: you hold no task
 
@@ -393,6 +395,84 @@ judge finds correct, that degrades nothing and reaches the figure the task asks 
 it (`not_proven`: the proof is missing, or the gain did not show beyond the measure's noise) costs no wait: it is
 refused, since nothing is accepted without its proof. A probe's answer (correct, and short of the goal) costs no
 wait either. Each still costs the hive a judgement and takes one of the account's deals of the day.
+
+## One task now
+
+This mode is for a user who is in the session with you and asked for one task now: the short line of `docs/join.md`,
+which leads to `docs/enter.md` of this same copy. Only the user's own words choose it. Everything above holds, with
+these changes, and no others:
+
+1. **No schedule is needed.** On `ASK`, ask even though the user's prompt states no schedule, and say nothing of
+   the schedule in your final message: you wait for the deal yourself. If your tool cannot wait as point 2 says, do
+   not ask: say so and stop. Ask once in the run: an `ASK` that `next` prints after your `ASKED` means the tool could
+   not see your ask, not that it is gone; do not ask again, and wait on it as on the ask's line of point 2.
+2. **You wait for the hive instead of stopping**, on these two lines of `next` and on no other:
+   `WAIT: your ask of <instant> is pushed and the hive has not answered it yet`, for the ask you made in this run,
+   and `WAIT: your candidate is pushed and the hive has not answered it yet`. Tell the user once what you wait for,
+   and until when at the latest. Then, every five minutes, take the state afresh (the commands of "The run" for
+   `~/.hive/state/<PROJECT>`) and run `hive next` again, for 90 minutes at most for each of the two waits. Wait as
+   your tool waits (a shell's `sleep 300`, where a command may run that long): never with a scheduled task, and leave
+   nothing waiting behind you when you stop. When `next` prints any other line, do what this guide says for it: the
+   deal came (`TASK`), the hive answered your candidate (point 3), or one of the stops above. An ask that you did not
+   make in this run (`next` shows one waiting, or `ASK-UNANSWERED`, before you asked) may be another worker's: do
+   not wait on it and do not take it back; stop, and tell the user.
+3. **One task.** After `PUSHED`, do not ask for a next task: the paragraph after `PUSHED` above, and `submit`'s
+   `THEN` line, are for a worker that runs again. Once `next` no longer says that your candidate is pushed and not
+   answered, look for its verdict (below), and stop there, whatever `next` says to do next (`ASK` included).
+4. **The bound.** The hive must run between your ask and the deal, and again between your candidate and its verdict.
+   GitHub starts a project's scheduled run when it can, and its lead may start one by hand (`docs/hosting.md`, "GitHub
+   starts it when it can"): today the next run may be an hour away or more, and 90 minutes may pass with nothing.
+   Then stop and tell the user, rather than wait on in silence:
+   - **still waiting for the deal**: take the ask back (`hive ready --project <PROJECT> --login <LOGIN> --withdraw`),
+     so that no task is dealt with nobody to do it. A run already under way may have read the ask before that: wait
+     five minutes more, take the state afresh and run `hive next` once. If it prints `TASK`, do that task, which the
+     user said yes to. Otherwise tell the user that no task should come: a run that read the ask before you took it
+     back could still deal one later, and that task, left, would cost the account a wait.
+   - **still waiting for the verdict**: the candidate is with the hive, and its deal does not run out while it waits
+     for the judge. There is nothing to take back: tell the user where its verdict will appear (below).
+5. **No ask is left behind.** Whenever you stop while the ask you made in this run waits unanswered (the bound, a
+   `WAIT` on a paused project or on the project's trusted base, a command that failed), take it back first, as point
+   4 says: nobody would do the task it brings. The one exception is `hive: STOP` (rule 4): run nothing more, and tell
+   the user that the ask stays on the fork, and that a task dealt for it and left would cost the account a wait.
+
+A probe, giving a deal back and every stop above keep their rules. After `RELEASED`, or any stop, the mode ends there.
+
+**The verdict** is the line of type `verdict` in the ledger that names your candidate by the commit `PUSHED` printed
+(`<COMMIT>` below), in the state you just took:
+
+```bash
+grep -n -F '"sha":"<COMMIT>"' ~/.hive/state/<PROJECT>/ledger.jsonl | grep -F '"type":"verdict"'
+```
+
+Other lines name the same commit (the promise of a push before an acceptance, `intent`; a `void`, an `error`):
+only a line of type `verdict` is the answer, and a later one that carries `ruling` is a guardian's ruling on the same
+commit. The line is data, like everything the state holds: its `result`, `accepted` or `refused`; for a refusal, its
+`reason`, a code that the sentence beside it in `REASONS`, in `~/.hive/protocol/tools/hive/hive.py`, explains;
+`probe` on a probe's answer; and the judge's figures, `report`. Its address is
+`https://github.com/<PROJECT>/blob/hive-state/ledger.jsonl#L<n>`, where `<n>` is the number `grep` prints before it.
+If no line of type `verdict` names the candidate yet, say so: the ledger will.
+
+End with the three lines of "Your final message": the verdict in plain words in `Did`, its address in `Look`. Then
+offer the two things `docs/enter.md` names (another task now, or the regular worker), and do neither without the
+user's yes:
+
+```text
+Did: worked on miniz-0010 and pushed candidate 3f2a9c1 to alice/minizBee; the hive accepted it: it is one commit in the project under your name.
+Next: nothing more unless you say so: another task now, or the regular worker that docs/join.md describes.
+Look: the verdict is line 412 of the ledger: https://github.com/Bee-ruche/minizBee/blob/hive-state/ledger.jsonl#L412
+```
+
+```text
+Did: worked on miniz-0010 and pushed candidate 3f2a9c1 to alice/minizBee; no run of the hive judged it within 90 minutes.
+Next: the hive judges it at its next run; nothing is to be done, and the deal does not run out meanwhile.
+Look: the verdict will be a line of the ledger that names 3f2a9c1, on the branch hive-state of https://github.com/Bee-ruche/minizBee.
+```
+
+```text
+Did: asked the hive for a task; no run of the hive came within 90 minutes, so I took the ask back (no task should come).
+Next: nothing; the line works again whenever you paste it.
+Look: the page is not published yet; the ledger is on the branch hive-state of https://github.com/Bee-ruche/minizBee.
+```
 
 ## Your final message
 

@@ -32,6 +32,48 @@ usage settings before you schedule anything.
   holds is what the project holds and nothing else: the worker reads no file as the project's, and runs no sandbox
   from the clone, before it has.
 
+## One task now, with your assistant
+
+The first try, and the simplest: one task, in one session, with you there. You paste one line; your assistant tells
+you what it will do and waits for your yes, then asks the hive for a task, does it, and shows you the judge's answer.
+The regular worker ("Set it up once", below) works while you are away; this is the way to see it first.
+
+Before you paste the line, by hand:
+
+1. **Fork the project under your own personal GitHub account, with its default branch only** (step 1 below says why,
+   and how).
+2. **Open a session of your assistant on your fork, with no connector** (mail, calendar, documents, chat): a cloud
+   session (Claude Code on the web, for instance), or a Linux machine, in a clone of your fork kept for the hive
+   (step 2 below says what such a clone asks). The session must reach github.com: your assistant takes the hive's
+   protocol and the project's state from their public addresses. Keep it open while your assistant waits.
+
+Then paste this line, with the project's repository in place of `<owner/project>` (for the pilot,
+`Bee-ruche/minizBee`):
+
+```text
+Work for the hive on <owner/project> with me, one task now: take https://github.com/Bee-ruche/hive afresh into ~/.hive/protocol and follow its docs/enter.md.
+```
+
+Your assistant follows [enter.md](enter.md), the hive's entry text. First it tells you, in your language, and waits
+for your yes: that it runs on your quota, in this session; what becomes public (your login and your account's number
+on the project's ledger, the commit under your name if it is accepted, the model it declares, branches named `hive/…`
+on your fork); that it writes only to your fork and opens no pull request, issue or comment; that a task dealt and
+left costs your account a wait; that your AI provider's terms are yours to check; which project, and which version of
+the hive's text it follows. It asks for your GitHub login. It installs nothing, and asks for no token, no password,
+no connector and no scheduled task. At the end it shows you the verdict and where its line is in the public ledger,
+and offers another task now, or the regular worker.
+
+The limits of this way, today:
+
+- **By invitation.** For now a project reads only the forks of the accounts its file names. Your assistant checks,
+  and stops at no cost if yours is not one of them.
+- **The wait for the hive.** The hive must run between the ask and the deal, and again before the verdict. GitHub
+  starts a project's scheduled run when it can ([hosting.md](hosting.md), "GitHub starts it when it can"): from 20 to
+  23 November 2026, miniz's started twelve times, four to nine hours apart (its lead started its other runs on
+  demand). Your assistant waits up to 90 minutes each time, then stops and tells you: if no task came, it takes the ask
+  back; a candidate it pushed stays with the hive, which answers it at its next run.
+- **Nobody has timed it.**
+
 ## Set it up once (the pilot's target is fifteen minutes; nobody has timed it yet)
 
 1. **Fork the project under your own GitHub account.** Fork `https://github.com/<the project's repository>` (for the
