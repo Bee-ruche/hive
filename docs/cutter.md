@@ -55,7 +55,7 @@ What those who split work for others have learnt, for people and for AI agents, 
 | Piece | What it does | What it is | State |
 | --- | --- | --- | --- |
 | The architect | Writes the project's charter: its goal, what counts as progress, its directions and priorities, the lowest goal a task may set (the floor), and what it asks of volunteers | the project's lead | exists; tooling planned |
-| The tally | Counts, from the ledger and the tasks alone: deals, expiries, deals given back, acceptances, refusals by reason, best figures, time to accept; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
+| The tally | Counts, from the ledger and the tasks alone: deals, expiries, deals given back, acceptances, refusals by reason, best figures, time to accept; the judge's figures at the tip; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
 | The deterministic cutter | Applies the rules: closes a stuck task and cuts it again with a lower goal where the project's floors allow, publishes the architect's planned tasks once their prerequisites are done, up to the project's target of open tasks, and says what it could not do | code of the hive | built (`hive.py cut`) |
 | The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new tasks and goals | the architect's own agent, trusted | its guide is built (`.claude/skills/bee-cutter/`); it proposes, the gate decides |
 | The gate (`cut-check`) | Passes or refuses every proposed change of the tasks, the AI's included; nothing overrides it | code of the hive | built (`hive.py cut-check`) |
@@ -221,7 +221,12 @@ It prints ids, codes and numbers, and the proposal's SHA-256; a proposal the gat
 Once a day, by the architect's agent; a whole cycle (cut, publish, deal, judge, read) takes a day or more, since
 GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitHub starts it when it can").
 
-1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text.
+1. **The tally** reads the ledger and the tasks, and gives numbers and ids, no text. Its `tip` is the judge's report
+   on the project's latest accepted candidate: the task, the instant of its line, whether a guardian's ruling
+   admitted it (`ruling`: a figure may then be beyond a bound the ruling waived), and the figures as numbers under
+   the project's own names (for a judge that measures the project, its figures at the tip; for one that measures a
+   gain, the gain over the tip before it). They are the figures at the tip as long as nothing but the hive moved the
+   project's branch since; `null` before the first acceptance. A task's context quotes the tip from there.
 2. **The deterministic cutter** applies its rules ("The deterministic cutter", above). A planned task « correct » is
    published at the first cycle after two quiet runs of the project's hive (no candidate, no task held), six hours
    apart, judged the tip as a candidate for it and saw it fail ("The proof at the tip"): the cutter runs nothing of the

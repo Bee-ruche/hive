@@ -502,6 +502,13 @@ def need_sha(value):
     return value
 
 
+def hive_commit(value):
+    """The commit of the hive a run names (apply's --hive-commit): a full commit id, or the command stops."""
+    if not is_sha(value):
+        raise argparse.ArgumentTypeError("not a full commit id")
+    return value
+
+
 def matches(path, patterns):
     """True if the path matches one of the patterns: an exact path, « dir/** » (everything below), or an fnmatch
     pattern on the whole path. Compared without case: a protected name is protected in any spelling."""
@@ -2531,7 +2538,9 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        (Ledger.answered) is never among them, however few are left. These tasks are `mine` below.
        Tasks that share a file are never held by two members at
        once: such a task is dealt only when the others are free too. A member that holds a candidate in this run is dealt
-       conditionally: its new deal is recorded, and its ask used, only if that candidate is accepted in this run.
+       conditionally: its new deal is recorded, and its ask used, only if that candidate is accepted in this run, or is
+       a probe's answer (probe_answer), and the deal still keeps the rules it was dealt by once the run has answered
+       (apply).
        Where the project's file says how many active members one guardian covers, a NEW member (an asker that is
        not active: it holds no live deal, and no candidate of its own was accepted within the project's window:
        active_members) is dealt a task only while the active members, those this plan has just admitted included,
@@ -3625,7 +3634,7 @@ def guarded_push(repo, remote, branch, expected, new, allow_local=False):
                        else "git wrote none of the lines this step prints (a ref's status, remote:, error:, fatal:)"))
 
 
-def verdict_event(outcome, instant, kind="verdict"):
+def verdict_event(outcome, instant, kind="verdict", hive=None):
     """A verdict's line. An accepted one names its member by login and by account number: it is a credit. A refused
     one carries the account's number alone, which the hive's own counting needs, and no login: the ledger does not
     write a person's name beside a refusal. (That is discretion, not secrecy: the deal's line names its member, and
@@ -3645,10 +3654,16 @@ def verdict_event(outcome, instant, kind="verdict"):
     commit already has: Ledger.mark), `guardian_id` and `guardian` (the account that admitted it, by number and by
     the login GitHub gives for it: a guardian's decision is public and named), and `waived` (each figure waived,
     under the project's own name for it, with the ruling's bound: numbers). `deal` is the deal the commit answered
-    when it was refused: the acceptance ends that deal anew (Ledger.standing)."""
+    when it was refused: the acceptance ends that deal anew (Ledger.standing).
+
+    `hive`: the commit of the hive the run names (the commit of Bee-ruche/hive the project's caller pins, which every
+    job of the run checks is on the hive's main and runs: .github/workflows/run.yml), when the step was given one
+    (cmd_apply). The line then says which commit of the hive judged it, and the promise (« intent ») says the same, so
+    that the verdict a later run builds from it (settle) names the run that judged, not the one that settled. A line
+    written without it, or before this rule, has no `hive`: whatever reads the ledger takes both."""
     event = {"type": kind, "at": iso(instant), "task": outcome["task"], "deal": outcome["deal"],
              "member_id": outcome["member_id"], "repo_id": outcome["repo_id"], "sha": outcome["sha"],
-             "result": outcome["result"], "judged": outcome["judged"], "model": outcome["model"]}
+             "result": outcome["result"], "judged": outcome["judged"], "model": outcome["model"], **({"hive": hive} if hive else {})}
     if outcome["result"] == "refused":
         event.update(reason=outcome["reason"], detail=outcome["detail"])
         if outcome["reason"] in MEASURED_REASONS:
@@ -3688,12 +3703,13 @@ def void_lines(voids, run, instant, answered=()):
             if void["reason"] != "duplicate" or void["sha"] in answered]
 
 
-def events_of(outcomes, instant, run):
+def events_of(outcomes, instant, run, hive=None):
     """The ledger's lines for the outcomes of one run: every field is one the write step derived itself. The outcome
     of a commit a guardian admitted: a verdict if it is accepted (verdict_event); a line of the ruling's own if it is
     refused again or void (ruling_event: with whether the judge examined it, the refusal's numbers, and what the judge
     measured when the refusal is for a figure, as a refusal's verdict keeps them); a mark that names the ruling
-    when the run was spent without an answer."""
+    when the run was spent without an answer. `hive`: the commit of the hive the run names, for a verdict's line
+    (verdict_event)."""
     events = []
     for outcome in outcomes:
         admit = outcome.get("admit")
@@ -3711,7 +3727,7 @@ def events_of(outcomes, instant, run):
             events.append(ruling_event({**admit, "task": outcome["task"], "sha": outcome["sha"]}, instant, run, outcome["result"],
                                        outcome["reason"], **more))
         elif outcome["result"] in ("accepted", "refused"):
-            events.append({**verdict_event(outcome, instant), "run": run})
+            events.append({**verdict_event(outcome, instant, hive=hive), "run": run})
     return events
 
 
@@ -3774,7 +3790,7 @@ def record(plan_, config, tasks, ledger, state_folder):
 
 
 def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, allow_local=False, checkpoint=None, started=(),
-          backlog=None, tip_answers=None, identity=None):
+          backlog=None, tip_answers=None, identity=None, hive=None):
     """The only step that writes to the project. It takes the candidates from the plan (the hive's own first step),
     derives every commit by itself, and takes from the judging step the judge's answer for each commit id it derived
     and which commits it started on. So a judging step that was taken over can lie about a candidate or stay silent
@@ -3792,7 +3808,8 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     one by one, and records what happened up to the first push that did not land. A commit the project's repository
     itself declines is a failure of its candidate's, as when the judge fails on it. A push the hive cannot tell
     the fate of keeps its promise open: the next run looks. Returns (outcomes recorded, tip reached); raises
-    HiveError, after recording, if a push did not land."""
+    HiveError, after recording, if a push did not land. `hive`: the commit of the hive the run names, which each
+    verdict and each promise it writes carries (verdict_event)."""
     plan_instant, plan_ = read_plan(plan_, config)
     if not same_ledger(ledger, plan_):
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is applied")
@@ -3827,7 +3844,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     outcomes, _ = process(repo, tip, plan_["queue"], config, tasks, ledger,
                           lambda entry, task, tip, tree, commit: answers.get(commit), plan_instant, began)
     accepted, run = [outcome for outcome in outcomes if outcome["result"] == "accepted"], plan_["key"]
-    ledger.append([{**verdict_event(outcome, instant, "intent"), "run": run} for outcome in accepted])
+    ledger.append([{**verdict_event(outcome, instant, "intent", hive), "run": run} for outcome in accepted])
     if accepted and checkpoint:
         checkpoint()
     reached, failure, kept, unsure = tip, None, outcomes, None
@@ -3869,18 +3886,38 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     # the draw on a commit is answered with the ruling that won it, and not before (void_lines): in the same write,
     # so that a step that stops leaves both answers or neither.
     answered = {o["sha"] for o in kept if o.get("admit") and o["result"] in ("accepted", "refused", "void")}
-    ledger.append(events_of(kept, instant, run) + voids + unused + void_lines(void_rulings, run, instant, answered))
+    ledger.append(events_of(kept, instant, run, hive) + voids + unused + void_lines(void_rulings, run, instant, answered))
     # A member whose candidate was answered in this run gets the task the plan had kept for it.
     # The deals the plan found over are written here too, should the recording step not have run: a task is never
     # dealt (below) on the strength of an expiry the ledger does not hold.
     ledger.append(expired_lines(plan_))
     accepted, kept_deals = {e.get("sha") for e in ledger.events if e.get("type") == "verdict" and e.get("result") == "accepted"}, []
+    probe_answers = {e.get("sha") for e in ledger.events if probe_answer(e) is not None}
+    cover, active, admitted = cover_of(config), active_members(ledger, instant, config), set()
+    written = {(e.get("task"), e.get("member_id")) for e in ledger.events if e.get("type") == "deal" and e.get("run") == run}
     for deal in plan_["conditional"]:
-        # The task the plan kept for a member is dealt when its candidate is accepted (docs/protocol.md), and only
-        # then: a candidate refused, even at no cost to its member, leaves the ask where it is, for the next run.
-        _, wait, today = ledger.standing(deal["member_id"], instant, config)
-        if all(sha in accepted for sha in deal["after"]) and not wait and today < config["members"]["deals_per_day"]:
+        # The task the plan kept for a member is dealt when its candidate is accepted, or is a probe's answer
+        # (probe_answer: correct, within the project's requirements, short of the probe's goal), and only then
+        # (docs/protocol.md): a candidate refused otherwise, even at no cost to its member, leaves the ask where it is,
+        # for the next run. It is held again against the rules the plan dealt it by, now that the run has answered:
+        # no wait; the day's limit (an answer's deal stays a deal of the day, an accepted one leaves the count); the
+        # base's cover (an acceptance keeps its member active, an answer does not: a member that holds no place now is
+        # a new member, dealt only while the active members and those this loop admits are fewer than the base covers:
+        # active_members, cover_of); and never a probe its member has answered (Ledger.answered). A member an answer
+        # frees was active when the plan counted the places it gave new members (it held its probe): the places this
+        # loop gives such members are ones the plan counted as taken, whether the plan's own deals are written yet or not.
+        if (deal["task"], deal["member_id"]) in written:
+            # The step is run again, and wrote this deal already: it stays dealt, and its ask used. (The ledger now
+            # counts it in its member's day and among the active members: it is held against nothing again.)
             kept_deals.append(deal)
+            continue
+        _, wait, today = ledger.standing(deal["member_id"], instant, config)
+        new = cover is not None and deal["member_id"] not in active
+        if (all(sha in accepted or sha in probe_answers for sha in deal["after"]) and not wait and today < config["members"]["deals_per_day"]
+                and deal["task"] not in ledger.answered(deal["member_id"]) and not (new and len(active) + len(admitted) >= cover)):
+            kept_deals.append(deal)
+            if new:
+                admitted.add(deal["member_id"])
     ledger.append(deal_lines(kept_deals, run, config, tasks))
     if kept_deals:
         ignored = read_ignored(state_folder)
@@ -4106,13 +4143,22 @@ def tally(tasks, lines, instant, active=None, taken=None):
     nothing, and nobody would notice. `dealable` counts the open tasks a member could be dealt now (no task that
     shares a file with one is dealt), and `areas` the separate areas of the project: sets of tasks left to do, none of
     which shares a file with a task of another set (rivals_of). At least that many tasks can be held at once, one in
-    each area; an area may hold more, when its tasks share files only through a third (a folder and two of its files)."""
+    each area; an area may hold more, when its tasks share files only through a third (a folder and two of its files).
+
+    THE TIP'S FIGURES (`tip`): the judge's report on the project's latest accepted candidate, the last one the ledger
+    holds: its task, the instant of its line, whether a guardian's ruling admitted it (`ruling`: a figure may then be
+    beyond a bound the ruling waived), and the report as numbers, under the project's own names for them. They are the judge's figures for the commit the hive integrated last, as
+    the judge measured that candidate on the tip it was merged on: the figures at the tip, as long as nothing else
+    moved the project's branch since. None before the project's first acceptance, and an empty report where the judge
+    gave no figures."""
     until = iso(instant)
     lines = [line for line in lines if line["at"] <= until]
-    first = {}  # each member's first acceptance on the project: a failure counts only after it
+    first, tip = {}, None  # each member's first acceptance on the project: a failure counts only after it
     for line in lines:
         if line["type"] == "verdict" and line["result"] == "accepted" and line["member_id"] not in first:
             first[line["member_id"]] = line["at"]
+        if line["type"] == "verdict" and line["result"] == "accepted":
+            tip = {"task": line["task"], "at": line["at"], "ruling": line["ruling"], "report": dict(line["report"])}
     rows, failed, holders, latest, answered, asked = {}, {}, {}, {}, {}, {}
     for task_id, task in tasks.items():
         goal = task.get("goal") if isinstance(task.get("goal"), dict) else {}
@@ -4214,7 +4260,7 @@ def tally(tasks, lines, instant, active=None, taken=None):
     stuck = sorted(task_id for task_id in left if rows[task_id]["established_failures"] >= STUCK_MEMBERS)
     return {"as_of": until, "stuck_members": STUCK_MEMBERS, "tasks": rows, "stuck": stuck, "short_of_members": short, "left": len(left),
             "open": sum(rows[task_id]["status"] == "open" for task_id in left), "dealable": len(dealable), "areas": areas,
-            "starving": not left, "active_members": active}
+            "starving": not left, "active_members": active, "tip": tip}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -4765,7 +4811,8 @@ def cmd_apply(args):
     state = Path(args.state)
     backlog, identity = tip_inputs(args.repo, planned_settings(made), config, tasks, args.registry, made)
     outcomes, tip = apply(args.repo, args.remote, made, handed.get("answers"), config, tasks, Ledger(state), state, checkpoint=checkpoint,
-                          started=handed.get("started") or (), backlog=backlog, tip_answers=handed.get("tip"), identity=identity)
+                          started=handed.get("started") or (), backlog=backlog, tip_answers=handed.get("tip"), identity=identity,
+                          hive=args.hive_commit)
     print(f"{sum(1 for o in outcomes if o['result'] == 'accepted')} integrated, tip {tip}")
     if handed.get("down") is True:
         # Everything this run could decide is written. The run still ends as a failure, so that a person sees it: a
@@ -8515,8 +8562,9 @@ def cmd_submit(args):
     hours = max(1, config["deal_hours"] - WORK_MARGIN_HOURS)
     print(f"THEN: {figures['files']} file(s) and {figures['lines']} changed line(s) are with the hive. If this worker runs at least "
           f"every {hours} hours (hourly is best), ask for its next task now (hive.py ready --project {config['repo']} "
-          f"{said_again(args)}): the hive deals it as soon as this candidate is accepted; if it is refused, the ask stays and is served "
-          f"once the wait is over. If it does not run that often, do not ask: a task dealt and left costs a wait.{not_kept}")
+          f"{said_again(args)}): the hive deals it as soon as this candidate is accepted or, for a probe, answered; if it is refused "
+          f"otherwise, the ask stays and is served once the wait is over. If it does not run that often, do not ask: a task dealt and "
+          f"left costs a wait.{not_kept}")
 
 
 # What submit's last line adds when the candidate is pushed and the clone could not take it.
@@ -8769,6 +8817,8 @@ def main(argv=None):
     p.add_argument("--remote", default="origin")
     p.add_argument("--bundle", required=True)
     p.add_argument("--verdicts", required=True)
+    p.add_argument("--hive-commit", type=hive_commit,
+                   help="the commit of Bee-ruche/hive the run runs (its workflow's own: job.workflow_sha), which each verdict line names")
     p.set_defaults(run=cmd_apply)
     p = sub.add_parser("feed", help="write the project's feed from its tasks and ledger (before the first run)")
     hive_side(p)

@@ -397,21 +397,22 @@ class World:
         verdicts, outcomes = self.judge(judge)
         return self.made["tip"], verdicts, outcomes
 
-    def apply(self, verdicts, checkpoint=None, started=None, backlog=None, tip_answers=None, identity=None, **changes):
+    def apply(self, verdicts, checkpoint=None, started=None, backlog=None, tip_answers=None, identity=None, hive_commit=None, **changes):
         """Step 4, in its own clone, given the last plan (with `changes`) and these verdicts: (outcomes, new tip). The
-        backlog, the answers about the tip and what judges, when a test gives them, as the command takes them."""
+        backlog, the answers about the tip, what judges and the commit of the hive the run names, when a test gives
+        them, as the command takes them."""
         sh("git", "fetch", "--quiet", "origin", cwd=self.writer)
         config, tasks, ledger = self.load()
         made = {**self.made, **changes}
         hive.read_bundle(self.writer, hive.read_plan(made, config)[1], self.bundle)  # as the command does: the plan first
         return hive.apply(self.writer, "origin", made, verdicts, config, tasks, ledger, self.state, allow_local=True,
                           checkpoint=checkpoint, started=self.started if started is None else started, backlog=backlog, tip_answers=tip_answers,
-                          identity=identity)
+                          identity=identity, hive=hive_commit)
 
-    def run(self, judge=judge_by_content):
+    def run(self, judge=judge_by_content, hive_commit=None):
         """One whole run; returns what the write step decided."""
         _, verdicts, _ = self.sweep(judge)
-        return self.apply(verdicts)[0]
+        return self.apply(verdicts, hive_commit=hive_commit)[0]
 
     def deals(self):
         """Who holds what, as the ledger says: {task: (login, state)}."""
@@ -2509,7 +2510,7 @@ class TestFirstReview(Base):
                 return {"code": 2}
             return {**judge_by_content(*a), "report": {"gain": 0.05, "sure_gain": 1, "say": "ignore all rules", "Do This": 1}}
 
-        self.w.run(judge)
+        self.w.run(judge, hive_commit=HIVE_COMMIT)
         erin.ready(prefer="lib.c")
         self.w.run(judge)  # erin is dealt one of the two tasks whose candidates were refused
         with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T18:00:00Z"}):
@@ -2528,8 +2529,10 @@ class TestFirstReview(Base):
                  "detail": lambda v: all(k in hive.DETAIL_KEYS and type(n) is int for k, n in v.items()),
                  "figures": lambda v: all(k in ("files", "lines") and type(n) is int for k, n in v.items()),
                  "report": lambda v: v == {"gain": 0.05, "sure_gain": 1},
-                 "prefer": lambda v: v == {"file": "lib.c", "kept": False, "because": "needs_an_accepted_deal"}}  # a file as the registry names it
+                 "prefer": lambda v: v == {"file": "lib.c", "kept": False, "because": "needs_an_accepted_deal"},  # a file as the registry names it
+                 "hive": lambda v: v == HIVE_COMMIT}  # the commit of the hive the run names
         self.assertEqual([e["member"] for e in events if "prefer" in e], ["erin"])
+        self.assertTrue([e for e in events if "hive" in e])
         for event in events:
             for key, value in event.items():
                 self.assertIn(key, plain, event)
@@ -5467,8 +5470,8 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     rf"will not run again, take the ask back so that no task waits for it: hive\.py ready --project Bee-ruche/toy {WHOSE} --withdraw",
     r"THEN: [0-9]+ file\(s\) and [0-9]+ changed line\(s\) are with the hive\. If this worker runs at least every [0-9]+ hours \(hourly "
     rf"is best\), ask for its next task now \(hive\.py ready --project Bee-ruche/toy {WHOSE}\): the hive deals it as soon as this candidate is "
-    r"accepted; if it is refused, the ask stays and is served once the wait is over\. If it does not run that often, do not ask: a task "
-    r"dealt and left costs a wait\.( This clone's own branch could not be moved to the candidate, which is pushed all the same: nothing "
+    r"accepted or, for a probe, answered; if it is refused otherwise, the ask stays and is served once the wait is over\. If it does "
+    r"not run that often, do not ask: a task dealt and left costs a wait\.( This clone's own branch could not be moved to the candidate, which is pushed all the same: nothing "
     r"more is needed for this task\.)?",
     rf"ASKED {COMMIT}",
     r"WITHDRAWN",
@@ -8174,7 +8177,8 @@ class TestTheStepsAsTheWorkflowRunsThem(Base):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/run.yml").read_text()
         for words in ("--registry protocol --project \"$REPOSITORY\" --repo project --state state", "--out plan.json --bundle candidates.bundle",
                       "--plan taken/plan/plan.json", "--bundle taken/candidates/candidates.bundle --workdir work",
-                      "--judge-workdir judge-work --out verdicts.json", "--verdicts taken/verdicts/verdicts.json", "mkdir -p work judge-work"):
+                      "--judge-workdir judge-work --out verdicts.json", "--verdicts taken/verdicts/verdicts.json", "mkdir -p work judge-work",
+                      '--hive-commit "$HIVE_COMMIT"', "HIVE_COMMIT: ${{ steps.protocol.outputs.commit }}"):
             self.assertIn(words, workflow, "the words this test runs are the workflow's own")
         sha = self.w.fork("bob", 102).submit("toy-0001", content=LIB + "/* FAST */\n")
         common = ("--registry", "protocol", "--project", "Bee-ruche/toy", "--repo", "project", "--state", "state")
@@ -8205,9 +8209,10 @@ class TestTheStepsAsTheWorkflowRunsThem(Base):
         shutil.copy(judge / "verdicts.json", write / "taken/verdicts/verdicts.json")
 
         printed, _ = self.step(write, "apply", *common, "--plan", "taken/plan/plan.json", "--plan-sha256", digest,
-                               "--bundle", "taken/candidates/candidates.bundle", "--verdicts", "taken/verdicts/verdicts.json")
+                               "--bundle", "taken/candidates/candidates.bundle", "--verdicts", "taken/verdicts/verdicts.json", "--hive-commit", HIVE_COMMIT)
         self.assertRegex(printed, r"^1 integrated, tip [0-9a-f]{40}\n$")
-        self.assertEqual([(e["member"], e["result"]) for e in self.w.events() if e["type"] == "verdict"], [("bob", "accepted")])
+        self.assertEqual([(e["member"], e["result"], e["hive"]) for e in self.w.events() if e["type"] == "verdict"], [("bob", "accepted", HIVE_COMMIT)],
+                         "the verdict names the commit of the hive the run names")
         self.assertEqual(printed.split()[-1], self.w.tip(), "the project's branch is at the commit the step says")
 
     def test_a_path_made_whole_names_what_the_system_would_have_opened(self):
@@ -8488,13 +8493,15 @@ class TestTheRunWorkflow(unittest.TestCase):
                         "  --into taken/verdicts || { mkdir -p taken/verdicts && echo '{}' > taken/verdicts/verdicts.json; }\n"},
                 self.STATE_WRITE, {"name": "The project", "env": self.REPOSITORY, "run": self.CLONE},
                 {"name": "Push what the judge accepted, and record (the job's token reaches git as a header for the project's address alone)",
-                 "env": {"PLAN_SHA256": "${{ needs.plan.outputs.plan_sha256 }}", **self.REPOSITORY, "TOKEN": "${{ github.token }}"},
+                 "env": {"PLAN_SHA256": "${{ needs.plan.outputs.plan_sha256 }}", **self.REPOSITORY, "HIVE_COMMIT": "${{ steps.protocol.outputs.commit }}",
+                         "TOKEN": "${{ github.token }}"},
                  "run": "auth=$(printf 'x-access-token:%s' \"$TOKEN\" | base64 -w0)\n"
                         'echo "::add-mask::$auth"\n'  # the form git sends the token in is kept out of the run's log too
                         'git -C project config "http.https://github.com/$REPOSITORY.extraheader" "Authorization: Basic $auth"\n'
                         + self.HIVE.format(step="apply") + " --state state \\\n"
                         '  --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256" \\\n'
-                        "  --bundle taken/candidates/candidates.bundle --verdicts taken/verdicts/verdicts.json --commit-state\n"}]})
+                        "  --bundle taken/candidates/candidates.bundle --verdicts taken/verdicts/verdicts.json --commit-state \\\n"
+                        '  --hive-commit "$HIVE_COMMIT"\n'}]})
 
     def test_it_is_called_and_nothing_else_and_nothing_is_set_above_a_step(self):
         """It runs when a project's workflow calls it, and on no event of its own (no pull request, no push); it takes
@@ -8643,7 +8650,7 @@ class TestTheRunWorkflow(unittest.TestCase):
         kept = [(name, step["with"]["ref"]) for name, job in self.jobs.items() for step in job["steps"]
                 if step.get("uses") == self.CHECKOUT and step["with"].get("persist-credentials") is not False]
         self.assertEqual(kept, [("record", "hive-state"), ("apply", "hive-state")])
-        self.assertEqual(sorted(re.findall(r"\bsteps\b(?!:)\W*\w+", self.text)), ["steps.plan"] + ["steps.protocol"] * 4,
+        self.assertEqual(sorted(re.findall(r"\bsteps\b(?!:)\W*\w+", self.text)), ["steps.plan"] + ["steps.protocol"] * 5,
                          "(`steps:`, the list of a job's steps, aside)")
         self.assertEqual([index for index, step in enumerate(self.jobs["judge"]["steps"]) if "github.token" in json.dumps(step)], [0])
         published = {"PLAN_SHA256": "${{ needs.plan.outputs.plan_sha256 }}", **self.REPOSITORY}
@@ -13619,6 +13626,8 @@ class TestTheTallyCommand(Base):
         self.assertEqual(result["published"], sh("git", "rev-parse", "stable", cwd=self.w.upstream).stdout.strip(),
                          "the tasks are read on the published branch, at its tip")
         self.assertNotIn("alice", printed, "no login")
+        self.assertEqual(result["tip"], {"task": "toy-0001", "at": NOW, "ruling": False, "report": {"gain": 0.0, "sure_gain": 0, "outputs_compared": 12}},
+                         "the judge's figures for the latest accepted candidate")
 
 
 class TestTheCuttersState(Base):
@@ -15905,6 +15914,299 @@ class TestGivingADealBack(Volunteer):
         (self.w.state / "feed.json").write_text(json.dumps(feed))
         release(self.alice, "toy-0001", "2026-11-12T11:00:59Z")
         self.assertTrue(self.next()[1].startswith("TASK toy-0001\n"), "a release of another deal is none of this one's")
+
+
+HIVE_COMMIT = "5c" * 20  # a commit of the hive, as the run names it to the step that writes (apply --hive-commit)
+SCRIPT = {"id": "toy-0009", "title": "Work on the script", "files": ["run.sh"]}  # a task on a file of its own
+
+
+class TestTheNextDealAfterAProbesAnswer(Base):
+    """A member that pushes its candidate for a probe and an ask is dealt its next task in the run that records the
+    probe's answer (probe_answer: correct, within the project's requirements, short of the probe's goal), as one whose
+    candidate is accepted is: an answer costs no wait. The task is the one the plan kept for after the judging, held
+    again against the rules it was dealt by once the run has answered: the day's limit (the answer's deal stays a deal
+    of the day), the base's cover (an acceptance keeps its member active, an answer does not), and never a probe its
+    member answered. A probe's candidate refused otherwise leaves the ask where it is, as every refusal does."""
+
+    with_tasks, established = TestProbes.with_tasks, TestProbes.established
+
+    def answering(self, bob, world=None):
+        """bob pushes a try of the probe and an ask; returns (the try, the ask, the plan of the run that judges it)."""
+        candidate = bob.fresh("hive/submit/toy-0006").submit("toy-0006", content=LIB + "/* bob's try */\n")
+        ask = bob.ready()
+        return candidate, ask, (world or self.w).plan()
+
+    def dealt_in(self, made, world=None):
+        """The deals the run of this plan wrote: [(login, task)]."""
+        return [(e["member"], e["task"]) for e in (world or self.w).load()[2].events if e["type"] == "deal" and e["run"] == made["key"]]
+
+    def test_a_probes_answer_frees_its_member_for_the_task_kept_for_it_in_the_same_run(self):
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        candidate, ask, made = self.answering(bob)
+        self.assertEqual([(d["member"], d["task"], d["after"], d["asks"]) for d in made["conditional"]], [("bob", "toy-0008", [candidate], [ask])],
+                         "kept for after the judging: the one task free beside the probe and the tasks on its file")
+        self.w.record()
+        self.assertEqual(self.dealt_in(made), [], "nothing before the answer")
+        verdicts, _ = self.w.judge()
+        self.assertEqual(self.one(self.w.apply(verdicts)[0])["probe"], 1)
+        self.assertEqual(self.dealt_in(made), [("bob", "toy-0008")], "the run that records the answer deals the task kept for it")
+        self.assertIn(ask, hive.read_ignored(self.w.state)["1102"], "and its ask is used")
+        config, _, ledger = self.w.load()
+        self.assertEqual(ledger.standing(102, hive.now(), config), (0, None, 2),
+                         "no wait, the class as it was; the answer's deal and the new one count in the day")
+        self.assertEqual(self.w.feed_file()["deals"][hive.member_mark("bob")]["task"], "toy-0008")
+        self.w.apply(verdicts)  # the write step run again on the same plan
+        self.assertEqual(self.dealt_in(made), [("bob", "toy-0008")], "nothing twice")
+
+    def test_the_answers_deal_counts_in_the_days_limit(self):
+        """An answer's deal stays a deal of the day: a member it brought to the day's limit is kept no task, its ask
+        stays, and the next day serves it."""
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        self.w.set_config({"members": {"deals_per_day": 1}})
+        _, ask, made = self.answering(bob)
+        self.assertEqual(made["conditional"], [], "its probe is its one deal of the day (the accepted one is not counted)")
+        self.w.record()
+        verdicts, _ = self.w.judge()
+        self.assertEqual(self.one(self.w.apply(verdicts)[0])["probe"], 1)
+        self.assertEqual(self.dealt_in(made), [])
+        self.assertNotIn(ask, hive.read_ignored(self.w.state).get("1102", []), "its ask is not used")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-13T00:30:00Z"}):
+            self.w.run()
+        self.assertEqual([login for _, login in self.w.dealt_by_runs()], ["bob"], "the next day serves it")
+
+    def test_the_step_that_writes_holds_the_days_limit_itself(self):
+        """The plan counts the member's day when it keeps a task for it, and the step that writes counts it again: a
+        plan that keeps a task beyond the limit (here, the limit lowered under it) deals nothing, and the ask stays."""
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        _, ask, made = self.answering(bob)
+        self.assertEqual([d["task"] for d in made["conditional"]], ["toy-0008"])
+        self.w.record()
+        verdicts, _ = self.w.judge()
+        self.w.set_config({"members": {"deals_per_day": 1}})
+        self.assertEqual(self.one(self.w.apply(verdicts)[0])["probe"], 1)
+        self.assertEqual(self.dealt_in(made), [])
+        self.assertNotIn(ask, hive.read_ignored(self.w.state).get("1102", []))
+
+    def test_a_write_step_run_again_keeps_the_deal_it_wrote_and_uses_its_ask(self):
+        """The write step wrote the deal kept for the member and stopped before it set the ask aside. Run again on the
+        same plan, it keeps that deal, which the ledger now counts in the member's day (here its last one), and sets
+        the ask aside: the ask is never served a second time."""
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        self.w.set_config({"members": {"deals_per_day": 2}})
+        _, ask, made = self.answering(bob)
+        self.w.record()
+        verdicts, _ = self.w.judge()
+        with mock.patch.object(hive, "write_ignored", side_effect=OSError("the step stops here")):
+            with self.assertRaises(OSError):
+                self.w.apply(verdicts)
+        self.assertEqual((self.dealt_in(made), ask in hive.read_ignored(self.w.state).get("1102", [])), ([("bob", "toy-0008")], False))
+        self.w.apply(verdicts)
+        self.assertEqual(self.dealt_in(made), [("bob", "toy-0008")])
+        self.assertIn(ask, hive.read_ignored(self.w.state)["1102"], "its ask is used")
+
+    def test_an_answer_keeps_no_member_active_and_the_next_deal_waits_for_room_in_the_base(self):
+        """An acceptance keeps its member active; an answer does not. A member whose last acceptance has left the
+        project's window held its place by its probe in hand alone: once the probe is answered it is a new member,
+        dealt the task kept for it only while the base covers one more (cover_of). Otherwise its ask stays, at no cost."""
+        guarded = {"judge": GUARDED, "guardians": GUARDIANS, "members": {"per_guardian": 1}}  # one guardian, one active member covered
+        for name, taken in (("the base has room", False), ("its one place is taken", True)):
+            with self.subTest(name):
+                world = World(tempfile.mkdtemp(dir=self.tmp.name), guarded, tasks=[*TASKS, PROBE, ELSEWHERE, SCRIPT])
+                bob = world.fork("bob", 102)
+                long_ago = world.deal(bob, "toy-0002", at="2026-10-01T11:00:00Z")  # its one acceptance, forty-two days ago
+                bob.fresh("hive/submit/toy-0002").submit("toy-0002", path="src/bob.c", content="int bob;\n", deal=long_ago)
+                with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-10-01T12:00:00Z"}):
+                    self.assertEqual(self.one(world.run(judge_that_flags))["result"], "accepted")
+                if taken:
+                    world.deal(world.fork("carol", 103), "toy-0009")  # a task in hand: carol is active, and holds the place
+                _, ask, made = self.answering(bob, world)
+                self.assertEqual([d["member"] for d in made["conditional"]], ["bob"], "its probe in hand, bob is active when the plan deals")
+                world.record()
+                verdicts, _ = world.judge(judge_that_flags)
+                self.assertEqual(self.one(world.apply(verdicts)[0])["probe"], 1)
+                self.assertEqual(self.dealt_in(made, world), [] if taken else [("bob", made["conditional"][0]["task"])])
+                self.assertEqual(ask in hive.read_ignored(world.state).get("1102", []), not taken, "an ask is used by the deal it brings")
+
+    def test_two_members_freed_by_their_answers_take_one_place_each(self):
+        """Two members whose acceptances have left the window answer a probe each in one run, and the base covers one
+        member more: the first of the deals kept for them is dealt, and that member counts for the next, which waits."""
+        guarded = {"judge": GUARDED, "guardians": GUARDIANS, "members": {"per_guardian": 1}}
+        other = {**PROBE, "id": "toy-0007", "title": "Try another thing", "files": ["src/"]}
+        apart = {"id": "toy-0010", "title": "Work on the notes", "files": ["CLAUDE.md"]}
+        world = World(tempfile.mkdtemp(dir=self.tmp.name), guarded, tasks=[*TASKS, PROBE, other, ELSEWHERE, SCRIPT, apart])
+        bob, dave = world.fork("bob", 102), world.fork("dave", 104)
+        for fork, task, path in ((bob, "toy-0002", "src/bob.c"), (dave, "toy-0008", "docs/dave.txt")):
+            fork.fresh(f"hive/submit/{task}").submit(task, path=path, content="int x;\n", deal=world.deal(fork, task, at="2026-10-01T11:00:00Z"))
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-10-01T12:00:00Z"}):
+            self.assertEqual(sorted(o["result"] for o in world.run(judge_that_flags)), ["accepted", "accepted"])
+        bob.fresh("hive/submit/toy-0006").submit("toy-0006", content=LIB + "/* bob's try */\n")
+        dave.fresh("hive/submit/toy-0007").submit("toy-0007", path="src/try.c", content="int tried;\n")
+        asks = {bob.ready(): "bob", dave.ready(): "dave"}
+        made = world.plan()
+        self.assertEqual(sorted(d["member"] for d in made["conditional"]), ["bob", "dave"])
+        world.record()
+        verdicts, _ = world.judge(judge_that_flags)
+        self.assertEqual(sorted(o["probe"] for o in world.apply(verdicts)[0]), [1, 1])
+        first = made["conditional"][0]
+        self.assertEqual(self.dealt_in(made, world), [(first["member"], first["task"])], "one place, one new member")
+        used = set(hive.read_ignored(world.state).get("1102", []) + hive.read_ignored(world.state).get("1104", []))
+        self.assertEqual(sorted(login for ask, login in asks.items() if ask in used), [first["member"]], "the other's ask waits")
+
+    def test_the_step_that_writes_deals_no_member_a_probe_it_answered(self):
+        """The plan never keeps for a member the probe it holds, nor one it answered (step 4). The step that writes
+        holds that again once the run has answered: a plan that says otherwise deals nothing of it."""
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        _, ask, made = self.answering(bob)
+        self.w.record()
+        verdicts, _ = self.w.judge()
+        forged = [{**made["conditional"][0], "task": "toy-0006"}]
+        self.assertEqual(self.one(self.w.apply(verdicts, conditional=forged)[0])["probe"], 1)
+        self.assertEqual(self.dealt_in(made), [], "the probe bob has just answered is never his again")
+        self.assertNotIn(ask, hive.read_ignored(self.w.state).get("1102", []))
+
+    def test_a_probes_candidate_short_of_its_proof_alone_leaves_the_ask_for_the_next_run(self):
+        """No answer (the probe stays open) and no acceptance: no deal in that run, and the ask stays where it is; no
+        wait, so the next run serves it."""
+        self.with_tasks(PROBE, ELSEWHERE)
+        bob = self.w.fork("bob", 102)
+        self.established(bob)
+        _, ask, made = self.answering(bob)
+        self.w.record()
+        verdicts, _ = self.w.judge(lambda *a: {**judge_by_content(*a), "report": {"gain": 0.05, "sure_gain": 0, "outputs_compared": 12}})
+        seen = self.one(self.w.apply(verdicts)[0])
+        self.assertEqual((seen["reason"], "probe" in seen), ("not_proven", False))
+        self.assertEqual(self.dealt_in(made), [])
+        self.assertNotIn(ask, hive.read_ignored(self.w.state).get("1102", []), "its ask is not used")
+        self.w.run()
+        self.assertEqual([login for _, login in self.w.dealt_by_runs()], ["bob"], "the next run deals it a task")
+
+
+class TestTheHiveThatJudged(Base):
+    """Each verdict line names the commit of the hive the run names (`hive`: the commit of Bee-ruche/hive the
+    project's caller pins, which every job of the run checks is on the hive's main and runs), so that a figure can be
+    read against the judge that gave it. The step that writes is given it (apply --hive-commit); its promise of a push
+    names it too, and the verdict a later run builds from that promise names the run that judged. A line without it
+    is read as it always was."""
+
+    def test_each_verdict_and_each_promise_names_the_hive_that_judged_it(self):
+        self.alice.submit("toy-0001", content=LIB + "/* FAST */\n")
+        self.w.fork("bob", 102).submit("toy-0002", path="docs/b.txt", content="b\n")  # outside its task's files: refused before the judge
+        _, verdicts, _ = self.w.sweep()
+        outcomes, _ = self.w.apply(verdicts, hive_commit=HIVE_COMMIT)
+        self.assertEqual(sorted((o["task"], o["result"]) for o in outcomes), [("toy-0001", "accepted"), ("toy-0002", "refused")])
+        lines = self.w.load()[2].events
+        self.assertEqual(sorted((e["type"], e["task"], e.get("hive")) for e in lines if e["type"] in ("verdict", "intent")),
+                         [("intent", "toy-0001", HIVE_COMMIT), ("verdict", "toy-0001", HIVE_COMMIT), ("verdict", "toy-0002", HIVE_COMMIT)])
+        self.assertEqual([e["type"] for e in lines if "hive" in e and e["type"] not in ("verdict", "intent")], [],
+                         "a verdict's line and its promise alone")
+
+    def test_a_step_given_no_commit_writes_none(self):
+        self.alice.submit("toy-0001")
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        self.assertEqual([e["type"] for e in self.w.load()[2].events if "hive" in e], [])
+
+    def test_a_verdict_built_from_a_promise_names_the_run_that_judged_not_the_one_that_settled(self):
+        intent = {"type": "intent", "at": NOW, "run": "a" * 32, "task": "toy-0001", "deal": NOW, "member_id": 101, "repo_id": 1101,
+                  "sha": "b" * 40, "result": "accepted", "judged": True, "model": None, "member": "alice", "commit": "c" * 40, "figures": {},
+                  "report": {}, "hive": HIVE_COMMIT}
+        older = {key: value for key, value in {**intent, "sha": "d" * 40, "commit": "e" * 40}.items() if key != "hive"}  # a promise of an older hive
+        late = {**intent, "sha": "1" * 40, "commit": "2" * 40}  # a promise given up on (a void), whose push is found landed later
+        ledger = hive.Ledger(self.w.state).first(0)
+        ledger.append([intent, older, late, {"type": "void", "at": NOW, "run": "a" * 32, "sha": "1" * 40, "commit": "2" * 40}], write=False)
+        settled = hive.settle(ledger, hive.now(), {"c" * 40: True, "e" * 40: True, "2" * 40: True}, own="f" * 32)
+        self.assertEqual([(e["type"], e["sha"], e.get("hive")) for e in settled],
+                         [("verdict", "b" * 40, HIVE_COMMIT), ("verdict", "d" * 40, None), ("verdict", "1" * 40, HIVE_COMMIT)])
+
+    def test_the_command_takes_a_full_commit_and_nothing_else(self):
+        self.assertEqual(hive.hive_commit(HIVE_COMMIT), HIVE_COMMIT)
+        for wrong in ("5c" * 19, HIVE_COMMIT.upper(), HIVE_COMMIT + "\n", "main", ""):
+            with self.subTest(wrong):
+                with self.assertRaises(hive.argparse.ArgumentTypeError):
+                    hive.hive_commit(wrong)
+        with mock.patch("sys.stderr") as said, self.assertRaises(SystemExit) as ended:
+            hive.main(["apply", "--registry", ".", "--project", "Bee-ruche/toy", "--repo", ".", "--state", ".", "--plan", "p",
+                       "--plan-sha256", "0" * 64, "--bundle", "b", "--verdicts", "v", "--hive-commit", "main"])
+        self.assertEqual(ended.exception.code, 2)
+        self.assertIn("argument --hive-commit: not a full commit id", "".join(c.args[0] for c in said.write.call_args_list),
+                      "the command stops before it reads anything")
+
+    def test_every_reader_of_the_ledger_takes_a_line_with_it_as_one_without_it(self):
+        """What the hive and its tools read of the ledger is the same whether its verdict lines name the hive or not."""
+        self.alice.submit("toy-0001", content=LIB + "/* FAST */\n")
+        self.w.fork("bob", 102).submit("toy-0002", path="docs/b.txt", content="b\n")
+        _, verdicts, _ = self.w.sweep()
+        self.w.apply(verdicts, hive_commit=HIVE_COMMIT)
+        config, tasks, named = self.w.load()
+        bare = hive.Ledger(self.w.state).first(0)
+        bare.append([{key: value for key, value in e.items() if key != "hive"} for e in named.events], write=False)
+        self.assertNotEqual(named.events, bare.events)
+
+        def read(ledger):
+            lines = [line for line in map(hive.tally_line, ledger.events) if line is not None]
+            feed = hive.build_feed(config, tasks, ledger, self.w.tip())
+            return (lines, hive.tally(tasks, lines, hive.now()), {**feed, "generated_at": None}, {**hive.build_stats(ledger), "generated_at": None},
+                    ledger.done(), ledger.deals(), [ledger.standing(member, hive.now(), config) for member in (101, 102)],
+                    ledger.held_in_vain(102), ledger.seen(), ledger.promises())
+        self.assertEqual(read(named)[:-1], read(bare)[:-1])
+        self.assertEqual([len(part) for part in read(named)[-1]], [len(part) for part in read(bare)[-1]], "no promise left open either way")
+
+
+class TestTheTallyGivesTheTipsFigures(Base):
+    """The tally gives the judge's figures for the project's latest accepted candidate (`tip`): its task, the instant
+    of its line, and its report as numbers. What the cutter quotes of the tip in a task's context comes from there."""
+
+    def tallied(self, at=None):
+        config, tasks, ledger = self.w.load()
+        return hive.tally(tasks, [line for line in map(hive.tally_line, ledger.events) if line is not None],
+                          hive.parse_iso(at) if at else hive.now())
+
+    def test_the_tip_is_the_latest_acceptance_and_nothing_else(self):
+        self.assertIsNone(self.tallied()["tip"], "no acceptance yet")
+        self.alice.submit("toy-0001", content=LIB + "/* FAST */\n")
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        first = {"task": "toy-0001", "at": NOW, "ruling": False, "report": {"gain": 0.05, "sure_gain": 1, "outputs_compared": 12}}
+        self.assertEqual(self.tallied()["tip"], first)
+        with mock.patch.dict(os.environ, {"HIVE_NOW": LATER}):
+            bob = self.w.fork("bob", 102)
+            bob.submit("toy-0002", path="docs/b.txt", content="b\n")  # refused: the tip does not move
+            self.assertEqual(self.one(self.w.run())["reason"], "path_outside_task")
+            self.assertEqual(self.tallied()["tip"], first)
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T14:00:00Z"}):
+            carol = self.w.fork("carol", 103)
+            carol.submit("toy-0002", path="src/c.c", content="int c;\n")
+            self.assertEqual(self.one(self.w.run())["result"], "accepted")
+            self.assertEqual(self.tallied()["tip"], {"task": "toy-0002", "at": "2026-11-12T14:00:00Z", "ruling": False,
+                                                     "report": {"gain": 0.05, "sure_gain": 1, "outputs_compared": 12}},
+                             "its figures as the judge measured it, merged on a tip that holds the first one's change")
+        self.assertEqual(self.tallied(at=LATER)["tip"], first, "a line dated after the instant says nothing yet")
+
+    def test_a_probes_answer_is_no_tip_and_the_report_holds_numbers_alone(self):
+        accepted = {"type": "verdict", "at": "2026-11-12T10:00:00Z", "task": "toy-0001", "deal": "2026-11-12T09:00:00Z", "member_id": 101,
+                    "repo_id": 1101, "sha": "a" * 40, "result": "accepted", "judged": True, "model": None, "member": "alice", "commit": "b" * 40,
+                    "figures": {}, "report": {"total": 1048576, "time_a": 2.5, "note": "fast", "Bad Name": 3, "flag": True, "huge": 1e300},
+                    "hive": HIVE_COMMIT}
+        answer = {"type": "verdict", "at": "2026-11-12T11:00:00Z", "task": "toy-0004", "deal": "2026-11-12T10:30:00Z", "member_id": 102,
+                  "repo_id": 1102, "sha": "c" * 40, "result": "refused", "judged": True, "model": None, "reason": "goal_not_met", "detail": {},
+                  "report": {"total": 1000000}, "probe": 1}
+        lines = [line for line in map(hive.tally_line, [accepted, answer]) if line is not None]
+        self.assertEqual(hive.tally(self.w.load()[1], lines, hive.now())["tip"],
+                         {"task": "toy-0001", "at": "2026-11-12T10:00:00Z", "ruling": False, "report": {"total": 1048576, "time_a": 2.5}},
+                         "the answer moved nothing; numbers under plain names alone, and no commit")
+        admitted = {key: value for key, value in {**accepted, "at": "2026-11-12T11:30:00Z", "sha": "d" * 40, "ruling": "e" * 40}.items() if key != "report"}
+        lines = [line for line in map(hive.tally_line, [accepted, answer, admitted]) if line is not None]
+        self.assertEqual(hive.tally(self.w.load()[1], lines, hive.now())["tip"],
+                         {"task": "toy-0001", "at": "2026-11-12T11:30:00Z", "ruling": True, "report": {}},
+                         "a commit a guardian admitted, its line without a report: no figures, and the ruling said")
 
 
 if __name__ == "__main__":

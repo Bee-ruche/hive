@@ -109,6 +109,8 @@ What carries it:
    of every job reads which repository and commit the workflow is (`job.workflow_repository`, `job.workflow_sha`: the
    called workflow's own, where the `github` context is the caller's), stops unless they are `Bee-ruche/hive` at a full
    commit that its main holds (GitHub's compare API: « identical » or « behind »), and checks the code out there.
+   `apply` is given that commit too (`--hive-commit`, through its step's environment, as every value reaches a step),
+   and each verdict it writes names it ([protocol.md](protocol.md), "The ledger and the feed").
 5. **The proof at the tip rides on what is there** ([cutter.md](cutter.md), "The proof at the tip"). In a project
    whose judge can answer it, and in a quiet run (its plan holds no candidate, no member holds a task), the judging
    step judges the plan's tip itself as a candidate for at most two planned tasks « correct », and writes what it saw

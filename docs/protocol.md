@@ -178,7 +178,8 @@ whose deal ends otherwise holds none from then on, and then waits what any membe
 project's file does not take today (one it bans, or one it does not name where it is open by invitation) is never
 counted, whatever the ledger holds of it: its place is free from the next run. The base *covers* `per_guardian`
 times the number of accounts the file names as guardians. A member that is active is dealt as above; a member
-whose candidate waits for its answer holds a live deal, and is dealt its next task as any such member is. An asker
+whose candidate waits for its answer holds a live deal, and is dealt its next task as any such member is (once the
+candidate is answered, an acceptance keeps it active and a probe's answer does not: see below). An asker
 that is not active is a **new member**, and is dealt a task only while the active members, with the new ones the
 same run has already dealt to, are fewer than the base covers. Beyond that it is passed over: no deal, no line, no
 wait, and its ask stays where it is, for the run that finds room (a deal ends without an acceptance, a member's
@@ -223,8 +224,16 @@ is public; someone holding another task on the same file could put that work int
 is dealt only when the others are free. A project whose tasks name separate files loses nothing; one whose tasks share a file does them one at a time.
 
 A member who pushes a candidate *and* an ask is dealt its next task **in the same run, when that candidate is
-accepted**: a worker that runs every hour and succeeds gets a task per run. If the candidate is refused, whatever
-the reason and even at no cost to its member, the ask stays, and is served at a later run, once any wait is over.
+accepted, or is a probe's answer** ("How a candidate is judged and integrated"): a worker that runs every hour and
+succeeds gets a task per run, and an answer, which costs no wait, frees its member as an acceptance does. The task
+is the one the plan kept for that member, and the job that writes holds it again, once the run has answered,
+against the rules it was dealt by: the member waits for nothing; the day's limit (a probe's answer stays one of the
+member's deals of the day, so a member it brings to the limit is kept no task); the trusted base's cover (above: an
+acceptance keeps its member active, an answer does not, so a member whose last acceptance has left the project's
+window, and who held its place by its probe alone, is a new member then, dealt only if the base covers one more);
+and never a probe the member answered.
+If the candidate is refused otherwise, whatever the reason and even at no cost to its member, the ask stays, and is
+served at a later run, once any wait is over.
 
 What ends a deal, and what it costs its member:
 
@@ -720,6 +729,14 @@ The hive's files there:
   probe's answer** ("How a candidate is judged and integrated") is such a line, refused for `goal_not_met`, with one
   number more: `probe`, how many answers the probe asks, from 1 to 5. A hive at an older commit reads it as the
   refusal it also is.
+
+  **A verdict names the commit of the hive that judged it**, `hive`: the commit of `Bee-ruche/hive` the project's
+  caller pins, which every job of the run checks is on the hive's main and runs ([hosting.md](hosting.md), "What
+  carries it"). The job that writes is given it (`hive.py apply --hive-commit`): whoever reads a figure can tell
+  which judge gave it, and where the judge changed. The promise of a push (`intent`) carries it too, and the verdict
+  a later run builds from a promise keeps the promise's: the run that judged, not the one that found the push
+  landed. A line without it (written before this rule, or by a job not given the commit) stays valid, and
+  whatever reads the ledger takes both.
 
   A commit has one verdict as a candidate. One that a guardian admitted and the hive then accepted has a second,
   which names the ruling (`ruling`, `guardian_id`, `guardian`, `waived`: "Guardians") and is recorded once per

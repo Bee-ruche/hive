@@ -130,7 +130,7 @@ two hours.
   again, and if it passes it is integrated and credited to you; if it does not, that costs you nothing.
 - **One task at a time.** A worker that runs every hour gets a task per run when tasks are free and its work
   is accepted: it pushes its candidate and asks for the next, and the hive deals the next as soon as the first is
-  accepted. Tasks that change
+  accepted (or, for a probe, answered). Tasks that change
   the same file are given to one member at a time, so a project has only so many tasks in hand at once: on miniz,
   three (its eleven first tasks change three files). With more workers than that, a worker waits its turn.
 - **A project takes new members only as far as its guardians cover.** A project may say how many active members

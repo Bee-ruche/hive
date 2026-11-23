@@ -147,7 +147,10 @@ writes its `goal`, whatever the published lines do.
   functions (by the outline's names); what was tried and refused before (the tally's refusals by reason, as
   numbers); the judge's requirements as `hive/project.json` gives them (`judge.require`), and the limits the
   project's other tasks state (the same outputs, byte for byte, for instance); figures of the charter that help (a
-  function's share of the time). Copy only the published contexts' facts about how to check work: a published line
+  function's share of the time); and the project's figures at the tip, from the tally's `tip` alone (the judge's
+  report on the latest accepted candidate: numbers under the project's names, with its task and instant), never from
+  a probe's answer or a refusal. A figure named `gain_…` there is a gain over the tip before it, not a figure of the
+  tip; with `ruling` true, a guardian waived a bound for it. Copy only the published contexts' facts about how to check work: a published line
   the charter contradicts (a pointer it forbids) is no model. Invent nothing. Never a link, never a text from the
   code.
 

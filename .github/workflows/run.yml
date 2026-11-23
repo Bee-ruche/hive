@@ -237,6 +237,7 @@ jobs:
         env:
           PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
           REPOSITORY: ${{ github.repository }}
+          HIVE_COMMIT: ${{ steps.protocol.outputs.commit }}
           TOKEN: ${{ github.token }}
         run: |
           auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
@@ -244,4 +245,5 @@ jobs:
           git -C project config "http.https://github.com/$REPOSITORY.extraheader" "Authorization: Basic $auth"
           python3 protocol/tools/hive/hive.py apply --registry protocol --project "$REPOSITORY" --repo project --state state \
             --plan taken/plan/plan.json --plan-sha256 "$PLAN_SHA256" \
-            --bundle taken/candidates/candidates.bundle --verdicts taken/verdicts/verdicts.json --commit-state
+            --bundle taken/candidates/candidates.bundle --verdicts taken/verdicts/verdicts.json --commit-state \
+            --hive-commit "$HIVE_COMMIT"

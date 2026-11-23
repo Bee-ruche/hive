@@ -317,8 +317,10 @@ changes only the task's files, and runs the hive's structural checks. Then it pu
 
 After `PUSHED`, if this worker runs at least every two hours, ask for your next task now as well
 (`hive ready --project <PROJECT> --login <LOGIN>`, with `--prefer <file>` if the user's prompt names one): the hive
-deals it as soon as this candidate is accepted (if it is refused, the ask stays and is served at a later run, once
-the wait is over when the refusal costs one). Then stop. The result appears in the project's ledger and on its page.
+deals it as soon as this candidate is accepted or, for a probe, answered (a project whose run is at an older commit
+of the hive serves the ask at its next run after an answer). If it is refused otherwise, the ask stays and is served
+at a later run, once the wait is over when the refusal costs one. Then stop. The result appears in the project's
+ledger and on its page.
 
 ## Giving the deal back
 
