@@ -1389,8 +1389,8 @@ class TestTheJudgeInContainers(Base):
             return judge(write_tree(trees / f"base-{n}"), write_tree(trees / f"candidate-{n}"), task, "T" * 40, "T" * 40, question=True)
 
         runs = hive.measure_runs(ask, hive.measure_tasks("relay", manifest, {"project": "toy"}, {}), 2)
-        self.assertEqual([code for _, code, _, _, _ in runs], [0, 0], runs)
-        answered = [figures for _, _, figures, _, _ in runs]
+        self.assertEqual([code for _, code, _, _, _, _ in runs], [0, 0], runs)
+        answered = [figures for _, _, figures, _, _, _ in runs]
         self.assertEqual(len({figures["total_bytes"] for figures in answered}), 1, "a counted figure is exact")
         floors = hive.measure_floors("relay", ["gain_total_bytes"], {}, answered)
         self.assertRegex(floors[0], r"\Acutter\.floors\.gain_total_bytes: propose 0\.\d{6}\. Rule: an exact figure")

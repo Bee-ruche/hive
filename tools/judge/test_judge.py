@@ -2672,30 +2672,41 @@ class TestJudgeAgainstVariants(unittest.TestCase):
         """hive.py measure's own steps on the toy, the common judge as the run makes it (judge_of): the tip against itself,
         twice; each gain the judge gives measured; a floor proposed for each, twice the largest gain seen between the tip
         and itself, with what the judge's own proof said of it; no bound of a phase proposed (they are the plug-in's);
-        a time of a judgement proposed."""
+        a time of a judgement proposed. The tip is named by a full commit id, as measure names it (the common judge
+        takes no other: --base, --head). A count of instructions is no measure with a noise: no floor from it. When a
+        judgement does not answer 0, the judge's own words for it are in the failure's message."""
         sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hive"))
         import hive
         if not hasattr(hive, "measure_runs"):
             self.skipTest("this hive does not hold the measure yet")
         judge = hive.judge_of(os.path.dirname(os.path.dirname(HERE)), {"kind": "common", "repetitions": 3, "timeout_seconds": 1800}, self.workdir)
-        made = iter(range(10))
+        made, tip, heard, real = iter(range(10)), "3" * 40, [], subprocess.run
 
         def ask(task):
             n = next(made)
             base = os.path.join(self.workdir, f"measure-base-{n}")  # (a copy: the judge writes its report beside the tree it is given)
             shutil.copytree(self.toy, base, ignore=shutil.ignore_patterns("__pycache__"))
-            return judge(base, self.prepare(f"measure-{n}"), task, "T" * 40, "T" * 40)
+            return judge(base, self.prepare(f"measure-{n}"), task, tip, tip)
 
-        runs = hive.measure_runs(ask, hive.measure_tasks("common", None, {"project": "toy"}, {}), 2)
-        self.assertEqual([code for _, code, _, _, _ in runs], [0, 0], runs)
-        answered = [figures for _, _, figures, _, _ in runs]
+        def listened(command, *args, **named):
+            ran = real(command, *args, **named)
+            heard.append((os.path.basename(str(command[1])) if len(command) > 1 else command, ran.returncode, (ran.stderr or "")[-3000:]))
+            return ran
+
+        with mock.patch.object(hive.subprocess, "run", side_effect=listened):
+            runs = hive.measure_runs(ask, hive.measure_tasks("common", None, {"project": "toy"}, {}), 2)
+        self.assertEqual([code for _, code, _, _, _, _ in runs], [0, 0], f"{runs}\nwhat the judge said:\n" + "\n".join(map(str, heard)))
+        answered = [figures for _, _, figures, _, _, _ in runs]
         gains = sorted(name for name in answered[0] if name.startswith("gain_"))
-        self.assertTrue(gains, answered)
+        self.assertTrue([name for name in gains if not name.startswith(hive.COUNTED_GAINS)], answered)
         floors = hive.measure_floors("common", gains, {}, answered)
         self.assertEqual(len(floors), len(gains))
-        for line in floors:
-            self.assertRegex(line, r"\Acutter\.floors\.gain_\w+: propose \d\.\d{4}\. Rule: 2 times the largest gain the judge measured between the tip "
-                                   r"and itself")
+        for name, line in zip(gains, floors):
+            if name.startswith(hive.COUNTED_GAINS):
+                self.assertIn(f"cutter.floors.{name}: no proposal from the noise: a counted figure", line)
+            else:
+                self.assertRegex(line, rf"\Acutter\.floors\.{name}: propose \d\.\d{{4}}\. Rule: 2 times the largest gain the judge measured "
+                                       r"between the tip and itself")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             lines = hive.measure_bounds(hive.Doctor(), "common", None, None, {"timeout_seconds": 1800}, runs, 2)

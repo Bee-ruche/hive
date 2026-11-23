@@ -113,33 +113,49 @@ ends with one line, `hive: …`, and 2, when it cannot start:
 ## Measuring a project
 
 `hive.py measure` judges the project's tip with the project's own kind of judge, a few times, on the architect's own
-machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker; a relay judge also
-needs root, or sudo that asks no password, as on a hosted runner (it mounts a memory file system for each phase). It
-reads the clone as `doctor` does, writes nothing to it and pushes nothing.
+machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker. A relay judge also
+needs root, or sudo that runs `mount` and `umount` without asking a password, as on a hosted runner: it mounts a memory
+file system for each phase. It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
 
 ```bash
 python3 tools/hive/hive.py measure --project <owner/name> --repo <a full clone of the project> [--times 3] [--factor 2]
 ```
 
-It judges as the run's judging job does: the judge's image made from the published branch (the one step with the
-network), then the tip of the branch the hive writes, written out as the run writes a tree, and judged by the judge
-the run makes (`judge_of`), in the judge's own containers, with no network for the project's code. A variable of the
-environment whose name says it is a credential (`TOKEN`, `SECRET`, `PASSWORD`, `_KEY`…) is taken out while the judge
-runs, and put back after: a filter on names, which the judge, needing none, does without. The image builder writes to
-the terminal as it would in the run's image step. The trees, the image's tree and the judge's own work go to a folder
-of its own (`--workdir`, which must exist, or the system's temporary folder), removed after.
+It judges as the run's judging job does:
+
+1. The judge's image is made from the published branch, as the run's image step makes it: the one step with the
+   network. As in the run, a judge may make its image again while it judges, with the network, if the tip it judges
+   asks for other packages than the published branch.
+2. The tip of the branch the hive writes is written out as the run writes a tree, and judged by the judge the run
+   makes (`judge_of`).
+3. What the judge builds and runs of the project goes in the judge's own containers, without network.
+
+**A common project's plug-in runs on this machine.** The common judge loads the project's plug-in
+(`bee/judge/project.py`) in its own process, on the host, as it does on the run's machine. There it runs with what
+that process can reach, the architect's home folder included; its units and builds run in the containers. measure says
+so and stops unless it is given `--plugin-runs-here`.
+
+**Credentials.** A variable of the environment whose name says it is a credential (`TOKEN`, `SECRET`, `PASSWORD`,
+`_KEY`, `AUTH`…) is taken out while the judge runs, and put back after. That is a filter on names. A credential
+written inside another value (an address with a user and a password, a proxy's) stays.
+
+**Its own folder.** The image builder writes to the terminal, as in the run's image step. The trees, the image's tree
+and the judge's own work go to a folder of measure's own (`--workdir`, which must exist, or the system's temporary
+folder), removed after.
 
 It first says how many judgements it will make, and how long each may take:
 
-- A reference or relay project: the tip judged as a candidate, as the run asks it for a planned task, `--times`
-  times: a whole judgement each time. For a reference judge, there is one judgement for each unit the open tasks
-  name, so `--times` judgements per unit. A reference tip refused as a candidate (its unit not written yet) gives no
-  figure. A relay tip refused as a candidate (its program passes a candidate's bound) is asked again as the tip
-  itself, at the tip's own bound, and its phases' figures say by how much.
-- A common project: the tip judged against itself, as the run asks it after a failure to judge.
+- **A reference or relay project:** the tip judged as a candidate, as the run asks it for a planned task, `--times`
+  times: a whole judgement each time.
+  - For a reference judge, there is one judgement for each unit the open tasks name, so `--times` judgements per
+    unit. A reference tip refused as a candidate (its unit not written yet) gives no figure.
+  - A relay tip refused as a candidate (its program passes a candidate's bound) is asked again as the tip itself, at
+    the tip's own bound, and its phases' figures say by how much.
+- **A common project:** the tip judged against itself, as the run asks it after a failure to judge.
 
-A judgement that fails says so with its code; the judge's own reason stays in its output, which the run keeps in its
-log.
+A judgement that fails or refuses is said with the reason the judge wrote in its own report, read before the
+judgement's folder is removed. A judge that stopped before it could write one is said to have written none. (In the
+run, the judging step keeps a judgement's code and figures, not its reason.)
 
 It prints, in the doctor's form:
 
@@ -147,8 +163,8 @@ It prints, in the doctor's form:
 - for a relay judge, each phase's processor time and memory as the judge measured the tip's program, against what
   the manifest gives a candidate and the tip;
 - the judgements' own duration on this machine, against `judge.timeout_seconds`;
-- CANNOT where the kind does not measure something: the relay judge reports no build time; the reference judge
-  bounds its containers and measures none; the common judge's phases are its plug-in's.
+- CANNOT where the kind does not measure something: the relay judge reports no build time and no build memory; the
+  reference judge bounds its containers and measures none; the common judge's phases are its plug-in's.
 
 Then, as `DECIDE` lines, its proposals. Each says the rule it used and the numbers it came from; the architect
 decides:
@@ -161,15 +177,20 @@ decides:
     judgements tell the noise better;
   - a counted figure of the common judge's (an instruction count): no floor from the noise. The judge calls a
     difference beyond the noise above its own threshold, and the figure holds no proof.
-- **The bounds** (relay): each phase's processor time and the memory, `--factor` times what the tip's program took,
-  within the kind's own bounds.
+- **The bounds** (relay):
+  - each phase's processor time: `--factor` times what the tip's program took, within the kind's own bounds. A bound
+    the kind caps below that says so;
+  - the memory: `--factor` times what a phase used, and never below the manifest's own value. The builds share this
+    bound, and no build's memory is measured.
 - **The time of a judgement**: `--factor` times the longest judgement on this machine, and no less than the manifest's
-  worst case (the kind's own count) with the judge's margin of 120 s. A runner may be slower than this machine.
+  worst case (the kind's own count) with the judge's margin of 120 s, with the manifest's bounds as they are and as
+  proposed. A runner may be slower than this machine.
 
-It ends with 0 when each judgement answered and each phase kept its bound, and 1 otherwise. It ends with one line,
-`hive: …`, and 2, when it cannot start:
+It ends with 1 when a judgement fails to judge (code 2) or a phase passes its bound, and 0 otherwise: a refusal
+(code 1) alone fails nothing. It ends with one line, `hive: …`, and 2, when it cannot start:
 - another system than Linux;
-- no Docker, or, for a relay judge, neither root nor sudo without a password;
+- no Docker, or, for a relay judge, neither root nor sudo for `mount` and `umount` without a password;
+- a common project without `--plugin-runs-here`;
 - settings or a manifest that do not load;
 - a `--workdir` that does not exist;
 - the judge's image not made.

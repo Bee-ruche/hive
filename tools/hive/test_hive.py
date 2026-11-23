@@ -16897,7 +16897,12 @@ class TestTheMeasure(Base):
         self.assertIn("judge.relay.encode_seconds: propose 6. Rule: 2 times the 3.0 s of processor time the tip's program took at most, within the "
                       "kind's 1 to 900; the manifest says 4. A runner may be slower than this machine. The architect decides.", decided)
         self.assertTrue(any(line.startswith("judge.relay.decode_seconds: propose 3.") for line in decided))
-        self.assertTrue(any(line.startswith("judge.relay.memory_mb: propose 98.") for line in decided), "2 x 50000 kB, in MB, rounded up")
+        memory = self.line(decided, "judge.relay.memory_mb: ")
+        self.assertTrue(memory.startswith("judge.relay.memory_mb: propose 256. Rule: 2 times the 50000 kB the tip's program used at most in a "
+                                          "phase, within the kind's 64 to 8192, and never below the manifest's 256: the builds share this bound"),
+                        "2 x 50000 kB is 98 MB, below the manifest's 256: a build needs what no phase measures")
+        self.assertIn("must be 820 s at least with the first, 830 s with the second", self.line(decided, "judge.relay: "),
+                      "the timeout for the manifest's bounds as they are and as proposed")
         budget = hive.judge_module(REGISTRY, "relay").budget({**json.loads((self.RELAY_TOY / "bee/relay/project.json").read_text()),
                                                               "encode_seconds": 6, "decode_seconds": 3, "memory_mb": 98})
         self.assertTrue(any(line.startswith(f"judge.timeout_seconds: propose {budget + hive.REFERENCE_MARGIN}. ") for line in decided),
@@ -16958,7 +16963,7 @@ class TestTheMeasure(Base):
         self.healthy()
         self.w.set_config({"protected": ["tests/**", "bee/**"], "judge": {**JUDGE, "metrics": [*JUDGE["metrics"], "gain_instructions_c"]}})
         answers = [{"code": 0, "report": {"gain": 0.001, "sure_gain": 0, "gain_instructions_c": 0.0}}]
-        decided = self.decided(self.measure(answers, "--times", "1")[1])
+        decided = self.decided(self.measure(answers, "--times", "1", "--plugin-runs-here")[1])
         self.assertIn("no proposal from the noise: a counted figure (an instruction count, read by Valgrind)",
                       self.line(decided, "cutter.floors.gain_instructions_c: "))
 
@@ -16976,9 +16981,12 @@ class TestTheMeasure(Base):
         self.healthy()
         answers = [{"code": 0, "report": {"gain": gain, "sure_gain": sure, "outputs_compared": 12}}
                    for gain, sure in ((0.004, 0), (-0.006, 0), (0.002, 1))]
-        code, lines, _ = self.measure(answers, "--times", "3", durations=[100, 120, 110])
+        code, lines, _ = self.measure(answers, "--times", "3", "--plugin-runs-here", durations=[100, 120, 110])
+        self.assertIn("the project's plug-in runs in the judge's process on this machine, as you said", self.line(lines, "NOTE plugin: "))
         self.assertEqual(code, 0, lines)
         self.assertEqual([asked["named"] for asked in self.asked], [{}] * 3, "no question: the tip against itself")
+        self.assertEqual({asked["same"] for asked in self.asked}, {(self.w.tip(), self.w.tip())},
+                         "the tip named by its full commit id, twice (the common judge takes --base and --head as full commits only)")
         floor = self.line(self.decided(lines), "cutter.floors.gain: ")
         self.assertTrue(floor.startswith("cutter.floors.gain: propose 0.0120. Rule: 2 times the largest gain the judge measured between the tip and "
                                          "itself (0.006000 over 3 judgement(s): 0.004000, -0.006000, 0.002000), rounded up to 0.0001"), floor)
@@ -17026,6 +17034,69 @@ class TestTheMeasure(Base):
         with mock.patch.object(hive.sys, "platform", "darwin"):
             code, _, err = self.measure([])
         self.assertEqual((code, err.strip()), (2, f"hive: {hive.ONLY_ON_LINUX_DOCTOR.replace('the doctor', 'measure')}"))
+
+    def test_a_common_project_is_measured_only_once_the_architect_says_its_plugin_runs_here(self):
+        """The common judge loads the project's plug-in in its own process, on the host, as in the run: measure says so,
+        and goes on only with --plugin-runs-here; nothing is judged or made before."""
+        self.healthy()
+        code, lines, err = self.measure([])
+        self.assertEqual((code, lines, err.strip()), (2, [], f"hive: {hive.PLUGIN_HERE}"))
+        self.assertEqual((self.asked, self.made), ([], []))
+
+    def test_the_reason_the_judge_wrote_is_said_beside_a_failure(self):
+        """A judge that fails writes its reason in its own report, in the judgement's folder (relay.json for a relay
+        judge): measure reads it there before the folder is removed, and says it, made plain. A judge that stopped before
+        it could write one is said to have written none."""
+        self.relay()
+
+        def judge(base, candidate, task, tip, commit, **named):
+            if len(self.asked) == 0:
+                (base.parent / "relay.json").write_text(json.dumps({"kind": "relay", "code": 2, "reason": "the tip's build failed:\x1b[31m red"}))
+            self.asked.append(named)
+            return {"code": 2}
+
+        with mock.patch.object(TestTheMeasure, "stand_in", lambda test, answers: judge):
+            code, lines, _ = self.measure([], "--times", "2")
+        self.assertEqual(code, 1)
+        failures = [line for line in lines if line.startswith("WRONG judgement: ")]
+        self.assertIn("; the judge said: the tip's build failed:?[31m red", failures[0])
+        self.assertIn("; the judge wrote no reason (it stopped before it could)", failures[1])
+
+    def test_root_or_sudo_for_both_commands_and_none_where_sudo_is_not(self):
+        with mock.patch.object(hive.os, "geteuid", return_value=1000):
+            for answers, expected in (([0, 0], True), ([0, 1], False), ([FileNotFoundError("sudo")], False)):
+                with self.subTest(answers=answers):
+                    given = iter(answers)
+
+                    def run(command, **named):
+                        answer = next(given)
+                        if isinstance(answer, BaseException):
+                            raise answer
+                        self.assertEqual(command[:3], ["sudo", "-n", "-l"])
+                        return mock.Mock(returncode=answer)
+                    with mock.patch.object(hive.subprocess, "run", side_effect=run):
+                        self.assertIs(hive.root_or_sudo(), expected)
+
+    def test_the_time_of_a_judgement_holds_with_the_manifests_bounds_as_they_are(self):
+        """Bounds proposed below the manifest's own make a smaller worst case: the time proposed for a judgement still
+        holds the manifest's worst case as it is, so that adopting the time alone loses nothing."""
+        self.relay()
+        decided = self.decided(self.measure([{"code": 0, "report": {**self.RELAY, "encode_seconds": 1.0}}], "--times", "1")[1])
+        relay = hive.judge_module(REGISTRY, "relay")
+        manifest = json.loads((self.RELAY_TOY / "bee/relay/project.json").read_text())
+        now, then = relay.budget(manifest) + hive.REFERENCE_MARGIN, relay.budget({**manifest, "encode_seconds": 2, "decode_seconds": 3}) + hive.REFERENCE_MARGIN
+        self.assertLess(then, now)
+        self.assertTrue(self.line(decided, "judge.timeout_seconds: ").startswith(f"judge.timeout_seconds: propose {now}. "))
+
+    def test_a_bound_the_kind_caps_says_so(self):
+        self.relay()
+        decided = self.decided(self.measure([{"code": 0, "report": {**self.RELAY, "encode_seconds": 600.0}}], "--times", "1")[1])
+        self.assertIn("propose 900. ", self.line(decided, "judge.relay.encode_seconds: "))
+        self.assertIn("The kind takes 900 s at most, below 2 times what the tip took.", self.line(decided, "judge.relay.encode_seconds: "))
+        decided = self.decided(self.measure([{"code": 0, "report": {**self.RELAY, "encode_seconds": 950.0}}], "--times", "1")[1])
+        self.assertIn(": no bound of the kind keeps a candidate as fast as this tip.", self.line(decided, "judge.relay.encode_seconds: "))
+        decided = self.decided(self.measure([{"code": 0, "report": {**self.RELAY, "encode_seconds": 1.0, "encode_memory_kb": 200000}}], "--times", "1")[1])
+        self.assertIn("propose 391. ", self.line(decided, "judge.relay.memory_mb: "), "2 x 200000 kB, in MB (1024 kB each), rounded up, above the manifest's 256")
 
     def test_the_trees_are_written_and_removed_as_the_runs_judging_step_writes_them(self):
         """judge_trees, which the run's judging step itself calls (judging: ask): the tip's tree and the tree judged, each

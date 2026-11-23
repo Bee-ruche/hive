@@ -943,7 +943,7 @@ class TestTheJudgeInContainers(Base):
         self.assertEqual(tasks, [{"id": "toy-measure-upper", "files": ["port/upper.c"], "options": {"unit": "upper"}}])
         runs = hive.measure_runs(lambda task: hive.judge_trees(str(repo), judge, tempfile.mkdtemp(dir=self.root / "trees"), tip, hive.tree_of(str(repo), tip),
                                                                task, tip, question=True), tasks, 2)
-        self.assertEqual([(code, figures) for _, code, figures, _, _ in runs], [(0, {"cases_compared": 1200, "builds": 2, "runs": 4})] * 2)
+        self.assertEqual([(code, figures) for _, code, figures, _, _, _ in runs], [(0, {"cases_compared": 1200, "builds": 2, "runs": 4})] * 2)
         self.assertEqual(os.listdir(self.root / "trees"), [], "the trees are removed")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
