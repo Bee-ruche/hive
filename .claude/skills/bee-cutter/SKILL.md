@@ -149,10 +149,11 @@ writes its `goal`, whatever the published lines do.
   project's other tasks state (the same outputs, byte for byte, for instance); figures of the charter that help (a
   function's share of the time); and the project's figures at the tip, from the tally's `tip` alone (the judge's
   report on the latest accepted candidate: numbers under the project's names, with its task and instant), never from
-  a probe's answer or a refusal. A figure named `gain_…` there is a gain over the tip before it, not a figure of the
-  tip; with `ruling` true, a guardian waived a bound for it. Copy only the published contexts' facts about how to check work: a published line
-  the charter contradicts (a pointer it forbids) is no model. Invent nothing. Never a link, never a text from the
-  code.
+  a probe's answer or a refusal. A figure that is a gain there (`gain`, or `gain_…`) is a gain over the tip before
+  it, not a figure of the tip; with `ruling` true, a guardian waived a bound for it. Where `tip` is null (nothing
+  was accepted yet), quote no figure of the tip. Copy only the published contexts' facts about how to check work: a
+  published line the charter contradicts (a pointer it forbids) is no model. Invent nothing. Never a link, never a
+  text from the code.
 
 **Choosing the work.** In the order the charter gives; otherwise:
 
