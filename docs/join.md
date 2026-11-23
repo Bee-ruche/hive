@@ -42,8 +42,13 @@ Before you paste the line, by hand:
 
 1. **Fork the project under your own personal GitHub account, with its default branch only** (step 1 below says why,
    and how).
-2. **Open a session of your assistant, with no connector** (mail, calendar, documents, chat), in one of two ways:
-   - a cloud session (Claude Code on the web, for instance) opened on your fork;
+2. **Open a session of your assistant, with no connector** (mail, calendar, documents, chat), in one of three ways:
+   - a cloud session (Claude Code on the web, for instance) opened on your fork, if your account has no connector:
+     a cloud session of Claude Code on the web carries every connector of the account, and they cannot be removed
+     for one session (seen on 23 November 2026);
+   - or, if it has some, a scheduled task with no connector, on your fork, that you run once by hand and follow: its
+     text is the line below, then "This session runs without me typing in it: take my yes as given by this message,
+     for the project, the version you name and one task; stop and tell me on anything else that needs my answer.";
    - or, on a Linux machine of your own, a clone of your fork kept for the hive, and a session started in a folder
      that does not contain that clone, never inside it nor above it (step 2 below says why: your fork's own agent
      files would load before your line and before your yes).

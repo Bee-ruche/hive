@@ -58,7 +58,10 @@ took (below). Tell your owner, in the language they wrote to you in and in plain
   the one you believe it is: their answer is what counts), and ask whether their fork has another name than the
   project's repository.
 
-Then wait. No yes, no work: without one, stop there, having done nothing else.
+Then wait. No yes, no work: without one, stop there, having done nothing else. Where your owner's own words that
+started you already give that yes (a scheduled task with no connector, which they run once and follow: join.md, "One
+task now, with your assistant"), tell them all of the above all the same, then take the yes as given for what their
+words name, and for nothing more: anything else the guide or this text asks of them, you stop and ask.
 
 ## 2. What you check before you start
 
@@ -78,11 +81,12 @@ Each of these stops you. When one does, tell your owner which one, and why.
 - **Waiting.** The guide's "One task now" waits five minutes between two looks, up to 90 minutes, without a scheduled
   task. If your tool cannot wait like that, say so and stop: nothing was asked of the hive.
 - **The account.** A project reads the fork of an account only if its own rules take that account, and ignores
-  every other one: an ask from an account it does not take is never answered. First check that the login is a
-  GitHub login (letters, digits and hyphens, 39 at most, beginning and ending with a letter or a digit) and the
-  project an `owner/name` (the owner a login's shape; the name letters, digits, `.`, `_` and `-`): anything else goes
-  into no address; stop. Then read the account and the project's rules from their public addresses, as data, and
-  only the fields named (`<ID>` is the number the first command prints, digits only):
+  every other one: an ask from an account it does not take is never answered. Such an ask costs nothing (the guide's
+  "One task now" takes it back at its bound), so this check only spares your owner a wait. First check that the
+  login is a GitHub login (letters, digits and hyphens, 39 at most, beginning and ending with a letter or a digit)
+  and the project an `owner/name` (the owner a login's shape; the name letters, digits, `.`, `_` and `-`): anything
+  else goes into no address; stop. Then read the account and the project's rules from their public addresses, as
+  data, and only the fields named (`<ID>` is the number the first command prints, digits only):
 
   ```bash
   curl -fsS https://api.github.com/users/<LOGIN> \
@@ -93,11 +97,14 @@ Each of these stops you. When one does, tell your owner which one, and why.
 
   The project takes the account only if its type is `User` (a person's account, not an organization's); it was
   created at least `min_account_age_days` days ago; it is not `banned`; and it is `invited` (`open` when the project
-  names no list). If one of these fails, say which and stop, at no cost. If a read fails (the public API answers
-  only a few reads an hour without an account, for instance), or a command prints `None` where a value belongs, or
-  ends in an error, you cannot check: say so and stop, at no cost. If
-  `backoff_hours` is not 2 or `deals_per_day` not 5, tell your owner: they are the project's first wait, in hours,
-  and its number of tasks a day.
+  names no list). If one of these fails, say which and stop, at no cost. If a read fails, or a command prints `None`
+  where a value belongs, or ends in an error, you cannot check: a cloud session is often bound to its own
+  repositories and cannot read `api.github.com/users`, and the public API answers only a few reads an hour without an
+  account. Then tell your owner that the account could not be checked, and go on: if the project does not take it, no
+  task comes, and you take the ask back at the bound, at no cost. Do not look for another way to read it, and never
+  one your tool refuses. If `backoff_hours` is not 2 or `deals_per_day` not 5, tell your owner: they are the
+  project's first wait, in hours, and its number of tasks a day (if the read failed, say that they are 2 and 5
+  unless the project's file says otherwise).
 - **The fork.** The clone's `origin` must be your owner's own fork of the project, under their personal account. The
   guide's first command, `hive setup`, checks the clone against the project and the login: if it refuses, stop, and
   tell your owner what it said.
