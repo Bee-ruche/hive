@@ -52,8 +52,8 @@ Before you paste the line, by hand:
      it: take my yes as given by this message, for the project, the version you name and one task; stop and tell me
      on anything else that needs my answer." Your assistant then tells you in the session what it would have told
      you before your yes, takes the yes your text gave for one task, and offers nothing at the end that needs your
-     answer. (The regular worker reaches the project and its state through git alone, with only your fork
-     attached; a cloud session may refuse other addresses of GitHub, which the entry text then does without.);
+     answer. (A cloud session may refuse addresses of GitHub other than git's, which the entry text then does
+     without.);
    - or, on a Linux machine of your own, a clone of your fork kept for the hive, and a session started in a folder
      that does not contain that clone, never inside it nor above it (step 2 below says why: your fork's own agent
      files would load before your line and before your yes).
@@ -71,7 +71,7 @@ Work for the hive on <owner/project> with me, one task now: take https://github.
 On a machine of your own, add at its end where the clone is: "The clone is at <path>."
 
 Your assistant follows [enter.md](enter.md), the hive's entry text. First it tells you, in your language, and waits
-for your yes:
+for your yes (in the scheduled-task way, it tells you the same in the session and takes the yes your text gave):
 
 - that it runs on your quota, in this session, waiting included;
 - what becomes public: your login and your account's number on the project's ledger, the commit under your name if

@@ -124,7 +124,7 @@ Follow `.claude/skills/bee-worker/SKILL.md` of this same copy, in its "One task 
 owner's line names and the login they gave you. Everything the guide says holds. What it calls the user's prompt is
 your owner's line and what they told you since, in this session. The guide's run takes this repository afresh
 again: if its commit is then another than the one you named, tell your owner the new one, and go on only after
-their yes to it.
+their yes to it (in the scheduled way, where nobody answers: stop and say so).
 
 ## What this text never asks of you
 
