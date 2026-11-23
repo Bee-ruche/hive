@@ -6268,19 +6268,25 @@ def cmd_report(args):
 # ---------------------------------------------------------------------------------------------------------------
 # The project's doctor (docs/hosting.md, "Checking a project"): what a project holds of what the hive needs, read from
 # a clone of the project as it stands, and what its architect has still to decide. It reads the clone's own references
-# and objects (no address is asked, nothing is fetched: a partial clone, whose git would fetch what is read, is refused),
-# the hive's own tree (its list of settings, the judges' own checks and constants, its own history) and nothing else: no
-# file of the project is run or imported, nothing is written to the clone or pushed, no setting is changed. Each check
-# is a rule the hive already holds, called where it lives.
+# and objects (no address is asked, nothing is fetched: a partial clone, or one with a promisor remote, whose git would
+# fetch what it reads, is refused), the hive's own tree (its list of settings, the judges' own checks and constants, its
+# own history) and nothing else: no file of the project is run or imported, nothing is written to the clone or pushed,
+# no setting is changed. Each check is a rule the hive already holds, called where it lives, or held on the project's
+# git tree the way the code holds it on files.
 
 SETTINGS_LIST = "hive/settings.json"  # in the hive's own tree: every setting of a project's file, its default, bounds and presets
-CHARTER_FILE = "hive/charter.md"  # the architect's charter, beside the settings, which a project with a cutter block needs (docs/cutter.md)
+CHARTER_FILE = "hive/charter.md"  # the architect's charter, beside the settings, which the AI cutter reads (docs/cutter.md)
 WORKFLOWS_FOLDER = ".github/workflows"  # where GitHub reads a repository's workflows, the project's caller among them
 CALLER_USES = re.compile(r"""\s*uses:\s*["']?(?i:bee-ruche/hive)/\.github/workflows/run\.yml@([^\s"'#]+)["']?\s*(?:#.*)?""")
-CALLER_IF = re.compile(r"""\s*if:\s*["']?\s*github\.ref\s*==\s*'([^']*)'\s*["']?\s*(?:#.*)?""")
+# The guard hosting.md and the example caller give the job: « if: github.ref == 'refs/heads/<published>' », quoted or not.
+CALLER_IF = re.compile(r"""\s*if:\s*(?:["']\s*)?github\.ref\s*==\s*'([^']*)'(?:\s*["'])?\s*(?:#.*)?""")
 NO_COMMIT = "0" * 40  # what the example caller names until a project writes the commit it runs (examples/project)
 WORKFLOW_BYTES = 256 << 10  # a workflow file larger than this is not read
 WORKFLOWS_MOST = 100  # the most workflow files the doctor reads
+JOB_LINES_MOST = 200  # how far from its « uses: » line the doctor looks for the « if: » of the same job, each way
+CALLERS_SHOWN = 10  # the most callers the doctor says one line each of (it says how many more there are)
+LINE_MOST = 600  # the longest line the doctor prints (a longer one is cut, and says so); lists are wrapped below it
+GAIN = re.compile(r"gain(?:_[a-z0-9_]+)?\Z")  # how the hive names a gain: gain, or gain_<measure> (the common judge's report, the relay's gain_total_bytes)
 # What the hive cannot read of a project's repository without its owner's account: its settings on GitHub
 # (docs/hosting.md, "The repository's settings").
 REPOSITORY_SETTINGS = (("actions-permissions", "Settings, Actions, General, \"Actions permissions\""),
@@ -6289,11 +6295,14 @@ REPOSITORY_SETTINGS = (("actions-permissions", "Settings, Actions, General, \"Ac
                        ("rulesets", "Settings, Rules, Rulesets"))
 HOLDS = "docs/hosting.md, \"What a project holds\""
 JUDGE_MODULES = {"common": "judge", "reference": "reference", "relay": "relay"}  # each kind's module in the hive's tools/judge
+ONLY_ON_LINUX_DOCTOR = ("the doctor runs on Linux only, as the hive's run does (each git it starts is bounded in a way other systems "
+                        "do not offer): run it on a Linux machine, in a Linux container or in a cloud session")
 
 
 class Doctor:
-    """The doctor's lines: OK, MISSING, WRONG or CANNOT, then a check's name and what it found, one line each, every
-    text in it made plain (safe_text: printable ASCII). MISSING and WRONG make the command fail; CANNOT does not."""
+    """The doctor's lines: OK, NOTE, MISSING, WRONG or CANNOT, then a check's name and what it found, one line each,
+    every text in it made plain (safe_text: printable ASCII), the explanation first. MISSING and WRONG make the command
+    fail; NOTE and CANNOT do not."""
 
     def __init__(self):
         self.failed = False
@@ -6301,14 +6310,44 @@ class Doctor:
     def say(self, word, check, text=""):
         if word in ("MISSING", "WRONG"):
             self.failed = True
-        print(f"{word} {check}" + (f": {safe_text(text, 400)}" if text else ""))
+        print(bounded_line(f"{word} {check}" + (f": {text}" if text else "")))
+
+
+def bounded_line(text):
+    """A line of the doctor's, made plain and no longer than LINE_MOST, the cut said where there is one."""
+    plain = safe_text(text, LINE_MOST + 1)
+    return plain if len(plain) <= LINE_MOST else plain[:LINE_MOST - 6] + " [cut]"
+
+
+def wrapped(head, sentence, names, width=LINE_MOST - 120):
+    """A sentence and a list too long for one line: the sentence first, then the names on as many lines as they need,
+    each said to continue the first."""
+    lines, chunk = [f"{head}: {sentence}"], []
+    for name in names:
+        if chunk and len(", ".join(chunk + [name])) > width:
+            lines.append(f"{head} (continued): {', '.join(chunk)}")
+            chunk = []
+        chunk.append(name)
+    if chunk:
+        lines.append(f"{head} (continued): {', '.join(chunk)}")
+    return lines
+
+
+def guarded(out, check, step, *args):
+    """Runs one check: whatever stops it is its own WRONG line, said plainly, and the next checks run (the doctor reads
+    a project's files as data, and no file of a project ends it)."""
+    try:
+        return step(out, *args)
+    except Exception as error:  # (any kind: a check is a reading, and what it read may be anything)
+        out.say("WRONG", check, f"this check stopped on what it read: {type(error).__name__}: {error}")
+        return None
 
 
 def remote_branches(repo):
     """{name: commit} of the clone's branches of its origin (refs/remotes/origin/<name>), and the branch its origin
     names as its default one (refs/remotes/origin/HEAD), or None: the clone's own references, as its last fetch left
     them. Nothing is asked of the project's address. One reference per line, as git ends each (a name may hold a
-    character that other readers take for the end of a line)."""
+    character that other readers take for the end of a line), and only a line that begins with refs/remotes/origin/."""
     listed = git_raw(repo, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/remotes/origin/")
     if listed.returncode != 0:
         raise HiveError("--repo: not a clone git can read")
@@ -6325,47 +6364,78 @@ def remote_branches(repo):
     return branches, (head if plain_branch(head) and head in branches else None)
 
 
-def partial_clone(repo):
-    """True for a partial clone (blobless or treeless): its git fetches from the project's address what it reads and
-    lacks. A cutter's commands take a full clone (--repo); the doctor reads no other."""
-    return git(repo, "config", "--get", "extensions.partialclone", check=False).returncode == 0
+def fetches_what_it_reads(repo):
+    """True for a clone whose git would fetch from the project's address what it reads and lacks: a partial clone
+    (blobless or treeless), or one with a promisor remote or a remote's partial-clone filter. A cutter's commands take
+    a full clone (--repo); the doctor reads no other."""
+    partial = git(repo, "config", "--get", "extensions.partialclone", check=False).returncode == 0
+    promisor = git(repo, "config", "--get-regexp", r"^remote\..*\.(promisor|partialclonefilter)$", check=False)
+    return partial or (promisor.returncode == 0 and any(line.split(" ", 1)[1:] != ["false"] for line in promisor.stdout.splitlines()))
 
 
 def judge_module(registry, name):
     """One module of the hive's judges (tools/judge/<name>.py of the hive's own tree), for its constants and its checks
     of a manifest: the hive's code, trusted as this file is (a project's file names a kind of judge, never brings one).
-    Imported once in the process, writing no compiled file into that tree."""
-    folder = str(Path(registry) / "tools" / "judge")
+    Imported once in the process, writing no compiled file into that tree, and leaving the process's list of folders to
+    import from as it found it (the modules add their own folder to it as they load)."""
+    folder, saved = str(Path(registry) / "tools" / "judge"), list(sys.path)
     before, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     sys.path.insert(0, folder)
     try:
         return importlib.import_module(name)
     finally:
         sys.dont_write_bytecode = before
-        if folder in sys.path:
-            sys.path.remove(folder)
+        sys.path[:] = saved
 
 
-def plain_files(repo, commit):
-    """(files, folders) of one commit of the clone: the paths of its plain files (modes 100644 and 100755: what the
-    judges read of a tree, no link and no sub-module), and every folder that holds one."""
-    listed = git_raw(repo, "ls-tree", "-r", "-z", need_sha(commit))
+def tree_entries(repo, commit):
+    """{path: (mode, size)} of every entry of one commit of the clone, as git lists them recursively: plain files
+    (100644, 100755), links (120000) and sub-modules (160000, no size); folders are those that hold an entry."""
+    listed = git_raw(repo, "ls-tree", "-r", "-l", "-z", need_sha(commit))
     if listed.returncode != 0:
         raise HiveError("the files of the project's tip cannot be listed")
-    files, folders = set(), set()
+    entries = {}
     for record in listed.stdout.split(b"\0"):
         meta, _, path = record.partition(b"\t")
-        if meta.split(b" ")[0] in (b"100644", b"100755"):
-            name = path.decode("utf-8", errors="surrogateescape")
-            files.add(name)
-            parts = name.split("/")
-            folders.update("/".join(parts[:end]) for end in range(1, len(parts)))
-    return files, folders
+        fields = meta.split()
+        if len(fields) == 4 and path:
+            entries[path.decode("utf-8", errors="surrogateescape")] = (fields[0].decode(), int(fields[3]) if fields[3].isdigit() else 0)
+    return entries
+
+
+def inside(entries, path):
+    """The entries at a path, or below it: [(path, mode, size)]."""
+    root = path.rstrip("/")
+    return [(name, mode, size) for name, (mode, size) in entries.items() if name == root or name.startswith(root + "/")]
+
+
+def as_the_judge_copies(entries, listed, what, reference):
+    """The rules the judges hold when they copy paths of the tip for one container (reference.py: copy_paths and
+    regular_files), held on the git tree: each path there, as a plain file or a folder of plain files and folders
+    alone (no link, no sub-module), no deeper than the judge reads, ENTRIES files at most and SOURCE_BYTES together.
+    Returns the problems, as sentences."""
+    problems, found, total = [], 0, 0
+    for path in listed:
+        held = inside(entries, path)
+        if not held:
+            problems.append(f"{what}: {path} is not in the tip")
+        for name, mode, size in held:
+            if mode not in ("100644", "100755"):
+                problems.append(f"{what}: {name} is neither a plain file nor a folder (a link or a sub-module), which the judge refuses")
+            elif name.count("/") > 32:
+                problems.append(f"{what}: {name} lies deeper than the judge reads")
+            found, total = found + 1, total + size
+    if found > reference.ENTRIES:
+        problems.append(f"{what}: {found} files, above the {reference.ENTRIES} the judge copies for one container")
+    if total > reference.SOURCE_BYTES:
+        problems.append(f"{what}: {total} bytes, above the {reference.SOURCE_BYTES} the judge copies for one container")
+    return problems
 
 
 def doctor_ledger(repo, state):
     """The project's ledger at a commit of its branch hive-state, read as a run reads it (Ledger), from a folder of this
-    command's own outside the clone, which it removes; an empty one before the project's first run writes it."""
+    command's own in the system's temporary folder, outside the clone, which it removes; an empty one before the
+    project's first run writes it."""
     data = blob_at(repo, state, LEDGER_FILE, most=STATE_BYTES) if state else None
     with tempfile.TemporaryDirectory(prefix="hive-doctor-") as folder:
         (Path(folder) / LEDGER_FILE).write_bytes(data or b"")
@@ -6373,10 +6443,11 @@ def doctor_ledger(repo, state):
 
 
 def caller_of(repo, commit):
-    """([(workflow path, the ref it calls the hive's run at, the ref the « if » of the same job names, or None)], how
-    many workflow files were not read: a link, a folder, a file too large, or one beyond WORKFLOWS_MOST). Each workflow
-    file of the published commit is read as text and never run: a « uses: » line that calls Bee-ruche/hive's run.yml,
-    and an « if: github.ref == '…' » at the same depth in the same job, before or after it."""
+    """([(workflow path, the ref it calls the hive's run at, the ref the « if: » of the same job names or None, that
+    « if: » as written when it is one this command does not read, or None)], how many workflow files were not read: a
+    link, a folder, a file too large, or one beyond WORKFLOWS_MOST). Each workflow file of the published commit is read
+    as text and never run: a « uses: » line that calls Bee-ruche/hive's run.yml, and the « if: » at the same depth in
+    the same job, before or after it (within JOB_LINES_MOST lines, up to the first line less deep)."""
     listed = git_raw(repo, "--literal-pathspecs", "ls-tree", "-z", need_sha(commit), "--", WORKFLOWS_FOLDER + "/")
     entries = [entry for entry in listed.stdout.split(b"\0") if entry] if listed.returncode == 0 else []
     paths = [entry.partition(b"\t")[2].decode("utf-8", errors="replace") for entry in entries]
@@ -6393,38 +6464,45 @@ def caller_of(repo, commit):
             used = CALLER_USES.fullmatch(line)
             if not used:
                 continue
-            depth, guard = len(line) - len(line.lstrip(" ")), None
+            depth, written = len(line) - len(line.lstrip(" ")), None
             for step in (-1, 1):  # the job's other keys, before and after: up to the first line less deep than its own
-                other = index + step
-                while 0 <= other < len(lines) and guard is None:
+                for other in range(index + step, index + step * (JOB_LINES_MOST + 1), step):
+                    if not 0 <= other < len(lines) or written is not None:
+                        break
                     text = lines[other]
                     if text.strip() and not text.lstrip().startswith("#"):
                         if len(text) - len(text.lstrip(" ")) < depth:
                             break
-                        if len(text) - len(text.lstrip(" ")) == depth and CALLER_IF.fullmatch(text):
-                            guard = CALLER_IF.fullmatch(text).group(1)
-                    other += step
-            found.append((path, used.group(1), guard))
+                        if len(text) - len(text.lstrip(" ")) == depth and text.lstrip().startswith("if:"):
+                            written = text.strip()
+            guard = CALLER_IF.fullmatch(written).group(1) if written and CALLER_IF.fullmatch(written) else None
+            found.append((path, used.group(1), guard, written if written and guard is None else None))
     return found, unread
 
 
 def on_the_hives_main(registry, commit):
-    """(word, sentence): whether a commit is on the hive's main, as the hive's own clone here knows it. OK when its main
-    holds it; CANNOT when this tree is no clone, does not hold the commit, or does not show it on main (its main may be
-    older than the commit: the run itself refuses a commit its main does not hold)."""
+    """(word, sentence): whether a commit is on the hive's main, as the hive's own clone here knows it, and the commit
+    that clone is at (the doctor's own). OK when its main holds it; CANNOT when this tree is no clone, does not hold the
+    commit, or does not show it on main (its main may be older than the commit: the run itself refuses a commit its main
+    does not hold)."""
     if git(registry, "rev-parse", "--git-dir", check=False).returncode != 0:
-        return "CANNOT", "the hive's own tree here is not a clone of Bee-ruche/hive: the run checks it at its start"
+        return "CANNOT", "the hive's own tree here is not a clone of Bee-ruche/hive: the run checks the commit at its start"
+    own = git(registry, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False).stdout.strip()
+    said = (f"; the doctor runs at {own}, and the run uses the commit the project pins" if is_sha(own) and own != commit else
+            "; the doctor runs at that same commit" if own == commit else "")
     main = next((ref for ref in ("refs/remotes/origin/main", "refs/heads/main")
                  if git(registry, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).returncode == 0), None)
     if git(registry, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0 or main is None:
-        return "CANNOT", f"the hive's clone here does not hold {commit} or its main: fetch Bee-ruche/hive's main to tell"
+        return "CANNOT", f"the hive's clone here does not hold {commit} or its main: fetch Bee-ruche/hive's main to tell{said}"
     if git(registry, "merge-base", "--is-ancestor", commit, main, check=False).returncode == 0:
-        return "OK", f"{commit}, a commit of the hive's main"
-    return "CANNOT", f"{commit} is not on the hive's main as its clone here knows it: fetch that main to tell (the run refuses a commit it does not hold)"
+        return "OK", f"{commit}, a commit of the hive's main{said}"
+    return "CANNOT", (f"{commit} is not on the hive's main as its clone here knows it: fetch that main to tell (the run refuses a commit "
+                      f"it does not hold){said}")
 
 
 def settings_list(registry):
-    """The hive's list of the settings of a project's file (SETTINGS_LIST): its entries, by key."""
+    """The hive's list of the settings of a project's file (SETTINGS_LIST): its entries, by key. A list that cannot be
+    read ends the command (exit 2): the doctor's own tree is wrong, not the project."""
     try:
         with open(Path(registry) / SETTINGS_LIST, "rb") as f:
             listed = json.loads(f.read(SETTINGS_BYTES).decode("utf-8"))
@@ -6448,17 +6526,24 @@ def preset_word(value):
     return f"({value['ask']})" if isinstance(value, dict) and "ask" in value else json.dumps(value)
 
 
+def no_effect(key, entry, config):
+    """True for a setting that does nothing in this project, or that its loader would refuse there: a setting of the
+    common judge's (its description says so) in a project of another kind; a bound per guardian where none is named."""
+    return (entry.get("what", "").startswith("common judge:") and config["judge"]["kind"] != "common") \
+        or (key == "members.per_guardian" and not config["guardians"])
+
+
 def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
-    """The DECIDE lines: what the architect has still to choose. Each setting the project's file does not give whose
-    default is a choice (the settings list recommends values for it: presets, or a value per guardian where the project
-    names guardians), with its default, bounds and recommended values and what it changes; in one line, the others the
-    file leaves at their default, for which the list recommends nothing; the least gain a task's goal may ask
-    (cutter.floors) of each figure goals ask a least value of, where none is set, and in one line the other figures
-    without a floor; the judge's bounds as its kind gives them; and what this command does not measure. It chooses
-    nothing."""
+    """The DECIDE lines: what the architect has still to choose, the explanation first. Each setting the project's file
+    does not give whose default is a choice (the settings list recommends values for it: presets, or a value per
+    guardian where the project names guardians), with its default, bounds and recommended values and what it changes;
+    the others the file leaves at their default, for which the list recommends nothing, and which act in this project;
+    the least gain a task's goal may ask (cutter.floors) of each gain figure without a floor; the judge's bounds as its
+    kind gives them; and what this command does not measure. It chooses nothing."""
     lines, plain = [], []
     for key, entry in listed.items():
-        if entry.get("required") or "fixed" in entry or entry.get("read_by") or given(raw, key) or key == "cutter.floors":
+        if entry.get("required") or "fixed" in entry or entry.get("read_by") or given(raw, key) or key == "cutter.floors" \
+                or no_effect(key, entry, config):
             continue
         recommended = entry.get("presets") or (entry.get("recommended_with_guardians") if config["guardians"] else None)
         if not recommended:
@@ -6470,23 +6555,19 @@ def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
                      + (f" ({', '.join(bounds)})" if bounds else "") + "; recommended: "
                      + ", ".join(f"{way} {preset_word(value)}" for way, value in recommended.items()) + ".")
     if plain:
-        lines.append(f"defaults: the file leaves these at the hive's default, for which the list recommends no value: {', '.join(plain)} "
-                     f"({SETTINGS_LIST} says what each changes).")
+        lines += wrapped("defaults", f"the file leaves these at the hive's default, which act in this project and for which the list "
+                                     f"recommends no value ({SETTINGS_LIST} says what each changes)", plain)
     named = {}
     for task in [*tasks.values(), *backlog.values()]:
         goal = task.get("goal") or {}
         for condition in [goal, *goal.get("and", [])] if goal.get("kind") == "metric" else []:
             if "min" in condition:
                 named[condition.get("name")] = named.get(condition.get("name"), 0) + 1
-    unfloored = [m for m in config["judge"]["metrics"] if not m.startswith(PROOF) and m not in config["cutter"]["floors"]]
-    for metric in [m for m in unfloored if m in named]:
-        lines.append(f"cutter.floors.{metric}: no floor, and {named[metric]} goal(s) of the tasks and the backlog ask a least value of it: the "
-                     "least a new task's goal may ask of this figure, which the cutter's gate holds (none: it takes any).")
-    others = [m for m in unfloored if m not in named]
-    if others:
-        lines.append(f"cutter.floors: no goal asks a least value of {', '.join(others)}, and none has a floor. A floor makes every new goal on "
-                     "its figure ask at least that much more of it (a \"min\"), and the gate then refuses a goal with a \"max\" on it: one "
-                     "is for a figure where more is better.")
+    for metric in [m for m in config["judge"]["metrics"] if GAIN.match(m) and m not in config["cutter"]["floors"]]:
+        lines.append(f"cutter.floors.{metric}: a gain with no floor ({named.get(metric, 0)} goal(s) of the tasks and the backlog ask a least "
+                     "value of it). A floor is the least a new task's goal may ask of it, which the cutter's gate holds (none: it takes any); "
+                     "and a stuck task on it is cut again with a lower goal only where it has a floor, never under it (without one the "
+                     "deterministic cutter answers at_the_floor and leaves the task to the AI cutter).")
     lines += manifest_bounds
     lines.append("measures: the step and the bounds rest on the noise of each figure and on the time and memory the tip takes, "
                  "which this command does not measure (a later one will).")
@@ -6495,14 +6576,20 @@ def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
 
 def cmd_doctor(args):
     """What a project holds of what the hive needs, and what its architect has still to decide (docs/hosting.md,
-    "Checking a project"): one line per check (OK, MISSING with what to do and where the docs say how, WRONG with what
-    is wrong, CANNOT with why it cannot be seen), then the decisions left open (DECIDE). Read from the clone (--repo,
-    its branches under refs/remotes/origin as its last fetch left them) and the hive's own tree (--registry); it asks
-    no address, runs no file of the project and writes nothing. Exit code 1 when a check is MISSING or WRONG."""
+    "Checking a project"): one line per check (OK, NOTE, MISSING with what to do and where the docs say how, WRONG
+    with what is wrong, CANNOT with why it cannot be seen), then the decisions left open (DECIDE). Read from the clone
+    (--repo, its branches under refs/remotes/origin as its last fetch left them) and the hive's own tree (--registry);
+    it asks no address, runs no file of the project and writes nothing. Exit code 1 when a check is MISSING or WRONG;
+    2 when it cannot start (another system than Linux, a --project that is not owner/name, a clone git cannot read, the
+    hive's own list of settings unreadable)."""
+    if not sys.platform.startswith("linux"):
+        raise HiveError(ONLY_ON_LINUX_DOCTOR)
     repository, repo = repository_of(args), args.repo
     listed = settings_list(args.registry)
     saved = os.environ.get("GIT_NO_LAZY_FETCH")
-    os.environ["GIT_NO_LAZY_FETCH"] = "1"  # (for every git it starts: whatever a clone says, no object is fetched as it is read)
+    # (Every git it starts: no object is fetched as it is read, whatever a clone says; git reads this from 2.44 on. An
+    # older git does not, and the refusal of a clone that would fetch, below, is the guard there.)
+    os.environ["GIT_NO_LAZY_FETCH"] = "1"
     try:
         failed = doctor(args, repository, repo, listed)
     finally:
@@ -6513,146 +6600,242 @@ def cmd_doctor(args):
     sys.exit(1 if failed else 0)
 
 
+class Seen:
+    """What the doctor's checks found, which the later ones read."""
+
+    def __init__(self, repo, repository, registry):
+        self.repo, self.repository, self.registry = repo, repository, registry
+        self.branches = self.published = self.commit = self.files = self.raw = self.config = self.tasks = None
+        self.state = self.ledger = self.tip = None
+        self.backlog, self.bounds, self.unreadable = {}, [], ""
+
+
 def doctor(args, repository, repo, listed):
     """The checks and the decisions of cmd_doctor, printed; True if one is MISSING or WRONG."""
-    out = Doctor()
-    if partial_clone(repo):
-        out.say("WRONG", "clone", "a partial clone (blobless or treeless), whose git would fetch the files it reads: take a full clone")
+    out, seen = Doctor(), Seen(repo, repository, args.registry)
+    if fetches_what_it_reads(repo):
+        out.say("WRONG", "clone", "a partial clone, or one with a promisor remote, whose git would fetch the files it reads: take a full clone")
         return True
-    branches, published = remote_branches(repo)
-    if published is None:
+    seen.branches, seen.published = remote_branches(repo)
+    if seen.published is None:
         out.say("MISSING", "published", "the clone does not name the branch its origin publishes (refs/remotes/origin/HEAD): "
                                         "git remote set-head origin --auto, or a fresh clone of the project")
         return True
-    commit = branches[published]
-    out.say("OK", "published", f"{published} at {commit}")
-    config = tasks = raw = None
-    try:
-        files = {path: blob_at(repo, commit, path) for path in (PROJECT_FILE, TASKS_FILE)}
-    except HiveError as error:
-        files = None
-        out.say("WRONG", "settings", str(error))
-        out.say("CANNOT", "tasks", "the settings and the tasks are read together")
-    if files is not None:
-        for path, check in ((PROJECT_FILE, "settings"), (TASKS_FILE, "tasks")):
-            if files[path] is None:
-                out.say("MISSING", check, f"{path} on {published}: {HOLDS} (the copies under examples/project/)")
-        if files[PROJECT_FILE] is not None:
-            try:
-                raw = json.loads(files[PROJECT_FILE].decode("utf-8"))
-                config = config_of(raw, PROJECT_FILE, repository)
-            except HiveError as error:
-                out.say("WRONG", "settings", str(error))
-            except (ValueError, TypeError, RecursionError) as error:
-                out.say("WRONG", "settings", f"{PROJECT_FILE}: not the JSON the hive reads ({type(error).__name__})")
-    if config is not None and files[TASKS_FILE] is not None:
-        try:
-            config, tasks = settings_on(repo, commit, published, repository)
-            out.say("OK", "settings", f"{PROJECT_FILE} loads on {published}")
-        except HiveError as error:
-            if str(error).startswith(PROJECT_FILE):  # (the settings' own word: the branch they name, read with the tasks)
-                out.say("WRONG", "settings", str(error))
-                config = None
-            else:
-                out.say("OK", "settings", f"{PROJECT_FILE} loads on {published}")
-                out.say("WRONG", "tasks", str(error))
-    elif config is not None:
-        out.say("OK", "settings", f"{PROJECT_FILE} loads (the branch it names is read with the tasks, which are missing)")
-    state = branches.get(STATE_BRANCH)
-    if state is None:
-        out.say("MISSING", "hive-state", f"no branch {STATE_BRANCH} in the clone (refs/remotes/origin/{STATE_BRANCH}): if the project has it, "
-                                         f"fetch it; otherwise make it once: {HOLDS}, 4")
-    ledger, unreadable, state_said = None, "", None
-    try:
-        ledger, kept = doctor_ledger(repo, state)
-        if state is not None:
-            state_said = ("OK", f"at {state}; " + (f"its ledger holds {len(ledger.events)} line(s)" if kept else "no ledger yet: the run writes it"))
-    except (HiveError, ValueError, RecursionError) as error:
-        state_said = ("WRONG", f"its {LEDGER_FILE} cannot be read as the run reads it ({safe_text(error, 200)})")
-        unreadable = " (its ledger unreadable: counted as an empty one)"
-    result = None
-    if tasks is not None:
-        instant = now()
-        try:
-            lines = [line for line in map(tally_line, ledger.events) if line is not None] if ledger else []
-            result = tally(tasks, lines, instant, active=len(active_members(ledger, instant, config)) if ledger else 0,
-                           taken=taken_accounts(ledger, config) if ledger else set())
-        except (HiveError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-            state_said = ("WRONG", f"its {LEDGER_FILE} holds lines the hive cannot count")
-            unreadable = " (its ledger uncountable: counted as an empty one)"
-            result = tally(tasks, [], instant, active=0, taken=set())
-    if state_said:
-        out.say(state_said[0], "hive-state", state_said[1])
-    backlog = {}
-    if tasks is None:
-        if files is not None and files[TASKS_FILE] is not None and config is None:
-            out.say("CANNOT", "tasks", "the settings do not load: the tasks are read with them")
-    else:
-        seen = f"{len(tasks)} listed, {result['left']} left to do, {result['open']} open, {result['dealable']} dealable now, " \
-               f"{len(result['stuck'])} stuck, {len(result['short_of_members'])} short of members" \
-               + ("" if state else " (no state: as before a first run)") + unreadable
-        if result["starving"]:
-            out.say("MISSING", "tasks", f"{seen}: the project starves, nothing is left to deal; cut tasks (docs/cutter.md, \"The loop\")")
-        else:
-            out.say("OK", "tasks", seen)
-        backlog, unread = backlog_at(repo, commit, config, tasks)
-        if unread:
-            out.say("WRONG", "backlog", unread)
-        else:
-            out.say("OK", "backlog", f"{len(backlog)} planned task(s)" if backlog else f"none ({BACKLOG_FILE} is optional)")
-    calls, skipped = caller_of(repo, commit)
-    if not calls:
-        out.say("MISSING", "caller", f"no workflow of {published} calls Bee-ruche/hive's run.yml: {HOLDS}, 3"
-                + (f" ({skipped} workflow file(s) not read: a link, a folder, or too large)" if skipped else ""))
-    for path, ref, guard in calls[:3]:
-        if ref == NO_COMMIT:
-            out.say("WRONG", "caller", f"{path} names the forty zeros: write the full id of the commit of Bee-ruche/hive's main the project runs "
-                                       f"({HOLDS}, 3)")
-        elif not is_sha(ref):
-            out.say("WRONG", "caller", f"{path} names {safe_text(ref, 60)}, not a commit's full id: the run refuses any other ({HOLDS}, 3)")
-        elif guard is not None and guard != f"refs/heads/{published}":
-            out.say("WRONG", "caller", f"{path}: the if of its job names {safe_text(guard, 80)}, not refs/heads/{published}, the branch the "
-                                       f"project publishes ({HOLDS}, 3)")
-        else:
-            out.say("OK", "caller", f"{path} calls the hive's run at {ref}")
-            word, said = on_the_hives_main(args.registry, ref)
-            out.say(word, "hive-commit", said)
-    tip, bounds = None, []
-    if config is None:
-        for check in ("branch", "judge", "sandbox", "charter", "members", "guardians"):
-            out.say("CANNOT", check, "the settings do not load")
-    else:
-        tip = branches.get(config["branch"])
-        if tip is None:
-            out.say("MISSING", "branch", f"no branch {config['branch']} in the clone (refs/remotes/origin/{config['branch']}), the branch the hive "
-                                         f"writes: if the project has it, fetch it; otherwise a maintainer makes it from {published}: {HOLDS}, 5")
-            out.say("CANNOT", "judge", f"no branch {config['branch']}: the judge reads its files at that branch's tip")
-            out.say("CANNOT", "sandbox", f"no branch {config['branch']}: a worker starts from that branch's tip")
-        else:
-            out.say("OK", "branch", f"{config['branch']} at {tip}")
-            bounds = doctor_judge(out, args.registry, repo, config, tip)
-            doctor_file(out, "sandbox", repo, config, tip, SANDBOX, "a worker runs project code only through it")
-        if "cutter" in raw:
-            if blob_at(repo, commit, CHARTER_FILE) is None:
-                out.say("MISSING", "charter", f"{CHARTER_FILE} on {published}: the project has a cutter block, and its cutter writes from the "
-                                              "architect's charter (docs/cutter.md, \"The backlog and the charter\")")
-            else:
-                out.say("OK", "charter", f"{CHARTER_FILE}")
-        only = config["members"]["only"]
-        out.say("OK", "members", ("open to every account the rules take" if only is None else f"by invitation: {len(only)} account(s)")
-                + f"; accounts {config['members']['min_account_age_days']} days old at least; {len(config['members']['banned'])} banned")
-        guardians = config["guardians"]
-        out.say("OK", "guardians", "none: the project takes no ruling" if guardians is None else
-                f"{len(guardians['accounts'])} account(s), who may waive " + ", ".join(f"{name} up to {most}" for name, most in guardians["waive"].items())
-                + (f"; each covers {config['members']['per_guardian']} active member(s)" if config["members"]["per_guardian"] else ""))
+    seen.commit = seen.branches[seen.published]
+    out.say("OK", "published", f"{seen.published} at {seen.commit}")
+    for check, step in (("settings", doctor_settings), ("hive-state", doctor_state), ("tasks", doctor_tasks), ("caller", doctor_caller),
+                        ("branch", doctor_branch), ("judge", doctor_judge), ("sandbox", doctor_sandbox), ("charter", doctor_charter),
+                        ("members", doctor_members), ("guardians", doctor_guardians)):
+        guarded(out, check, step, seen)
     for check, where in REPOSITORY_SETTINGS:
         out.say("CANNOT", check, f"a setting of the repository on GitHub, which the hive reads with no account: see {where} "
                                  "(docs/hosting.md, \"The repository's settings\")")
-    if config is not None:
+    if seen.config is not None:
         print("DECIDE")
-        for line in decisions(raw, config, tasks or {}, backlog, listed, bounds):
-            print(f"DECIDE {safe_text(line, 900)}")
+        lines = guarded(out, "decide", lambda _, s: decisions(s.raw, s.config, s.tasks or {}, s.backlog, listed, s.bounds), seen) or []
+        for line in lines:
+            print(bounded_line(f"DECIDE {line}"))
     return out.failed
+
+
+def doctor_settings(out, seen):
+    """hive/project.json and hive/tasks.jsonl on the published branch, loaded as a run loads them (config_of, then
+    settings_on): the loader's own reason when they do not."""
+    try:
+        seen.files = {path: blob_at(seen.repo, seen.commit, path) for path in (PROJECT_FILE, TASKS_FILE)}
+    except HiveError as error:
+        out.say("WRONG", "settings", str(error))
+        return
+    for path, check in ((PROJECT_FILE, "settings"), (TASKS_FILE, "tasks")):
+        if seen.files[path] is None:
+            out.say("MISSING", check, f"{path} on {seen.published}: {HOLDS} (the copies under examples/project/)")
+    if seen.files[PROJECT_FILE] is None:
+        return
+    try:
+        seen.raw = json.loads(seen.files[PROJECT_FILE].decode("utf-8"))
+        seen.config = config_of(seen.raw, PROJECT_FILE, seen.repository)
+    except HiveError as error:
+        out.say("WRONG", "settings", str(error))
+        return
+    except (ValueError, TypeError, RecursionError) as error:
+        out.say("WRONG", "settings", f"{PROJECT_FILE}: not the JSON the hive reads ({type(error).__name__})")
+        return
+    if seen.files[TASKS_FILE] is None:
+        out.say("OK", "settings", f"{PROJECT_FILE} loads (the branch it names is read with the tasks, which are missing)")
+        return
+    try:
+        seen.config, seen.tasks = settings_on(seen.repo, seen.commit, seen.published, seen.repository)
+        out.say("OK", "settings", f"{PROJECT_FILE} loads on {seen.published}")
+    except HiveError as error:
+        if str(error).startswith(PROJECT_FILE):  # (the settings' own word: the branch they name, read with the tasks)
+            out.say("WRONG", "settings", str(error))
+            seen.config = None
+        else:
+            out.say("OK", "settings", f"{PROJECT_FILE} loads on {seen.published}")
+            out.say("WRONG", "tasks", str(error))
+
+
+def doctor_state(out, seen):
+    """The branch hive-state, and its ledger read and counted as the run reads it (Ledger, tally)."""
+    seen.state = seen.branches.get(STATE_BRANCH)
+    if seen.state is None:
+        out.say("MISSING", "hive-state", f"no branch {STATE_BRANCH} in the clone (refs/remotes/origin/{STATE_BRANCH}): if the project has it, "
+                                         f"fetch it; otherwise make it once: {HOLDS}, 4")
+    try:
+        seen.ledger, kept = doctor_ledger(seen.repo, seen.state)
+    except (HiveError, ValueError, RecursionError) as error:
+        out.say("WRONG", "hive-state", f"its {LEDGER_FILE} cannot be read as the run reads it ({error})")
+        seen.unreadable = " (its ledger unreadable: counted as an empty one)"
+        return
+    if seen.tasks is not None:
+        try:
+            tally_of(seen)
+        except (HiveError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            out.say("WRONG", "hive-state", f"its {LEDGER_FILE} holds lines the hive cannot count")
+            seen.ledger, seen.unreadable = None, " (its ledger uncountable: counted as an empty one)"
+            return
+    if seen.state is not None:
+        out.say("OK", "hive-state", f"at {seen.state}; " + (f"its ledger holds {len(seen.ledger.events)} line(s)" if kept else
+                                                          "no ledger yet: the run writes it"))
+
+
+def tally_of(seen):
+    """The cutter's tally of the tasks on the ledger, as cmd_tally makes it (an empty ledger when there is none)."""
+    instant, ledger = now(), seen.ledger
+    lines = [line for line in map(tally_line, ledger.events) if line is not None] if ledger else []
+    return tally(seen.tasks, lines, instant, active=len(active_members(ledger, instant, seen.config)) if ledger else 0,
+                 taken=taken_accounts(ledger, seen.config) if ledger else set())
+
+
+def doctor_tasks(out, seen):
+    """The tasks as the cutter's tally counts them (a project with nothing left to do starves), and the backlog."""
+    if seen.tasks is None:
+        if seen.files is not None and seen.files.get(TASKS_FILE) is not None and seen.config is None:
+            out.say("CANNOT", "tasks", "the settings do not load: the tasks are read with them")
+        return
+    result = tally_of(seen)
+    said = f"{len(seen.tasks)} listed, {result['left']} left to do, {result['open']} open, {result['dealable']} dealable now, " \
+           f"{len(result['stuck'])} stuck, {len(result['short_of_members'])} short of members" \
+           + ("" if seen.state else " (no state: as before a first run)") + seen.unreadable
+    if result["starving"]:
+        out.say("MISSING", "tasks", f"the project starves, nothing is left to deal; cut tasks (docs/cutter.md, \"The loop\"): {said}")
+    else:
+        out.say("OK", "tasks", said)
+    seen.backlog, unread = backlog_at(seen.repo, seen.commit, seen.config, seen.tasks)
+    if unread:
+        out.say("WRONG", "backlog", unread)
+        seen.backlog = {}
+    else:
+        out.say("OK", "backlog", f"{len(seen.backlog)} planned task(s)" if seen.backlog else f"none ({BACKLOG_FILE} is optional)")
+
+
+def doctor_caller(out, seen):
+    """The caller (docs/hosting.md, "What a project holds", 3), as the example caller gives it: a workflow of the
+    published branch whose job calls Bee-ruche/hive's run.yml at a commit's full id, not the forty zeros, and whose
+    « if: » names the published branch. Its triggers, permissions and concurrency are not checked."""
+    calls, skipped = caller_of(seen.repo, seen.commit)
+    if not calls:
+        out.say("MISSING", "caller", f"no workflow of {seen.published} calls Bee-ruche/hive's run.yml: {HOLDS}, 3"
+                + (f" ({skipped} workflow file(s) not read: a link, a folder, or too large)" if skipped else ""))
+    guard_asked = f"if: github.ref == 'refs/heads/{seen.published}'"
+    for path, ref, guard, written in calls[:CALLERS_SHOWN]:
+        if ref == NO_COMMIT:
+            out.say("WRONG", "caller", f"the forty zeros name no commit: write the full id of the commit of Bee-ruche/hive's main the project "
+                                       f"runs ({HOLDS}, 3): {path}")
+        elif not is_sha(ref):
+            out.say("WRONG", "caller", f"the run is called at {ref}, not a commit's full id, and the run refuses any other ({HOLDS}, 3): {path}")
+        elif written is not None:
+            out.say("CANNOT", "caller", f"its job's guard is not one this command reads ({HOLDS}, 3, asks {guard_asked}): {path}: {written}")
+        elif guard is None:
+            out.say("WRONG", "caller", f"its job has no guard: {HOLDS}, 3, and the example caller give it {guard_asked}, so that no other "
+                                       f"branch runs the hive: {path}")
+        elif guard != f"refs/heads/{seen.published}":
+            out.say("WRONG", "caller", f"its job's guard names {guard}, not refs/heads/{seen.published}, the branch the project publishes "
+                                       f"({HOLDS}, 3): {path}")
+        else:
+            out.say("OK", "caller", f"{path} calls the hive's run at {ref}, guarded on {seen.published}")
+            word, said = on_the_hives_main(seen.registry, ref)
+            out.say(word, "hive-commit", said)
+    if len(calls) > CALLERS_SHOWN:
+        out.say("NOTE", "caller", f"{len(calls) - CALLERS_SHOWN} more workflow job(s) call the hive's run, not shown here")
+
+
+def doctor_branch(out, seen):
+    if seen.config is None:
+        out.say("CANNOT", "branch", "the settings do not load")
+        return
+    seen.tip = seen.branches.get(seen.config["branch"])
+    if seen.tip is None:
+        out.say("MISSING", "branch", f"no branch {seen.config['branch']} in the clone (refs/remotes/origin/{seen.config['branch']}), the branch "
+                                     f"the hive writes: if the project has it, fetch it; otherwise a maintainer makes it from {seen.published}: "
+                                     f"{HOLDS}, 5")
+    else:
+        out.say("OK", "branch", f"{seen.config['branch']} at {seen.tip}")
+
+
+def doctor_sandbox(out, seen):
+    if seen.config is None:
+        out.say("CANNOT", "sandbox", "the settings do not load")
+    elif seen.tip is None:
+        out.say("CANNOT", "sandbox", f"no branch {seen.config['branch']}: a worker starts from that branch's tip")
+    else:
+        doctor_file(out, "sandbox", seen.repo, seen.config, seen.tip, SANDBOX, "a worker runs project code only through it")
+
+
+def doctor_charter(out, seen):
+    """The architect's charter: no run reads it; the AI cutter writes from it (docs/cutter.md, "The backlog and the
+    charter"). Said where it is, and noted where it is not, for a project whose file has a cutter block."""
+    if seen.config is None:
+        out.say("CANNOT", "charter", "the settings do not load")
+        return
+    try:
+        held = blob_at(seen.repo, seen.commit, CHARTER_FILE)
+    except HiveError as error:
+        out.say("WRONG", "charter", str(error))
+        return
+    if held is not None:
+        out.say("OK", "charter", CHARTER_FILE)
+    elif "cutter" in seen.raw:
+        out.say("NOTE", "charter", f"no {CHARTER_FILE} on {seen.published}: no run reads it, and the AI cutter writes no task of its own "
+                                   "without it (docs/cutter.md, \"The backlog and the charter\")")
+
+
+def doctor_members(out, seen):
+    """members.only and members.banned as barred() reads them, the rule that decides whose fork is read: « only », null
+    or a list of account numbers (an entry that is not one is passed over, and a list with none reads no fork); «
+    banned », account numbers and logins."""
+    if seen.config is None:
+        out.say("CANNOT", "members", "the settings do not load")
+        return
+    members = seen.config["members"]
+    only, banned = members["only"], members["banned"]
+    problems = []
+    if only is not None and not isinstance(only, list):
+        problems.append("members.only is neither null nor a list of account numbers: barred() cannot read it, and no run would go on")
+    elif only is not None and any(type(m) is not int for m in only):
+        problems.append(f"members.only holds {sum(type(m) is not int for m in only)} entry(ies) that are no account number (a login is not "
+                        "one): barred() passes them over" + ("; with no number left, it reads no fork at all" if not any(type(m) is int for m in only) else ""))
+    if not isinstance(banned, list) or any(type(b) is not int and not isinstance(b, str) for b in banned):
+        problems.append("members.banned is not a list of account numbers and logins: barred() passes over what is neither, or cannot read it")
+    for problem in problems:
+        out.say("WRONG", "members", problem)
+    if problems:
+        return
+    if only == []:
+        out.say("NOTE", "members", "members.only is an empty list: no account's fork is read, and no task is dealt")
+        return
+    out.say("OK", "members", ("open to every account the rules take" if only is None else f"by invitation: {len(only)} account(s)")
+            + f"; accounts {members['min_account_age_days']} days old at least; {len(banned)} banned")
+
+
+def doctor_guardians(out, seen):
+    if seen.config is None:
+        out.say("CANNOT", "guardians", "the settings do not load")
+        return
+    guardians = seen.config["guardians"]
+    out.say("OK", "guardians", "none: the project takes no ruling" if guardians is None else
+            f"{len(guardians['accounts'])} account(s), who may waive " + ", ".join(f"{name} up to {most}" for name, most in guardians["waive"].items())
+            + (f"; each covers {seen.config['members']['per_guardian']} active member(s)" if seen.config["members"]["per_guardian"] else ""))
 
 
 def doctor_file(out, check, repo, config, tip, path, why, said=True, most=SETTINGS_BYTES):
@@ -6677,54 +6860,85 @@ def doctor_file(out, check, repo, config, tip, path, why, said=True, most=SETTIN
     return data
 
 
-def doctor_judge(out, registry, repo, config, tip):
+def doctor_judge(out, seen):
     """The judge's check: what the project's kind of judge needs at the tip of the branch the hive writes, where the
-    judge reads its tooling. The common judge: its plugin, read as a file (only the judge loads it, and checks its
-    contract then). A reference or relay judge: its manifest, read as the kind reads it (MANIFEST_BYTES) and held to
-    the kind's own check (check_manifest); the paths it names, plain files of the tip or folders of them; for a reference
-    judge, the folder of each unit's file and no folder where a unit's file goes (as tip_is_ready asks of a tree); for a
-    relay judge, the data the tip holds, held to the manifest's size and SHA-256 (the kind's own check); the paths a
-    candidate writes (a unit's files, a relay's program) not protected, or every candidate would be refused; and the
-    worst case (the kind's own budget) within the time a judgement is given, as the judge holds it. Returns the DECIDE
-    lines of the judge's bounds."""
+    judge reads its tooling, and the open tasks against what the judge asks of a task. The common judge: its plugin,
+    read as a file (only the judge loads it, and checks its contract then); it takes any task. A reference or relay
+    judge: its manifest, read as the kind reads it (MANIFEST_BYTES) and held to the kind's own check (check_manifest);
+    the paths it names held as the judge copies them (as_the_judge_copies); for a reference judge, each blank a plain
+    file within unit_bytes, the folder of each unit's file and no folder where one goes (tip_is_ready), and each open
+    task naming a unit of the manifest with exactly its files (judge); for a relay judge, each program path in the tip,
+    its files plain and within program_files and program_bytes (program_files), the data the tip holds held to the
+    manifest's size and SHA-256 (checked), and each open task's files under the program (judge); the paths a candidate
+    writes not protected, or every candidate would be refused; and the worst case (the kind's own budget) within the
+    time a judgement is given, less the judge's margin, as the judge holds it. Sets the DECIDE lines of the judge's
+    bounds."""
+    config, repo, tip = seen.config, seen.repo, seen.tip
+    if config is None:
+        out.say("CANNOT", "judge", "the settings do not load")
+        return
+    if tip is None:
+        out.say("CANNOT", "judge", f"no branch {config['branch']}: the judge reads its files at that branch's tip")
+        return
     kind, settings = config["judge"]["kind"], config["judge"]
     given_seconds = settings.get("timeout_seconds", 3600)
+    room = max(1, given_seconds - REFERENCE_MARGIN)
     try:
-        module = judge_module(registry, JUDGE_MODULES[kind])
+        module = judge_module(seen.registry, JUDGE_MODULES[kind])
+        reference = judge_module(seen.registry, "reference") if kind != "common" else None  # (whose copy rules both other kinds use)
     except (ImportError, SyntaxError, OSError) as error:
         out.say("CANNOT", "judge", f"the hive's tree here holds no judge of the kind {kind} (tools/judge, {type(error).__name__})")
-        return []
+        return
     if kind == "common":
         plugin = module.PLUGIN_PATH.replace(os.sep, "/")
         if doctor_file(out, "judge", repo, config, tip, plugin, "the common judge's plugin (docs/common-judge.md)", said=False) is not None:
             out.say("OK", "judge", f"common: {plugin}, read as a file (the judge alone loads it, and checks its contract then)")
-        return [f"judge.timeout_seconds: {given_seconds} s for one judgement (the hive takes 1 to {JUDGEMENT_SECONDS_MOST}); "
-                f"judge.repetitions: {settings.get('repetitions', 10)} measures of each figure (1 to {REPETITIONS_MOST})."]
+        seen.bounds = [f"judge.timeout_seconds: {given_seconds} s for one judgement (the hive takes 1 to {JUDGEMENT_SECONDS_MOST}); "
+                       f"judge.repetitions: {settings.get('repetitions', 10)} measures of each figure (1 to {REPETITIONS_MOST})."]
+        return
     data = doctor_file(out, "judge", repo, config, tip, module.MANIFEST, f"the {kind} judge's manifest (docs/{kind}-judge.md)", said=False,
                        most=module.MANIFEST_BYTES)
     if data is None:
-        return []
+        return
     try:
         manifest = module.check_manifest(json.loads(data.decode("utf-8")))
-        files, folders = plain_files(repo, tip)
     except (ValueError, RecursionError) as error:
         out.say("WRONG", "judge", f"{module.MANIFEST}: not JSON ({type(error).__name__})")
-        return []
-    except (module.JudgeError, HiveError) as error:
+        return
+    except module.JudgeError as error:
         out.say("WRONG", "judge", f"{module.MANIFEST}: {error}")
-        return []
-    units = manifest.get("units", {}).values()
-    named = [*manifest.get("reference", []), *manifest.get("skeleton", []), *[blank for unit in units for blank in unit["blank"]]]
-    written = [*[path for unit in units for path in unit["files"]], *manifest.get("program", [])]
-    held = files | folders
-    problems = [f"it names {path}, which the tip does not hold as a plain file or a folder of them" for path in named if path not in held]
-    for path in [path for unit in units for path in unit["files"]]:
-        if path.rpartition("/")[0] and path.rpartition("/")[0] not in folders:
-            problems.append(f"the tip does not hold the folder of {path}, a unit's file")
-        if path in folders:
-            problems.append(f"the tip holds a folder at {path}, where a unit's file goes")
+        return
+    entries = tree_entries(repo, tip)
+    units = manifest.get("units", {})
+    problems = []
+    for group in ("reference", "skeleton"):
+        if group in manifest:
+            problems += as_the_judge_copies(entries, manifest[group], f"its {group}", reference)
+    for name, unit in units.items():
+        for blank in unit["blank"]:
+            mode, size = entries.get(blank, (None, 0))
+            if mode not in ("100644", "100755"):
+                problems.append(f"unit {name}: its blank {blank} is not a plain file of the tip")
+            elif size > manifest["unit_bytes"]:
+                problems.append(f"unit {name}: its blank {blank} weighs {size} bytes, above unit_bytes ({manifest['unit_bytes']})")
+        for path in unit["files"]:
+            folder = path.rpartition("/")[0]
+            if folder and not inside(entries, folder):
+                problems.append(f"unit {name}: the tip does not hold the folder of {path}")
+            if any(other.startswith(path + "/") for other in entries):
+                problems.append(f"unit {name}: the tip holds a folder at {path}, where a unit's file goes")
+    if "program" in manifest:
+        held = [entry for path in manifest["program"] for entry in inside(entries, path)]
+        problems += [f"the program's path {path} is not in the tip" for path in manifest["program"] if not inside(entries, path)]
+        problems += [f"the program: {name} is no plain file under plain names" for name, mode, _ in held
+                     if mode not in ("100644", "100755") or not module.PATH.fullmatch(name)]
+        if len(held) > manifest["program_files"]:
+            problems.append(f"the program holds {len(held)} files, above program_files ({manifest['program_files']})")
+        if sum(size for _, _, size in held) > manifest["program_bytes"]:
+            problems.append(f"the program's files weigh {sum(size for _, _, size in held)} bytes, above program_bytes ({manifest['program_bytes']})")
+    written = [*[path for unit in units.values() for path in unit["files"]], *manifest.get("program", [])]
     for path in written:
-        if protected(path, config["protected"]) or any(protected(f, config["protected"]) for f in files if f.startswith(path.rstrip("/") + "/")):
+        if protected(path, config["protected"]) or any(protected(name, config["protected"]) for name, _, _ in inside(entries, path)):
             problems.append(f"{path} is protected: a candidate writes it, and a contribution that changes a protected path is refused")
     fetched = ""
     if "path" in manifest.get("data", {}):
@@ -6735,15 +6949,49 @@ def doctor_judge(out, registry, repo, config, tip):
             problems.append(str(error))
     elif "url" in manifest.get("data", {}):
         fetched = "; its data is fetched at the image step, and not looked at here"
-    needed, room = module.budget(manifest), max(1, given_seconds - REFERENCE_MARGIN)
+    needed = module.budget(manifest)
     if needed > room:
-        problems.append(f"its bounds add up to {needed} s, above the {room} s a judgement of this project is given (judge.timeout_seconds)")
-    if problems:
-        out.say("WRONG", "judge", f"{module.MANIFEST}: " + "; ".join(problems[:4]))
-    else:
+        problems.append(f"its bounds add up to {needed} s, above the {room} s a judgement of this project is given (judge.timeout_seconds, "
+                        f"less the judge's {REFERENCE_MARGIN} s)")
+    for problem in problems[:8]:
+        out.say("WRONG", "judge", f"{problem} ({module.MANIFEST})")
+    if len(problems) > 8:
+        out.say("WRONG", "judge", f"{len(problems) - 8} more")
+    if not problems:
         out.say("OK", "judge", f"{kind}: {module.MANIFEST} holds; its worst case is {needed} s of the {room} s a judgement is given{fetched}")
-    return [f"judge.{kind}.{name}: {manifest[name]} (the kind takes {low} to {high})" for name, (low, high) in module.NUMBERS.items()] \
-        + [f"judge.timeout_seconds: {given_seconds} s for one judgement; the manifest's bounds add up to {needed} s of it."]
+    doctor_judge_tasks(out, seen, kind, manifest, module)
+    seen.bounds = [f"judge.{kind}.{name}: {manifest[name]} (the kind takes {low} to {high})" for name, (low, high) in module.NUMBERS.items()] \
+        + [f"judge.timeout_seconds: {given_seconds} s for one judgement, of which the judge gives the manifest's bounds {room} s (it keeps "
+           f"{REFERENCE_MARGIN} s for its own copies and checks); they add up to {needed} s."]
+
+
+def doctor_judge_tasks(out, seen, kind, manifest, module):
+    """The open tasks against what the judge asks of a task (reference.py and relay.py, judge): a reference task names
+    a unit of the manifest (options.unit) and exactly that unit's files; a relay task's files lie under the program."""
+    if seen.tasks is None:
+        out.say("CANNOT", "judge-tasks", "the tasks do not load")
+        return
+    problems = []
+    for task_id, task in seen.tasks.items():
+        if task.get("closed"):
+            continue
+        files = task.get("files") or []
+        if kind == "reference":
+            unit = (task.get("options") or {}).get("unit")
+            if not isinstance(unit, str) or unit not in manifest["units"]:
+                problems.append(f"{task_id} names no unit of the manifest (options.unit)")
+            elif sorted(files) != sorted(manifest["units"][unit]["files"]):
+                problems.append(f"{task_id}: its files are not exactly the files of its unit {unit}")
+        elif kind == "relay" and any(not module.PATH.fullmatch(path.rstrip("/")) or not module.under(path.rstrip("/"), manifest["program"])
+                                     for path in files):
+            problems.append(f"{task_id} names a file that is not under the program")
+    for problem in problems[:8]:
+        out.say("WRONG", "judge-tasks", f"{problem}: the judge refuses to judge it (docs/{kind}-judge.md)")
+    if len(problems) > 8:
+        out.say("WRONG", "judge-tasks", f"{len(problems) - 8} more open task(s) the judge refuses to judge")
+    if not problems:
+        out.say("OK", "judge-tasks", "each open task is one the judge takes" + (": a unit of the manifest, with exactly its files" if kind == "reference"
+                                                                             else ": its files under the program"))
 
 
 # ---------------------------------------------------------------------------------------------------------------
