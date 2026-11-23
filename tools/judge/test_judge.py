@@ -2668,6 +2668,40 @@ class TestJudgeAgainstVariants(unittest.TestCase):
     def types_suspects(self, report):
         return {s["type"] for s in report["judge"]["suspicious_constructs"]}
 
+    def test_measured_through_the_base(self):
+        """hive.py measure's own steps on the toy, the common judge as the run makes it (judge_of): the tip against itself,
+        twice; each gain the judge gives measured; a floor proposed for each, twice the largest gain seen between the tip
+        and itself, with what the judge's own proof said of it; no bound of a phase proposed (they are the plug-in's);
+        a time of a judgement proposed."""
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hive"))
+        import hive
+        if not hasattr(hive, "measure_runs"):
+            self.skipTest("this hive does not hold the measure yet")
+        judge = hive.judge_of(os.path.dirname(os.path.dirname(HERE)), {"kind": "common", "repetitions": 3, "timeout_seconds": 1800}, self.workdir)
+        made = iter(range(10))
+
+        def ask(task):
+            n = next(made)
+            base = os.path.join(self.workdir, f"measure-base-{n}")  # (a copy: the judge writes its report beside the tree it is given)
+            shutil.copytree(self.toy, base, ignore=shutil.ignore_patterns("__pycache__"))
+            return judge(base, self.prepare(f"measure-{n}"), task, "T" * 40, "T" * 40)
+
+        runs = hive.measure_runs(ask, hive.measure_tasks("common", None, {"project": "toy"}, {}), 2)
+        self.assertEqual([code for _, code, _, _, _ in runs], [0, 0], runs)
+        answered = [figures for _, _, figures, _, _ in runs]
+        gains = sorted(name for name in answered[0] if name.startswith("gain_"))
+        self.assertTrue(gains, answered)
+        floors = hive.measure_floors("common", gains, {}, answered)
+        self.assertEqual(len(floors), len(gains))
+        for line in floors:
+            self.assertRegex(line, r"\Acutter\.floors\.gain_\w+: propose \d\.\d{4}\. Rule: 2 times the largest gain the judge measured between the tip "
+                                   r"and itself")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            lines = hive.measure_bounds(hive.Doctor(), "common", None, None, {"timeout_seconds": 1800}, runs, 2)
+        self.assertIn("CANNOT phases: the common judge's plug-in", out.getvalue())
+        self.assertTrue(any(line.startswith("judge.timeout_seconds: propose ") for line in lines), lines)
+
     def test_honest(self):
         code, report, _ = self.run_the_judge("honest", self.prepare("honest"))
         self.assertEqual(code, 0)

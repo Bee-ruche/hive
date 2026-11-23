@@ -917,6 +917,41 @@ class TestTheJudgeInContainers(Base):
         self.assertFalse(verdict_of.machine_down())
         self.assertEqual(os.listdir(self.root / "trees"), [], "the base removes the trees it wrote")
 
+    def test_measured_through_the_bases_own_trees(self):
+        """hive.py measure's own steps on the toy, through the trees the run's judging step writes (judge_trees): the tip
+        whose unit is written, judged as a candidate for each unit the open tasks name, twice; a whole judgement each
+        time, its figures the same; no phase measured (the kind bounds its containers and measures none); and a time of
+        a judgement proposed no less than the manifest's worst case with the judge's margin."""
+        import hive
+        if not hasattr(hive, "measure_runs"):
+            self.skipTest("this hive does not hold the measure yet")
+
+        def git(*words):
+            return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *words],
+                                  cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+        repo = write_tree(self.root / "repo", {"port/upper.c": UPPER})
+        git("init", "-q", "-b", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "the project, its unit written")
+        tip = git("rev-parse", "HEAD")
+        manifest = reference.check_manifest(json.loads((TOY / "bee/reference/project.json").read_text()))
+        judge = hive.judge_of(str(HERE.parent.parent), {"kind": "reference", "timeout_seconds": 1200}, str(self.root / "work"))
+        (self.root / "trees").mkdir()
+        tasks = hive.measure_tasks("reference", manifest, {"project": "toy"},
+                                   {"toy-0001": {"id": "toy-0001", "files": ["port/upper.c"], "options": {"unit": "upper"}}})
+        self.assertEqual(tasks, [{"id": "toy-measure-upper", "files": ["port/upper.c"], "options": {"unit": "upper"}}])
+        runs = hive.measure_runs(lambda task: hive.judge_trees(str(repo), judge, tempfile.mkdtemp(dir=self.root / "trees"), tip, hive.tree_of(str(repo), tip),
+                                                               task, tip, question=True), tasks, 2)
+        self.assertEqual([(code, figures) for _, code, figures, _, _ in runs], [(0, {"cases_compared": 1200, "builds": 2, "runs": 4})] * 2)
+        self.assertEqual(os.listdir(self.root / "trees"), [], "the trees are removed")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            lines = hive.measure_bounds(hive.Doctor(), "reference", reference, manifest, {"timeout_seconds": 1200}, runs, 2)
+        self.assertIn("CANNOT phases: the reference judge bounds each container's time", out.getvalue())
+        timeout = int(next(line for line in lines if line.startswith("judge.timeout_seconds: propose ")).split("propose ")[1].split(".")[0])
+        self.assertGreaterEqual(timeout, reference.budget(manifest) + hive.REFERENCE_MARGIN)
+
 
 if __name__ == "__main__":
     unittest.main()

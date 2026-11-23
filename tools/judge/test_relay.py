@@ -504,9 +504,34 @@ class TestTheManifest(Base):
                          "launcher's wait after it; six encodings (the tip's two, each run twice at most, the candidate's two) and four decodings "
                          "(the tip's one, run twice at most, the candidate's two)")
         self.assertLess(relay.budget(manifest), 1200, "the toy's worst case fits the time the base gives it in test_through_the_base")
+        long = relay.check_manifest({**MANIFEST, "build_seconds": 120, "encode_seconds": 140, "decode_seconds": 140})
+        self.assertEqual(relay.budget(long), 3010, "at 140 s a phase: 700 s of builds, six encodings and four decodings at 225 s each, 60 s of data")
         with mock.patch.object(relay, "the_data") as data, self.assertRaisesRegex(JudgeError, r"add up to \d+ s, above the 100 s"):
             relay.judge(mock.Mock(tip=str(TOY), task_file=None, budget=100, tip_itself=True), str(self.root))
         data.assert_not_called()
+
+    def test_the_tips_phases_run_on_a_candidates_clock_with_a_quarter_more_processor_time(self):
+        """The worst case (budget) counts every phase at the clock of the manifest's bound, the tip's as a candidate's.
+        That is the clock the judge sets: a phase is timed on its phase's bound from the manifest (encode, decode: the
+        `seconds` they hand to phase, then to timed), and timed sets its clock at wall_of of those seconds; the tip's
+        own quarter more (tip_bound) is processor time alone, the `cpu_most` that outcome holds the phase to, below that
+        clock. So a tip's phase never lasts longer than a candidate's, and budget counts no clock the judge never sets."""
+        def source(function):
+            return ast.parse(textwrap.dedent(inspect.getsource(function)))
+
+        def called(tree, name):
+            return [call for call in ast.walk(tree) if isinstance(call, ast.Call) and getattr(call.func, "attr", getattr(call.func, "id", None)) == name]
+
+        for function, bound in ((relay.Judgement.encode, "encode_seconds"), (relay.Judgement.decode, "decode_seconds")):
+            (phase,) = called(source(function), "phase")
+            self.assertEqual((ast.unparse(phase.args[4]), ast.unparse(phase.args[5])), (f"self.manifest['{bound}']", "cpu_most"),
+                             "the phase's clock comes from the manifest's bound; the processor time it may take is the caller's")
+        (timed,) = called(source(relay.Judgement.phase), "timed")
+        self.assertEqual((ast.unparse(timed.args[4]), ast.unparse(timed.args[5])), ("seconds", "cpu_most"))
+        clock = [node for node in ast.walk(source(relay.Judgement.timed)) if isinstance(node, ast.Assign)
+                 and ast.unparse(node.targets[0]) == "(wall, token)"]
+        self.assertEqual(ast.unparse(clock[0].value), "(wall_of(seconds), secrets.token_hex(16))", "the clock is wall_of the phase's seconds")
+        self.assertTrue(all(relay.tip_bound(s) < relay.wall_of(s) for s in range(1, 901)), "the tip's processor time fits under that clock")
 
     def test_a_task_names_the_programs_paths_and_no_other(self):
         for files, taken in ((["codec/codec.c"], True), (["codec/"], True), (["codec"], True), (["codec/new.c", "codec/codec.c"], True),
@@ -1348,6 +1373,37 @@ class TestTheJudgeInContainers(Base):
         self.assertEqual(judge(base, write_tree(trees / "more", {"codec/codec.c": BETTER, "README.md": "x"}), task, "T" * 40, "E" * 40), {"code": 1, "report": {}})
         self.assertEqual(judge(base, base, {**task, "files": ["bee/relay/main.c"]}, "T" * 40, "T" * 40)["code"], 2, "a task that is not the program's files")
         self.assertEqual(subprocess.run(hive.judge_image(str(HERE.parent.parent), "relay", str(base))).returncode, 0)
+
+    def test_measured_through_the_base(self):
+        """hive.py measure's own steps on the toy, the judge the run makes: the tip judged as a candidate twice; its
+        counted figures exact and the same at each; its phases within their bounds; the proposals within the kind's
+        bounds, and the worst case they make within the time of a judgement."""
+        import hive
+        if "relay" not in hive.JUDGES or not hasattr(hive, "measure_runs"):
+            self.skipTest("this hive does not hold the kind or the measure yet")
+        judge = hive.judge_of(str(HERE.parent.parent), {"kind": "relay", "timeout_seconds": 1200}, str(self.root / "work"))
+        manifest, trees, made = relay.check_manifest(MANIFEST), self.root / "trees", iter(range(100))
+
+        def ask(task):
+            n = next(made)
+            return judge(write_tree(trees / f"base-{n}"), write_tree(trees / f"candidate-{n}"), task, "T" * 40, "T" * 40, question=True)
+
+        runs = hive.measure_runs(ask, hive.measure_tasks("relay", manifest, {"project": "toy"}, {}), 2)
+        self.assertEqual([code for _, code, _, _, _ in runs], [0, 0], runs)
+        answered = [figures for _, _, figures, _, _ in runs]
+        self.assertEqual(len({figures["total_bytes"] for figures in answered}), 1, "a counted figure is exact")
+        floors = hive.measure_floors("relay", ["gain_total_bytes"], {}, answered)
+        self.assertRegex(floors[0], r"\Acutter\.floors\.gain_total_bytes: propose 0\.\d{6}\. Rule: an exact figure")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            lines = hive.measure_bounds(hive.Doctor(), "relay", relay, manifest, {"timeout_seconds": 1200}, runs, 2)
+        self.assertNotIn("WRONG", out.getvalue(), "the toy's tip keeps its own bounds")
+        proposed = {line.split(":")[0].split(".")[-1]: int(line.split("propose ")[1].split(".")[0]) for line in lines if " propose " in line}
+        for name in ("encode_seconds", "decode_seconds", "memory_mb"):
+            low, high = relay.NUMBERS[name]
+            self.assertTrue(low <= proposed[name] <= high, (name, proposed))
+        self.assertLessEqual(relay.budget({**manifest, **{k: proposed[k] for k in ("encode_seconds", "decode_seconds", "memory_mb")}})
+                             + hive.REFERENCE_MARGIN, proposed["timeout_seconds"])
 
 
 if __name__ == "__main__":

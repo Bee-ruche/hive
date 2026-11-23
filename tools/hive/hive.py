@@ -35,7 +35,8 @@ project's first run); and, for the project's cutter (docs/cutter.md), tally (wha
 numbers alone), cut-check (the cutter's gate, which holds a proposed task file to its rules), cut (the cutter's own
 rules, which write the task file they propose once the gate passes it) and outline (the project's code as the cutter
 may read it: files, functions and sizes, with no comment and no string); for a project's lead and architect, doctor
-(what the project holds of what the hive needs, and what is left to decide, read from a clone of it). For those who
+(what the project holds of what the hive needs, and what is left to decide, read from a clone of it) and measure (the tip
+judged a few times by the project's own judge, with Docker, and proposals for the step and the bounds). For those who
 build the hive: health (what the public state of the projects this repository lists says of the hive, in numbers,
 read with no account) and report (an issue template with its numbers filled from health, printed for a project's
 architect, who posts it or not: the hive posts nothing).
@@ -3383,17 +3384,12 @@ def judging(repo, judge, workdir, verdicts, metrics, deadline=None, longest=0, s
     def ask(tip, tree, task, commit, label, **named):
         folder = Path(tempfile.mkdtemp(prefix="judge-", dir=workdir))
         try:
-            materialize(repo, tree_of(repo, tip), folder / "base")
-            with_history(repo, folder / "base", history)
-            materialize(repo, tree, folder / "candidate")
-            answer = judge(folder / "base", folder / "candidate", task, tip, commit, **named)
+            answer = judge_trees(repo, judge, folder, tip, tree, task, commit, history, **named)  # (the trees written, judged, the folder removed)
         except HiveError:
             raise
         except Exception as error:  # noqa: BLE001 (a timeout, a crash: the candidate is not answered by it)
             log(f"{label}: the judge failed ({type(error).__name__})")
             answer = {"code": 2}
-        finally:
-            shutil.rmtree(folder, ignore_errors=True)
         code = answer.get("code") if isinstance(answer, dict) else 2
         code = code if code in (0, 1) and type(code) is int else 2
         said = {"code": code, "report": clean_report(answer.get("report") if isinstance(answer, dict) else None, metrics)}
@@ -6570,7 +6566,7 @@ def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
                      "deterministic cutter answers at_the_floor and leaves the task to the AI cutter).")
     lines += manifest_bounds
     lines.append("measures: the step and the bounds rest on the noise of each figure and on the time and memory the tip takes, "
-                 "which this command does not measure (a later one will).")
+                 "which this command does not measure: hive.py measure does (docs/hosting.md, \"Measuring a project\").")
     return lines
 
 
@@ -6992,6 +6988,319 @@ def doctor_judge_tasks(out, seen, kind, manifest, module):
     if not problems:
         out.say("OK", "judge-tasks", "each open task is one the judge takes" + (": a unit of the manifest, with exactly its files" if kind == "reference"
                                                                              else ": its files under the program"))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Measuring a project (docs/hosting.md, "Measuring a project"): the project's tip judged by the project's own kind of
+# judge, as the run's judging step judges it (judge_of, judge_trees: the same trees, the same image, the same
+# isolation, no network for project code), a few times, on the architect's own machine with Docker; and from those
+# numbers alone, proposals for the step (cutter.floors) and the bounds (time, memory), each with the rule it used and
+# the numbers it came from. The architect decides. It writes nothing to the clone and pushes nothing: the trees, the
+# image's tree and the judge's own work are written to a folder of its own, removed after.
+
+MEASURE_TIMES = 3  # how many times the tip is judged, unless --times says otherwise
+MEASURE_TIMES_MOST = 20
+MEASURE_FACTOR = 2  # how much a proposed bound gives a candidate beyond what the tip took, unless --factor says otherwise
+GAIN_STEP = 1e-6  # the relay judge writes a gain rounded down to a millionth (relay.py: judge)
+NOISE_TIMES = 2  # a floor proposed for a measured gain: this many times the largest gain the judge saw between the tip and itself
+NOISE_STEP = 1e-4  # ... rounded up to a ten-thousandth
+VALUES_SHOWN = 5  # how many of the judgements' values a line quotes
+COUNTED_GAINS = ("gain_instructions_",)  # the common judge's gains on an instruction count (judge_figures: its report's « instructions »)
+EXACT_FIGURES = {"relay": ("total_bytes", "message_bytes", "program_bytes", "tip_total_bytes", "gain_total_bytes")}  # counted, never timed
+# The words a variable of the environment's name holds when it is a credential: none reaches the judge's processes.
+CREDENTIAL_WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASSPHRASE", "CREDENTIAL", "_KEY", "AUTH")
+
+
+def judge_trees(repo, judge, folder, tip, tree, task, commit, history=(), **named):
+    """One judgement as the run's judging step makes it (judging), in `folder`, a new folder of the caller's: the tip's
+    tree written out byte for byte (materialize), with the commits of the project's history its judge reads by id
+    (with_history), the tree judged written out beside it, the judge asked, and the folder removed whatever happens.
+    Returns the judge's own answer, unread; whatever the judge throws goes to the caller."""
+    folder = Path(folder)
+    try:
+        materialize(repo, tree_of(repo, tip), folder / "base")
+        with_history(repo, folder / "base", history)
+        materialize(repo, tree, folder / "candidate")
+        return judge(folder / "base", folder / "candidate", task, tip, commit, **named)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def docker_here():
+    """True if this machine has Docker's command: every kind of judge runs the project's code in its containers."""
+    return shutil.which("docker") is not None
+
+
+def root_or_sudo():
+    """True if the judge may mount and unmount as it does (container.mount_point): as root, or through sudo -n."""
+    return os.geteuid() == 0 or subprocess.run(["sudo", "-n", "true"], capture_output=True, stdin=subprocess.DEVNULL).returncode == 0
+
+
+def make_image(registry, kind, tree):
+    """The judge's image, made as the run's judging job makes it (cmd_image: judge_image), from the project's own tree.
+    The one step with the network, before any of the project's code runs. True if it was made."""
+    return subprocess.run(judge_image(registry, kind, tree), stdin=subprocess.DEVNULL).returncode == 0
+
+
+def measure_tasks(kind, manifest, config, tasks):
+    """The tasks the tip is judged for, as the judge takes them: the common judge, one, with the project's own options
+    (judge.options) and none of a task's; a relay judge, one, its files the program's paths; a reference judge, one for
+    each unit the open tasks name (each a whole judgement of its own), or the manifest's first unit where none does.
+    Each named so that no task of the project is taken for it."""
+    name = f"{config['project']}-measure"
+    if kind == "relay":
+        return [{"id": name, "files": list(manifest["program"])}]
+    if kind == "reference":
+        named = sorted({(task.get("options") or {}).get("unit") for task in tasks.values() if not task.get("closed")} & set(manifest["units"]))
+        units = named or sorted(manifest["units"])[:1]
+        return [{"id": f"{name}-{unit}", "files": list(manifest["units"][unit]["files"]), "options": {"unit": unit}} for unit in units]
+    return [{"id": name, "files": []}]
+
+
+def measure_clock():
+    """This machine's monotonic clock, in seconds, which times a judgement."""
+    return time.monotonic()
+
+
+def asked(ask, task):
+    """(code, figures (numbers only), fault) of one judgement asked through `ask`: a judge that throws is a failure to
+    judge (code 2), as judging takes it."""
+    try:
+        answer = ask(task)
+    except HiveError:
+        raise
+    except Exception as error:  # noqa: BLE001 (a timeout, a crash: a failure to judge, as judging takes it)
+        log(f"{task['id']}: the judge failed ({type(error).__name__})")
+        answer = {"code": 2}
+    code = answer.get("code") if isinstance(answer, dict) else 2
+    report = answer.get("report") if isinstance(answer, dict) and isinstance(answer.get("report"), dict) else {}
+    return (code if type(code) is int and code in (0, 1) else 2, {k: v for k, v in report.items() if number(v)},
+            answer.get("fault") if isinstance(answer, dict) else None)
+
+
+def measure_runs(ask, tasks, times, again=None):
+    """The judgements: for each task, `times` of them, each asked through `ask(task)` and timed on this machine's clock
+    (measure_clock). [(task id, code, figures, seconds, fault)]. `again`: a second way to ask, for a judgement the judge
+    refused (code 1): a relay judge refuses the tip as a candidate when its program passes a candidate's bound, and the
+    tip judged as itself then gives the figures of its own phases, at the tip's own bound; the judgement keeps its code
+    1, its duration, and those figures."""
+    runs = []
+    for task in tasks:
+        for _ in range(times):
+            start = measure_clock()
+            code, figures, fault = asked(ask, task)
+            seconds = measure_clock() - start
+            if code == 1 and again is not None:
+                second = asked(again, task)
+                figures = second[1] if second[0] == 0 else figures
+            runs.append((task["id"], code, figures, seconds, fault))
+    return runs
+
+
+def rounded_up(value, step):
+    """A value rounded up to a multiple of `step` (and never a float's noise above it)."""
+    return round(math.ceil(round(value / step, 9)) * step, 9)
+
+
+def measure_floors(kind, metrics, floors, answered):
+    """The DECIDE lines for the step: a floor for each gain figure a goal may name (GAIN, among judge.metrics) that has
+    none, from the figures the tip's judgements gave, each with its rule and its numbers.
+    - An exact figure (the relay's counted bytes): the least gain the judge writes for one byte less than the tip's
+      total, rounded down to a millionth as the judge writes it, or a millionth where one byte writes less. Any gain
+      the judge writes is certain; a smaller floor is too.
+    - A measured figure (the common judge's): NOISE_TIMES the largest gain the judge saw between the tip and itself
+      (its own noise at that figure), rounded up to NOISE_STEP; with what the judge's own proof said of it."""
+    lines = []
+    for metric in [m for m in metrics if GAIN.match(m) and m not in floors]:
+        values = [figures[metric] for figures in answered if metric in figures]
+        if kind == "relay" and metric == "gain_total_bytes":
+            totals = sorted({figures["tip_total_bytes"] for figures in answered if "tip_total_bytes" in figures})
+            if len(totals) != 1 or totals[0] <= 0:
+                lines.append(f"cutter.floors.{metric}: no proposal: the tip's total was not one number at each judgement ({totals})")
+                continue
+            one = math.floor((1.0 - (totals[0] - 1) / totals[0]) * 1e6) / 1e6  # (the judge's own expression, for one byte less: relay.py, judge)
+            proposal = max(one, GAIN_STEP)
+            lines.append(f"cutter.floors.{metric}: propose {proposal:.6f}. Rule: an exact figure; the least gain the judge writes for one byte less "
+                         f"than the tip's total of {totals[0]} bytes, written rounded down to a millionth"
+                         + ("" if one >= GAIN_STEP else f" (one byte writes 0: a millionth takes {math.ceil(totals[0] * GAIN_STEP)} bytes)")
+                         + ". Any gain the judge writes is certain, a smaller floor too: the floor is a choice of step, not a guard against "
+                           "noise. The architect decides.")
+        elif values and metric.startswith(COUNTED_GAINS):
+            lines.append(f"cutter.floors.{metric}: no proposal from the noise: a counted figure (an instruction count, read by Valgrind), which the "
+                         "judge calls beyond the noise above its own threshold (judge.py, --instructions-threshold, left at its default by the "
+                         "hive); it holds no proof of the judge's, so a goal on it holds another. The architect decides.")
+        elif values:
+            noise = max(abs(value) for value in values)
+            proof = PROOF + (metric[len("gain_"):] if metric.startswith("gain_") else metric)  # (sure_<measure> for gain_<measure>; sure_gain for gain)
+            proofs = [figures.get(proof) for figures in answered if metric in figures]
+            said = (f"; the judge's own proof called that noise a gain {proofs.count(1)} time(s) of {len(proofs)}, which only a floor guards"
+                    if 1 in proofs else "; the judge's own proof called none of it a gain" if any(p == 0 for p in proofs) else
+                    "; this figure has no proof of the judge's (a goal on it holds another)")
+            lines.append(f"cutter.floors.{metric}: propose {max(rounded_up(NOISE_TIMES * noise, NOISE_STEP), NOISE_STEP):.4f}. Rule: {NOISE_TIMES} times "
+                         f"the largest gain the judge measured between the tip and itself ({noise:.6f} over {len(values)} judgement(s): "
+                         f"{', '.join(f'{v:.6f}' for v in values[:VALUES_SHOWN])}{', ...' if len(values) > VALUES_SHOWN else ''}), rounded up to "
+                         f"{NOISE_STEP}{said}. More judgements (--times) tell the noise better. The architect decides.")
+        else:
+            lines.append(f"cutter.floors.{metric}: no proposal: no judgement gave this figure")
+    return lines
+
+
+def measure_bounds(out, kind, module, manifest, settings, runs, factor):
+    """The phases against their bounds, and the DECIDE lines for the bounds: for a relay judge, each phase's processor
+    time and memory as the judge measured the tip's program (judged as a candidate), against what the manifest gives a
+    candidate and the tip (tip_bound), and a proposal of `factor` times what it took, within the kind's own bounds, held
+    with the rest of the manifest to the time a judgement is given (the kind's own budget); for every kind, the
+    judgements' own duration against judge.timeout_seconds, and a proposal of `factor` times the longest, no less
+    than the manifest's worst case and the judge's margin."""
+    lines, answered = [], [figures for _, code, figures, _, _ in runs if code == 0 or (code == 1 and figures)]
+    given = settings.get("timeout_seconds", 3600)
+    proposed = dict(manifest or {})
+    if kind == "relay" and answered:
+        for phase in ("encode", "decode"):
+            took = max(figures.get(f"{phase}_seconds", 0) for figures in answered)
+            bound, low, high = manifest[f"{phase}_seconds"], *module.NUMBERS[f"{phase}_seconds"]
+            word = "WRONG" if took > bound else "OK"
+            out.say(word, f"phase-{phase}", f"the tip's program took at most {took} s of processor time over {len(answered)} judgement(s); the "
+                                            f"manifest gives a candidate {bound} s and the tip {module.tip_bound(bound)} s"
+                    + (": a candidate as fast as the tip is refused" if took > bound else ""))
+            proposed[f"{phase}_seconds"] = min(high, max(low, math.ceil(factor * took)))
+            lines.append(f"judge.relay.{phase}_seconds: propose {proposed[f'{phase}_seconds']}. Rule: {factor} times the {took} s of processor "
+                         f"time the tip's program took at most, within the kind's {low} to {high}; the manifest says {bound}. A runner may be slower "
+                         "than this machine. The architect decides.")
+        memory = max(max(figures.get("encode_memory_kb", 0), figures.get("decode_memory_kb", 0)) for figures in answered)
+        low, high = module.NUMBERS["memory_mb"]
+        out.say("WRONG" if memory > manifest["memory_mb"] * 1024 else "OK", "phase-memory",
+                f"the tip's program used at most {memory} kB in a phase; the manifest gives {manifest['memory_mb']} MB")
+        proposed["memory_mb"] = min(high, max(low, math.ceil(factor * memory / 1024)))
+        lines.append(f"judge.relay.memory_mb: propose {proposed['memory_mb']}. Rule: {factor} times the {memory} kB the tip's program used at "
+                     f"most in a phase, within the kind's {low} to {high}; the manifest says {manifest['memory_mb']}. The architect decides.")
+        out.say("CANNOT", "phase-build", "the relay judge reports no time of a build: build_seconds is not measured here")
+    elif kind == "reference":
+        out.say("CANNOT", "phases", "the reference judge bounds each container's time and measures none: no time or memory of a phase is known")
+    elif kind == "common":
+        out.say("CANNOT", "phases", "the common judge's plug-in measures the project's own figures; no bound of a phase is the hive's to propose")
+    durations = [seconds for _, code, _, seconds, _ in runs if code in (0, 1)]
+    if durations:
+        longest = max(durations)
+        out.say("WRONG" if longest > given else "OK", "duration",
+                f"{len(durations)} judgement(s) took {', '.join(f'{s:.0f}' for s in durations)} s on this machine; the hive gives one {given} s")
+        floor = 0
+        if manifest is not None and kind in ("relay", "reference"):
+            floor = module.budget(proposed) + REFERENCE_MARGIN
+            lines.append(f"judge.{kind}: with the bounds proposed, the manifest's worst case is {module.budget(proposed)} s (the kind's own budget); "
+                         f"the judge gives it the time of a judgement less its {REFERENCE_MARGIN} s, so judge.timeout_seconds must be {floor} s at least.")
+        timeout = max(math.ceil(factor * longest), floor)
+        if timeout > JUDGEMENT_SECONDS_MOST:
+            lines.append(f"judge.timeout_seconds: no proposal fits: {factor} times the longest judgement, {math.ceil(factor * longest)} s, and the "
+                         f"worst case, {floor} s, call for {timeout} s; the hive gives a judgement {JUDGEMENT_SECONDS_MOST} s at most. Lower the "
+                         "manifest's bounds or the work of a judgement. The architect decides.")
+        else:
+            lines.append(f"judge.timeout_seconds: propose {timeout}. Rule: {factor} times the longest judgement on this machine ({longest:.0f} s), "
+                         f"and no less than the worst case with the judge's margin ({floor} s); the file says {given}. A runner may be slower "
+                         "than this machine. The architect decides.")
+    return lines
+
+
+def cmd_measure(args):
+    """The project's tip judged by its own kind of judge, as the run judges it, --times times, on this machine with
+    Docker; then the figures, their spread, the phases against their bounds and the judgements' duration (OK, NOTE,
+    WRONG, CANNOT lines), and proposals for the step and the bounds (DECIDE), each with its rule and its numbers. Read
+    from the clone (--repo, as its last fetch left it) and the hive's own tree (--registry); the judge's image is made
+    first, the one step with the network. Exit code 1 when a judgement failed or a phase passed its bound; 2 when it
+    cannot start (another system than Linux, no Docker, settings that do not load, the image not made)."""
+    if not sys.platform.startswith("linux"):
+        raise HiveError(ONLY_ON_LINUX_DOCTOR.replace("the doctor", "measure"))
+    if not 1 <= args.times <= MEASURE_TIMES_MOST:
+        raise HiveError(f"--times: from 1 to {MEASURE_TIMES_MOST}")
+    if not (number(args.factor) and 1 <= args.factor <= 10):
+        raise HiveError("--factor: a number from 1 to 10")
+    if not docker_here():
+        raise HiveError("measure runs the project's code in the judge's containers: this machine has no Docker")
+    repository, repo = repository_of(args), args.repo
+    if fetches_what_it_reads(repo):
+        raise HiveError("--repo: a partial clone, or one with a promisor remote, whose git would fetch what it reads: take a full clone")
+    branches, published = remote_branches(repo)
+    if published is None:
+        raise HiveError("--repo: the clone does not name the branch its origin publishes (refs/remotes/origin/HEAD)")
+    config, tasks = settings_on(repo, branches[published], published, repository)
+    tip = branches.get(config["branch"])
+    if tip is None:
+        raise HiveError(f"--repo: no branch {config['branch']} in the clone, the branch the hive writes, whose tip is judged")
+    kind, settings = config["judge"]["kind"], config["judge"]
+    module = judge_module(args.registry, JUDGE_MODULES[kind])
+    manifest = None
+    if kind != "common":
+        data = blob_at(repo, tip, module.MANIFEST, most=module.MANIFEST_BYTES)
+        if data is None:
+            raise HiveError(f"{module.MANIFEST}: not at the tip of {config['branch']} (hive.py doctor says what a project holds)")
+        try:
+            manifest = module.check_manifest(json.loads(data.decode("utf-8")))
+        except (ValueError, RecursionError) as error:
+            raise HiveError(f"{module.MANIFEST}: not JSON ({type(error).__name__})") from None
+        except module.JudgeError as error:
+            raise HiveError(f"{module.MANIFEST}: {safe_text(error, 200)}") from None
+    if kind == "relay" and not root_or_sudo():
+        raise HiveError("the relay judge mounts a memory file system for each phase: it needs root, or sudo that asks no password (sudo -n)")
+    if args.workdir and not os.path.isdir(args.workdir):
+        raise HiveError("--workdir: no such folder")
+    saved = dict(os.environ)
+    for name in [name for name in os.environ if any(word in name.upper() for word in CREDENTIAL_WORDS)]:
+        del os.environ[name]  # (no credential reaches the judge's processes: they need none)
+    work = Path(tempfile.mkdtemp(prefix="hive-measure-", dir=args.workdir))
+    try:
+        failed = measure(args, config, tasks, tip, branches[published], kind, settings, module, manifest, work)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        shutil.rmtree(work, ignore_errors=True)
+    sys.exit(1 if failed else 0)
+
+
+def measure(args, config, tasks, tip, published, kind, settings, module, manifest, work):
+    """The measurement and its lines, printed; True if a judgement failed or a phase passed its bound."""
+    out, repo = Doctor(), args.repo
+    image = work / "image"
+    materialize(repo, tree_of(repo, published), image)  # (the project's own tree at its published branch, as the run's image step takes it)
+    if not make_image(args.registry, kind, image):
+        raise HiveError(f"the judge's image could not be made ({kind}): nothing is measured")
+    out.say("OK", "image", f"the {kind} judge's image, made from {published}")
+    (work / "judge").mkdir()
+    (work / "trees").mkdir()
+    judge = judge_of(args.registry, settings, str(work / "judge"))
+    question = {"question": True} if kind in ("relay", "reference") else {}
+    tree, history, chosen = tree_of(repo, tip), settings.get("history") or (), measure_tasks(kind, manifest, config, tasks)
+    out.say("OK", "plan", f"{len(chosen) * args.times} judgement(s): {args.times} for each of {len(chosen)} task(s), each at most "
+                          f"{settings.get('timeout_seconds', 3600)} s")
+
+    def ask(task, **named):
+        return judge_trees(repo, judge, Path(tempfile.mkdtemp(prefix="judge-", dir=work / "trees")), tip, tree, task, tip, history, **named)
+
+    runs = measure_runs(lambda task: ask(task, **question), chosen, args.times, again=ask if kind == "relay" else None)
+    out.say("OK", "tip", f"{config['branch']} at {tip}, judged {len(runs)} time(s) "
+            + ("as a candidate, as the run asks the tip for a planned task" if question else "against itself, as the run asks after a failure"))
+    for task_id, code, figures, seconds, fault in runs:
+        if code == 2:
+            out.say("WRONG", "judgement", f"{task_id}: the judge failed on the tip ({'on the tip' + chr(39) + 's own side' if fault == TIP_FAULT else 'code 2'}) "
+                                          f"after {seconds:.0f} s: the run would judge nothing until it is mended")
+        elif code == 1:
+            out.say("NOTE", "judgement", f"{task_id}: the judge refused the tip " + {
+                "relay": "as a candidate (its program passes a candidate's bound, or does not repeat): its phases were measured again as the tip "
+                         "itself, at the tip's own bound",
+                "reference": "as a candidate (its unit not written yet, for instance): a refusal gives no figure",
+                "common": "against itself"}[kind] + f", after {seconds:.0f} s (a refusal stops sooner than a whole judgement)")
+    answered = [figures for _, code, figures, _, _ in runs if code == 0 or (code == 1 and figures)]
+    for name in sorted({name for figures in answered for name in figures}):
+        values = [figures[name] for figures in answered if name in figures]
+        same = len(set(values)) == 1
+        out.say("OK", f"figure-{name}", ("exact: " if name in EXACT_FIGURES.get(kind, ()) and same else "the same at each judgement: " if same else "")
+                + (f"{values[0]}" if same else f"{', '.join(str(v) for v in values[:VALUES_SHOWN])}{', ...' if len(values) > VALUES_SHOWN else ''} "
+                                               f"(spread {max(values) - min(values):.6g} over {len(values)})"))
+    lines = measure_floors(kind, config["judge"]["metrics"], config["cutter"]["floors"], answered)
+    lines += measure_bounds(out, kind, module, manifest, settings, runs, args.factor)
+    print("DECIDE")
+    for line in lines:
+        print(bounded_line(f"DECIDE {line}"))
+    return out.failed
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -9587,6 +9896,16 @@ def main(argv=None):
     p.add_argument("--project", required=True, help="the project's repository (owner/name)")
     p.add_argument("--repo", required=True, help="a clone of the project, its branches under refs/remotes/origin as its last fetch left them")
     p.set_defaults(run=cmd_doctor)
+    p = sub.add_parser("measure", help="the project's tip judged by its own kind of judge, a few times, on this machine with Docker, and "
+                                       "proposals for its step and its bounds (docs/hosting.md)")
+    p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]),
+                   help="the hive's own tree: its list of settings and its judges' code")
+    p.add_argument("--project", required=True, help="the project's repository (owner/name)")
+    p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin as its last fetch left them")
+    p.add_argument("--times", type=int, default=MEASURE_TIMES, help=f"how many times the tip is judged ({MEASURE_TIMES} unless said)")
+    p.add_argument("--factor", type=float, default=MEASURE_FACTOR, help=f"how much a proposed bound gives beyond what the tip took ({MEASURE_FACTOR})")
+    p.add_argument("--workdir", help="where the trees, the image's tree and the judge's own work are written (the system's temporary folder)")
+    p.set_defaults(run=cmd_measure)
 
     def reads_the_projects(p):
         p.add_argument("--registry", default=str(Path(__file__).resolve().parents[2]),

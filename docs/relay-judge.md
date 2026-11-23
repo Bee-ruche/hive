@@ -353,8 +353,10 @@ fault") adds a build or a pass; the report's `builds` and `runs` count every one
 many were such a second run (so `builds + runs` is `9 + tip_retried` for a candidate, `4 + tip_retried` for the tip
 against itself). Its worst case, which the
 manifest must fit in `judge.timeout_seconds`, is every container at its clock and every step of the tip's run twice:
-`70 + 3 × (build clock + 15 + 10) + 6 × (encode clock + 10) + 4 × (decode clock + 10) + 60` seconds. The tip
-against itself: one build and three passes, two builds and six at most. A project keeps that worst case well under
+`70 + 3 × (build clock + 15 + 10) + 6 × (encode clock + 10) + 4 × (decode clock + 10) + 60` seconds. A phase's clock
+is that of the manifest's bound for it, the tip's as a candidate's: the tip's quarter more is processor time, which
+fits under that clock, so the tip's phases are counted at it too. The tip against itself: one build and three
+passes, two builds and six at most. A project keeps that worst case well under
 its judgement's time: a bound edited up to the edge turns every judgement into a 2.
 
 Every judgement measures the tip's whole figure before the candidate's build, so a candidate that does not even
