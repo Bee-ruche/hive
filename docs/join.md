@@ -46,9 +46,14 @@ Before you paste the line, by hand:
    - a cloud session (Claude Code on the web, for instance) opened on your fork, if your account has no connector:
      a cloud session of Claude Code on the web carries every connector of the account, and they cannot be removed
      for one session (seen on 23 November 2026);
-   - or, if it has some, a scheduled task with no connector, on your fork, that you run once by hand and follow: its
-     text is the line below, then "This session runs without me typing in it: take my yes as given by this message,
-     for the project, the version you name and one task; stop and tell me on anything else that needs my answer.";
+   - or, if it has some, a scheduled task with no connector and no schedule (or its schedule off), on your fork,
+     that you run once by hand and follow: its text is the line below, then "My GitHub login is <your-login>." (and
+     "My fork is named <name>." if it is another than the project's), then "This session runs without me typing in
+     it: take my yes as given by this message, for the project, the version you name and one task; stop and tell me
+     on anything else that needs my answer." Your assistant then tells you in the session what it would have told
+     you before your yes, takes the yes your text gave for one task, and offers nothing at the end that needs your
+     answer. (The regular worker reaches the project and its state through git alone, with only your fork
+     attached; a cloud session may refuse other addresses of GitHub, which the entry text then does without.);
    - or, on a Linux machine of your own, a clone of your fork kept for the hive, and a session started in a folder
      that does not contain that clone, never inside it nor above it (step 2 below says why: your fork's own agent
      files would load before your line and before your yes).

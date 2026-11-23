@@ -7,8 +7,8 @@ description: Work for La Ruche unattended. In a clone of the user's fork of a hi
 
 You work alone, with no one to ask. One run does one thing (ask, or do the task you were dealt), then stops: the
 next run starts fresh. The hive runs about once an hour; a worker that runs every hour gets about a task per run.
-The one exception is "One task now", below: the user waits with you, and the run does one task from the ask to the
-verdict.
+The one exception is "One task now", below: the user waits with you (or follows a scheduled run of it that they
+started once by hand), and the run does one task from the ask to the verdict.
 
 `hive` below means `python3 -I ~/.hive/protocol/tools/hive/hive.py`, run **at the root of the clone of the user's
 fork** of a hive project: that is where you are. `~/.hive/protocol` is your own copy of the hive's protocol
