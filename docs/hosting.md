@@ -10,6 +10,75 @@ until then, with the setup that registry's
 two environments, a state repository of its own): what follows replaces it, and a project moves to it by holding the
 files below. What could not be tried is listed at the end.*
 
+## Checking a project
+
+`hive.py doctor` says what a project holds of what the hive needs, and what its architect has still to decide. Run
+it from a clone of `Bee-ruche/hive`, on a full clone of the project (fetch it first: the command reads it as its last
+fetch left it; a partial clone, whose git would fetch what it reads, is refused):
+
+```bash
+python3 tools/hive/hive.py doctor --project <owner/name> --repo <a clone of the project>
+```
+
+It reads the clone's own branches (those under `refs/remotes/origin`), and, in the hive's tree it runs from
+(`--registry`), the list of settings (`hive/settings.json`), the judges' own checks of a manifest and the hive's
+history. It asks no address, runs no file of the project, and writes nothing: no file of the clone, no reference, no
+push, no setting. It prints one line per check:
+
+- `OK <check>: <what it found>`;
+- `MISSING <check>: <what to do, and where the docs say how>`;
+- `WRONG <check>: <what is wrong>`;
+- `CANNOT <check>: <why it cannot see it>`.
+
+Each check is a rule the hive already holds, called where it lives:
+
+- `published`: the branch the clone's origin names as its default (`refs/remotes/origin/HEAD`). Without it the
+  command stops there, with 1.
+- `settings` and `tasks`: `hive/project.json` and `hive/tasks.jsonl` load on that branch, as a run loads them, and
+  the tasks as the cutter's tally counts them on the ledger: listed, left to do, open, dealable now, stuck, short of
+  members. A project with nothing left to do starves: MISSING.
+- `backlog`: `hive/backlog.jsonl`, if there is one, reads as the cutter reads it.
+- `caller`: a workflow of the published branch calls `Bee-ruche/hive`'s `run.yml` at a commit's full id, not the forty
+  zeros, and its `if` names the published branch. `hive-commit`: that commit is on the hive's main, as the clone the
+  command runs from knows it (CANNOT when that tree is no clone, does not hold the commit, or does not show it on its
+  main, which may be older than the commit).
+- `hive-state`: the branch exists, and its ledger reads as the run reads it.
+- `branch`: the branch the hive writes exists.
+- `judge`: what the project's kind of judge needs, at the tip of the branch the hive writes, where the judge reads it:
+  - the common judge: its plugin, read as a file and never loaded (the judge checks its contract when it loads it);
+  - a reference or relay judge: its manifest, no larger than its kind reads, held to the kind's own check; the paths it
+    names, plain files of that tip (no link) or folders of them; for a reference judge, the folder of each unit's
+    file; for a relay judge, the data the tip holds, held to the manifest's size and SHA-256 (data given by an
+    address is fetched at the image step and not looked at here); the paths a candidate writes (a unit's files, a
+    relay's program) not protected, or every candidate would be refused; and its worst case within the time a
+    judgement is given (`judge.timeout_seconds`).
+
+  The plugin or the manifest is itself protected from contributions (item 6 below).
+- `sandbox`: `bee/sandbox/sans-docker.sh` at that tip, protected: a worker runs project code only through it.
+- `charter`: `hive/charter.md` on the published branch, for a project whose file has a cutter block.
+- `members` and `guardians`: what the file names (the settings' loader holds their rules).
+- `actions-permissions`, `workflow-permissions`, `pull-requests` and `rulesets`: CANNOT. They are settings of the
+  repository on GitHub, which the hive reads with no account ("The repository's settings", below).
+
+When the settings do not load, each check that needs them says CANNOT.
+
+Then `DECIDE`, the decisions left to the architect, with what each needs. The command chooses none of them:
+
+- each setting the project's file does not give and for which the settings list recommends values (its presets, or a
+  value per guardian where the project names guardians), with its default, its bounds, the recommended values, and
+  what it changes; then, in one line, the others the file leaves at their default, for which the list recommends
+  nothing;
+- the step (`cutter.floors`): for each figure that goals ask a least value of and that has no floor, the least a new
+  task's goal may ask of it; the other figures without a floor, in one line (a floor is for a figure where more is
+  better: the gate then refuses a goal with a `max` on it);
+- the judge's bounds: a reference or relay manifest's numbers beside the bounds its kind takes, and the time a
+  judgement is given; for the common judge, that time and how many times each measure is taken;
+- one line on what the command does not measure: the noise of each figure, and the time and memory the tip takes, on
+  which the step and the bounds rest.
+
+It ends with 0 when no check is MISSING or WRONG, and 1 otherwise; CANNOT does not fail. What it cannot go on from (a
+clone git cannot read, a `--project` that is not `owner/name`) is one line, `hive: …`, with 2.
+
 ## What a project holds
 
 All of it in the project's own repository. Copies of the first test project's are under

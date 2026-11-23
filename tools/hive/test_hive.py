@@ -16209,5 +16209,423 @@ class TestTheTallyGivesTheTipsFigures(Base):
                          "a commit a guardian admitted, its line without a report: no figures, and the ruling said")
 
 
+class TestTheDoctor(Base):
+    """hive.py doctor (docs/hosting.md, "Checking a project"): one line per check of what a project holds of what the
+    hive needs, read from a clone of it as it stands, each check one the hive already holds; then the decisions left
+    to its architect. A project set up as hosting.md says is all OK; each part taken away or written wrong is said by
+    its own line. It runs nothing of the project and writes nothing."""
+
+    PLUGIN, CALLER, SANDBOX = "bee/judge/project.py", ".github/workflows/hive.yml", "bee/sandbox/sans-docker.sh"
+
+    def setUp(self):
+        super().setUp()
+        self.w.set_config({"protected": ["tests/**", "bee/**"]})
+        self.registry, self.hive_commit, self.off_main = self.hives_clone()
+
+    def hives_clone(self):
+        """A clone of the hive as a lead has it: the hive's list of settings and its judges' code, on a main of two
+        commits, and a commit on another branch: (folder, a commit of main, a commit off main)."""
+        folder = Path(self.tmp.name) / "hive-clone"
+        (folder / "hive").mkdir(parents=True)
+        shutil.copy(REGISTRY / "hive/settings.json", folder / "hive/settings.json")
+        shutil.copytree(REGISTRY / "tools/judge", folder / "tools/judge", ignore=shutil.ignore_patterns("*_toy", "toy", "__pycache__"))
+        sh("git", "init", "--quiet", "-b", "main", cwd=folder)
+        sh("git", "add", "-A", cwd=folder)
+        sh("git", "commit", "--quiet", "-m", "the hive", cwd=folder)
+        pinned = sh("git", "rev-parse", "HEAD", cwd=folder).stdout.strip()
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "the hive, later", cwd=folder)
+        sh("git", "checkout", "--quiet", "-b", "other", cwd=folder)
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "a branch of its own", cwd=folder)
+        off = sh("git", "rev-parse", "HEAD", cwd=folder).stdout.strip()
+        sh("git", "checkout", "--quiet", "main", cwd=folder)
+        return folder, pinned, off
+
+    def published_file(self, path, content):
+        """A file of the branch the project publishes, written (or removed, None) by its lead, and pushed."""
+        target = self.w.published / path
+        if content is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        leads_git("add", "-A", cwd=self.w.published)
+        leads_git("commit", "--quiet", "-m", f"the lead writes {path}", cwd=self.w.published)
+        leads_git("push", "--quiet", "origin", f"HEAD:refs/heads/{self.w.published_branch}", cwd=self.w.published)
+        self.w.last_published = (None, None)
+
+    def caller(self, ref=None, guard="refs/heads/stable"):
+        return (f"name: Hive\non:\n  workflow_dispatch:\npermissions: {{}}\njobs:\n  hive:\n    if: github.ref == '{guard}'\n"
+                f"    uses: Bee-ruche/hive/.github/workflows/run.yml@{ref or self.hive_commit}\n")
+
+    def state_branch(self, ledger=None):
+        """The project's branch hive-state, made by its lead: a history of its own, a README, and a ledger if given."""
+        lead = Path(self.tmp.name) / f"state-lead-{len(os.listdir(self.tmp.name))}"
+        sh("git", "init", "--quiet", "-b", hive.STATE_BRANCH, str(lead), cwd=self.tmp.name)
+        (lead / "README.md").write_text("The hive's state.\n")
+        if ledger is not None:
+            (lead / "ledger.jsonl").write_text(ledger)
+        sh("git", "add", "-A", cwd=lead)
+        sh("git", "commit", "--quiet", "-m", "the state", cwd=lead)
+        sh("git", "push", "--quiet", "--force", str(self.w.upstream), f"{hive.STATE_BRANCH}:{hive.STATE_BRANCH}", cwd=lead)
+
+    def healthy(self):
+        """The project as docs/hosting.md sets it up: its judge's plugin and its sandbox on the branch the hive writes,
+        protected; its caller on the branch it publishes, pinned to a commit of the hive's main; its branch hive-state."""
+        self.w.upstream_commit(self.PLUGIN, "class Project:\n    pass\n")
+        self.w.upstream_commit(self.SANDBOX, "#!/bin/sh\n")
+        self.published_file(self.CALLER, self.caller())
+        self.state_branch()
+
+    def clone(self):
+        self.w.publish()
+        folder = Path(self.tmp.name) / f"clone-{len(os.listdir(self.tmp.name))}"
+        sh("git", "clone", "--quiet", str(self.w.upstream), str(folder), cwd=self.tmp.name)
+        return folder
+
+    def doctor(self, clone=None, registry=None):
+        """(exit code, the lines it printed) of the doctor on a fresh clone of the project (or the one given)."""
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+            try:
+                hive.main(["doctor", "--project", "Bee-ruche/toy", "--repo", str(clone or self.clone()), "--registry", str(registry or self.registry)])
+                code = None
+            except SystemExit as exit:
+                code = exit.code
+        return code, out.getvalue().splitlines()
+
+    def said(self, lines, check):
+        """The words of the lines about one check: [(OK|MISSING|WRONG|CANNOT, the rest)] (never a decision's line)."""
+        return [(line.split(" ", 1)[0], line.split(": ", 1)[1] if ": " in line else "") for line in lines
+                if not line.startswith("DECIDE") and (line.split(" ")[1:2] == [check] or line.split(" ")[1:2] == [f"{check}:"])]
+
+    def word(self, lines, check):
+        words = [word for word, _ in self.said(lines, check)]
+        self.assertEqual(len(set(words)), 1, (check, lines))
+        return words[0]
+
+    def test_a_project_set_up_as_hosting_says_is_all_ok_and_the_command_ends_with_zero(self):
+        self.healthy()
+        code, lines = self.doctor()
+        self.assertEqual(code, 0, lines)
+        for check in ("published", "settings", "tasks", "backlog", "caller", "hive-commit", "hive-state", "branch", "judge", "sandbox",
+                      "members", "guardians"):
+            self.assertEqual(self.word(lines, check), "OK", (check, lines))
+        for check, _ in hive.REPOSITORY_SETTINGS:
+            self.assertEqual(self.word(lines, check), "CANNOT", "what the hive cannot read without an account does not fail")
+        self.assertTrue(all(line.split(" ")[0] in ("OK", "MISSING", "WRONG", "CANNOT", "DECIDE") for line in lines), lines)
+        self.assertEqual(lines[0], f"OK published: stable at {self.w.publish()}")
+        self.assertIn("5 listed, 4 left to do, 4 open, 4 dealable now", self.said(lines, "tasks")[0][1])
+
+    def test_a_clone_that_names_no_published_branch(self):
+        clone = self.clone()
+        sh("git", "symbolic-ref", "--delete", "refs/remotes/origin/HEAD", cwd=clone)
+        code, lines = self.doctor(clone)
+        self.assertEqual((code, self.word(lines, "published")), (1, "MISSING"), lines)
+        self.assertIn("git remote set-head origin --auto", lines[0])
+
+    def test_the_settings_missing_or_wrong_are_said_with_the_loaders_own_reason(self):
+        self.healthy()
+        self.published_file(hive.PROJECT_FILE, None)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "settings")), (1, "MISSING"), lines)
+        self.assertIn("examples/project/", self.said(lines, "settings")[0][1])
+        self.assertEqual(self.word(lines, "judge"), "CANNOT", "nothing that needs the settings is judged without them")
+        self.assertFalse([line for line in lines if line.startswith("DECIDE")], "no decision is shown on settings that do not load")
+        self.published_file(hive.PROJECT_FILE, json.dumps({**CONFIG, "repo": "Bee-ruche/other"}))
+        code, lines = self.doctor()
+        self.assertEqual((code, self.said(lines, "settings")), (1, [("WRONG", "hive/project.json: repo: the repository that holds this file "
+                                                                               "(Bee-ruche/toy), and no other")]))
+        self.published_file(hive.PROJECT_FILE, json.dumps({**CONFIG, "published": "main", "branch": "hive"}))
+        self.assertEqual(self.word(self.doctor()[1], "settings"), "WRONG", "a file that names another branch than the one published")
+
+    def test_the_tasks_missing_wrong_or_starving(self):
+        self.healthy()
+        self.w.tasks_file.write_text(json.dumps({**TASKS[0], "goal": {"kind": "metric", "name": "speed", "min": 1}}) + "\n")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "tasks"), self.word(lines, "settings")), (1, "WRONG", "OK"), lines)
+        self.w.tasks_file.write_text(json.dumps({**TASKS[2]}) + "\n")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "tasks")), (1, "MISSING"), lines)
+        self.assertIn("the project starves", self.said(lines, "tasks")[0][1])
+        self.published_file(hive.TASKS_FILE, None)
+        self.assertEqual(self.word(self.doctor()[1], "tasks"), "MISSING")
+
+    def test_the_tasks_are_counted_on_the_projects_ledger(self):
+        """The gate's view of the tasks (tally): a task dealt now is left to do and not open, and those that share its
+        files are not dealable."""
+        self.healthy()
+        deal = {"type": "deal", "task": "toy-0001", "member": "bob", "member_id": 102, "repo_id": 202, "at": "2026-11-12T11:00:00Z",
+                "until": "2026-11-12T14:00:00Z", "run": "a" * 32}
+        self.state_branch(json.dumps(deal) + "\n")
+        code, lines = self.doctor()
+        self.assertEqual(code, 0, lines)
+        self.assertIn("5 listed, 4 left to do, 3 open, 1 dealable now", self.said(lines, "tasks")[0][1])
+        self.assertIn("its ledger holds 1 line(s)", self.said(lines, "hive-state")[0][1])
+
+    def test_the_backlog_if_any(self):
+        self.healthy()
+        (self.w.published / hive.BACKLOG_FILE).write_text(json.dumps({"id": "toy-0009", "title": "Later", "files": ["lib.c"]}) + "\n")
+        self.assertEqual(self.said(self.doctor()[1], "backlog"), [("OK", "1 planned task(s)")])
+        (self.w.published / hive.BACKLOG_FILE).write_text(json.dumps({"id": "toy-0009", "title": "Later", "files": ["lib.c"], "parent": "toy-0042"}) + "\n")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "backlog")), (1, "WRONG"), lines)
+
+    def test_the_caller_missing_unpinned_or_guarded_on_another_branch(self):
+        self.healthy()
+        for content, said in ((None, "MISSING"), (self.caller(hive.NO_COMMIT), "WRONG"), (self.caller("v1"), "WRONG"),
+                              (self.caller(guard="refs/heads/main"), "WRONG")):
+            with self.subTest(said=said, content=content):
+                self.published_file(self.CALLER, content)
+                code, lines = self.doctor()
+                self.assertEqual((code, self.word(lines, "caller")), (1, said), lines)
+                self.assertFalse(self.said(lines, "hive-commit"), "no commit to look for")
+
+    def test_the_hives_commit_is_looked_for_in_the_hives_own_clone(self):
+        """OK when the hive's clone here holds the commit on its main; CANNOT when it is no clone, or does not show the
+        commit on its main (its main may be older than the commit: the run itself refuses a commit its main lacks)."""
+        self.healthy()
+        self.assertEqual(self.said(self.doctor()[1], "hive-commit"), [("OK", f"{self.hive_commit}, a commit of the hive's main")])
+        self.published_file(self.CALLER, self.caller(self.off_main))
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "hive-commit")), (0, "CANNOT"), lines)
+        self.published_file(self.CALLER, self.caller("e" * 40))
+        self.assertEqual(self.word(self.doctor()[1], "hive-commit"), "CANNOT")
+        copy = Path(self.tmp.name) / "hive-copy"
+        shutil.copytree(self.registry, copy, ignore=shutil.ignore_patterns(".git"))
+        self.published_file(self.CALLER, self.caller())
+        code, lines = self.doctor(registry=copy)
+        self.assertEqual((code, self.word(lines, "hive-commit")), (0, "CANNOT"), lines)
+        self.assertIn("not a clone", self.said(lines, "hive-commit")[0][1])
+
+    def test_the_state_branch_missing_or_its_ledger_unreadable(self):
+        self.healthy()
+        sh("git", "update-ref", "-d", f"refs/heads/{hive.STATE_BRANCH}", cwd=self.w.upstream)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "hive-state")), (1, "MISSING"), lines)
+        self.assertIn("(no state: as before a first run)", self.said(lines, "tasks")[0][1])
+        self.state_branch("not json\n{}\n")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "hive-state")), (1, "WRONG"), lines)
+
+    def test_the_branch_the_hive_writes(self):
+        self.healthy()
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "branch": "hive"})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "branch"), self.word(lines, "judge"), self.word(lines, "sandbox")), (1, "MISSING", "CANNOT", "CANNOT"), lines)
+        sh("git", "branch", "hive", "main", cwd=self.w.upstream)
+        self.assertEqual(self.doctor()[0], 0)
+
+    def test_the_common_judges_plugin_and_the_sandbox_at_the_tip_of_the_hives_branch_and_protected(self):
+        self.healthy()
+        self.w.set_config({"protected": ["tests/**"]})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge"), self.word(lines, "sandbox")), (1, "WRONG", "WRONG"), lines)
+        self.assertIn("not protected", self.said(lines, "sandbox")[0][1])
+        self.w.set_config({"protected": ["tests/**", "bee/**"]})
+        sh("git", "pull", "--quiet", "origin", "main", cwd=self.w.seed)
+        sh("git", "rm", "--quiet", "-r", "bee", cwd=self.w.seed)
+        sh("git", "commit", "--quiet", "-m", "no tooling", cwd=self.w.seed)
+        sh("git", "push", "--quiet", "origin", "main", cwd=self.w.seed)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge"), self.word(lines, "sandbox")), (1, "MISSING", "MISSING"), lines)
+        self.assertIn(self.PLUGIN, self.said(lines, "judge")[0][1])
+
+    TOY = REGISTRY / "tools/judge/reference_toy"
+
+    def reference_project(self):
+        """The project with a judge of the reference kind: the toy reference's files on the branch the hive writes, all but
+        its manifest (manifest)."""
+        self.healthy()
+        for path in sorted(p for p in self.TOY.rglob("*") if p.is_file()):
+            if str(path.relative_to(self.TOY)) != "bee/reference/project.json":
+                self.w.upstream_commit(str(path.relative_to(self.TOY)), path.read_bytes())
+
+    def manifest(self, manifest, timeout=None):
+        """The reference judge's manifest on the branch the hive writes, and the settings that name the kind."""
+        self.w.upstream_commit("bee/reference/project.json", json.dumps(manifest))
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "judge": {**JUDGE, "kind": "reference", **({"timeout_seconds": timeout} if timeout else {})}})
+
+    def test_a_reference_judges_manifest_held_to_the_kinds_own_check_and_to_the_time_a_judgement_is_given(self):
+        manifest = json.loads((self.TOY / "bee/reference/project.json").read_text())
+        self.reference_project()
+        self.manifest(manifest)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (0, "OK"), lines)
+        self.assertIn("judge.reference.memory_mb: 256 (the kind takes 64 to 4096)", [line[len("DECIDE "):] for line in lines])
+        for broken, said in (({**manifest, "memory_mb": 99999}, "memory_mb"), ({**manifest, "reference": [*manifest["reference"], "elsewhere"]}, "elsewhere")):
+            with self.subTest(said):
+                self.manifest(broken)
+                code, lines = self.doctor()
+                self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+                self.assertIn(said, self.said(lines, "judge")[0][1])
+        self.manifest(manifest, timeout=300)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+        self.assertIn("above the 180 s a judgement of this project is given", self.said(lines, "judge")[0][1])
+
+    def test_a_charter_where_the_project_has_a_cutter_block(self):
+        self.healthy()
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "cutter": {"open": 5}})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "charter")), (1, "MISSING"), lines)
+        (self.w.published / hive.CHARTER_FILE).write_text("The project's goal.\n")
+        self.assertEqual(self.said(self.doctor()[1], "charter"), [("OK", hive.CHARTER_FILE)])
+        self.w.set_config({"protected": ["tests/**", "bee/**"]})
+        self.assertEqual(self.said(self.doctor()[1], "charter"), [], "no cutter block, no charter asked")
+
+    def test_the_members_and_the_guardians_as_the_file_names_them(self):
+        self.healthy()
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "members": {"only": [7, 8]},
+                           "judge": {**JUDGE, "require": [{"name": "outputs_compared", "max": 20}]},
+                           "guardians": {"accounts": [7], "waive": {"outputs_compared": 30}}})
+        code, lines = self.doctor()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.said(lines, "members"), [("OK", "by invitation: 2 account(s); accounts 90 days old at least; 0 banned")])
+        self.assertEqual(self.said(lines, "guardians"), [("OK", "1 account(s), who may waive outputs_compared up to 30")])
+        self.assertTrue([line for line in lines if line.startswith("DECIDE members.per_guardian: ")], "a value per guardian is recommended")
+
+    def test_the_decisions_left_open_are_shown_and_none_is_taken(self):
+        """Each setting the file does not give whose default the settings list recommends values for, with its default,
+        bounds and recommendations; the least gain of a figure a goal asks, where no floor is set; the judge's bounds;
+        and one line on the measures this command does not take."""
+        self.healthy()
+        code, lines = self.doctor()
+        decided = [line[len("DECIDE "):] for line in lines if line.startswith("DECIDE ")]
+        self.assertEqual(lines[len(lines) - len(decided) - 1], "DECIDE", "the decisions come last, under their own heading")
+        keys = [line.split(":")[0] for line in decided]
+        self.assertIn("deal_hours", keys)
+        self.assertIn("backoff_hours", keys)
+        self.assertNotIn("branch", keys, "a setting the file gives is decided")
+        self.assertNotIn("limits.files", keys, "a setting the list recommends nothing for is no open choice")
+        self.assertIn("deal_hours: How long a member has to push its candidate once a task is dealt to it. Default 3 (least 1, most 168); "
+                      "recommended: trial 3, invitation 3, open 3.", decided)
+        self.assertIn("members.only: Null: any account that meets the other rules may work. Default null; recommended: trial (the lead's own "
+                      "account), invitation (the accounts the lead invites), open null.", decided)
+        self.assertTrue(decided[keys.index("cutter.floors.gain")].startswith("cutter.floors.gain: no floor, and 1 goal(s)"))
+        self.assertIn("cutter.floors: no goal asks a least value of outputs_compared", decided[keys.index("cutter.floors")])
+        self.assertTrue(decided[-1].startswith("measures: "))
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "deal_hours": 4, "cutter": {"floors": {"gain": 0.01}}})
+        (self.w.published / hive.CHARTER_FILE).write_text("The project's goal.\n")
+        keys = [line[len("DECIDE "):].split(":")[0] for line in self.doctor()[1] if line.startswith("DECIDE ")]
+        self.assertNotIn("deal_hours", keys)
+        self.assertNotIn("cutter.floors.gain", keys)
+
+    def test_it_runs_nothing_of_the_project_and_writes_nothing(self):
+        """The doctor reads the project's files as data: a plugin or a sandbox that would leave a mark when run or
+        imported leaves none; the clone's files, folders and references are as they were, its .git included; and the
+        judges' modules it imports from the hive's tree leave no compiled file there."""
+        mark = Path(self.tmp.name) / "ran"
+        self.healthy()
+        self.w.upstream_commit(self.PLUGIN, f"open({str(mark)!r}, 'w').close()\n\n\nclass Project:\n    pass\n")
+        self.w.upstream_commit(self.SANDBOX, f"#!/bin/sh\ntouch {mark}\n")
+        clone = self.clone()
+
+        def held(folder):
+            """Every file of a folder with its bytes and its time, and every folder with its time (a folder's time
+            moves when anything is made or removed in it)."""
+            return {str(p.relative_to(folder)): (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
+                    for p in sorted([folder, *folder.rglob("*")])}
+
+        before, refs, hives = held(clone), sh("git", "for-each-ref", cwd=clone).stdout, held(self.registry)
+        with mock.patch.dict(sys.modules), mock.patch.object(sys, "path", list(sys.path)):
+            for name in ("judge", "reference", "relay", "container", "reading", "analysis", "inputs", "stats"):
+                sys.modules.pop(name, None)  # (imported anew from this hive's tree, as in a command's own process)
+            code, lines = self.doctor(clone)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual((held(clone), sh("git", "for-each-ref", cwd=clone).stdout), (before, refs))
+        self.assertFalse(mark.exists(), "nothing of the project ran")
+        self.assertEqual(held(self.registry), hives, "nothing written into the hive's tree either")
+
+    def test_a_partial_clone_is_refused(self):
+        """Its git would fetch the files the doctor reads from the project's address: the doctor reads none of them."""
+        self.healthy()
+        clone = self.clone()
+        sh("git", "config", "extensions.partialclone", "origin", cwd=clone)
+        self.assertEqual(self.doctor(clone), (1, ["WRONG clone: a partial clone (blobless or treeless), whose git would fetch the files it "
+                                                  "reads: take a full clone"]))
+
+    def test_a_branch_name_holding_a_line_separator_names_no_other_branch(self):
+        """git takes a branch name that holds U+2028, which some readers take for the end of a line: a branch so named
+        never stands for the branch hive-state."""
+        self.healthy()
+        sh("git", "update-ref", "-d", f"refs/heads/{hive.STATE_BRANCH}", cwd=self.w.upstream)
+        sh("git", "update-ref", f"refs/heads/x{chr(0x2028)}{'A' * len('refs/remotes/origin/')}{hive.STATE_BRANCH}", "main", cwd=self.w.upstream)
+        self.assertEqual(self.word(self.doctor()[1], "hive-state"), "MISSING")
+
+    def test_the_caller_is_the_job_that_calls_the_run_with_its_own_guard(self):
+        """Another job's « if » says nothing of the job that calls the hive's run; a quoted « uses: » is one."""
+        self.healthy()
+        for guard in ("    if: github.ref == 'refs/heads/stable'\n", ""):
+            with self.subTest(guard=guard):
+                self.published_file(self.CALLER, "on:\n  workflow_dispatch:\njobs:\n  test:\n    if: github.ref == 'refs/heads/main'\n"
+                                                 "    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n  hive:\n" + guard
+                                                 + f"    uses: \"Bee-ruche/hive/.github/workflows/run.yml@{self.hive_commit}\"\n")
+                code, lines = self.doctor()
+                self.assertEqual((code, self.word(lines, "caller")), (0, "OK"), lines)
+
+    def test_settings_that_do_not_load_leave_every_check_that_needs_them_said(self):
+        self.healthy()
+        self.published_file(hive.PROJECT_FILE, "{not json")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "settings"), self.word(lines, "tasks")), (1, "WRONG", "CANNOT"), lines)
+        for check in ("branch", "judge", "sandbox", "charter", "members", "guardians"):
+            self.assertEqual(self.said(lines, check), [("CANNOT", "the settings do not load")], check)
+
+    def test_a_reference_judges_paths_are_plain_files_its_manifest_within_the_kinds_size_and_its_units_writable(self):
+        manifest = json.loads((self.TOY / "bee/reference/project.json").read_text())
+        self.reference_project()
+        self.manifest(manifest)
+        self.w.set_config({"protected": ["tests/**", "bee/**", "port/**"], "judge": {**JUDGE, "kind": "reference"}})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+        self.assertIn("port/upper.c is protected: a candidate writes it", self.said(lines, "judge")[0][1])
+        self.manifest({**manifest, "padding": "x" * (256 * 1024)})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+        self.assertIn("larger than 262144 bytes", self.said(lines, "judge")[0][1])
+        self.manifest(manifest)
+        sh("git", "pull", "--quiet", "origin", "main", cwd=self.w.seed)
+        os.unlink(self.w.seed / "harness/unit.h")
+        os.symlink("frames.h", self.w.seed / "harness/unit.h")
+        sh("git", "add", "-A", cwd=self.w.seed)
+        sh("git", "commit", "--quiet", "-m", "a link", cwd=self.w.seed)
+        sh("git", "push", "--quiet", "origin", "main", cwd=self.w.seed)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+        self.assertIn("it names harness/unit.h, which the tip does not hold as a plain file", self.said(lines, "judge")[0][1])
+
+    def test_a_relay_judges_manifest_and_the_data_the_tip_holds(self):
+        toy = REGISTRY / "tools/judge/relay_toy"
+        self.healthy()
+        for path in sorted(p for p in toy.rglob("*") if p.is_file()):
+            self.w.upstream_commit(str(path.relative_to(toy)), path.read_bytes())
+        self.w.set_config({"protected": ["tests/**", "bee/**"], "judge": {**JUDGE, "kind": "relay"}})
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (0, "OK"), lines)
+        self.assertIn("judge.relay.encode_seconds: 4 (the kind takes 1 to 900)", [line[len("DECIDE "):] for line in lines])
+        self.w.upstream_commit("bee/relay/data", (toy / "bee/relay/data").read_bytes() + b"more")
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "judge")), (1, "WRONG"), lines)
+        self.assertIn("its data, bee/relay/data: not the 4270 bytes whose SHA-256 the manifest gives", self.said(lines, "judge")[0][1])
+
+    def test_a_ledger_of_odd_lines_ends_in_a_line_never_a_traceback(self):
+        self.healthy()
+        self.state_branch('{"type": "deal", "task": 5, "member_id": "x", "at": 7, "until": null}\n'
+                          '{"type": "verdict", "result": "accepted", "member_id": 3, "at": "2026-11-12T10:00:00Z", "deal": 4}\n[]\n')
+        code, lines = self.doctor()
+        self.assertIn(code, (0, 1), lines)
+        self.assertIn(self.word(lines, "hive-state"), ("OK", "WRONG"))
+        self.assertTrue(all(line.split(" ")[0] in ("OK", "MISSING", "WRONG", "CANNOT", "DECIDE") for line in lines), lines)
+
+    def test_the_wait_a_lone_account_may_set_and_the_settings_left_at_a_default_the_list_recommends_nothing_for(self):
+        self.healthy()
+        decided = [line[len("DECIDE "):] for line in self.doctor()[1] if line.startswith("DECIDE ")]
+        self.assertIn("(least 1 (0 while the file names one account alone), most 168); recommended: trial 0, invitation 2, open 2.",
+                      next(line for line in decided if line.startswith("backoff_hours: ")))
+        defaults = next(line for line in decided if line.startswith("defaults: "))
+        self.assertIn("grace_hours", defaults)
+        self.assertNotIn("deal_hours", defaults, "a setting with recommended values has a line of its own")
+
+
 if __name__ == "__main__":
     unittest.main()
