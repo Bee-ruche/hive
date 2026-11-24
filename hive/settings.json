@@ -6,7 +6,7 @@
   "invitation": "A pilot: the accounts the lead names, the hive's ordinary pace.",
   "open": "Open to any GitHub account old enough, at the hive's ordinary pace."
  },
- "sections": ["project", "opening", "trust", "pace", "limits", "judge", "cutter", "protected"],
+ "sections": ["project", "opening", "trust", "pace", "limits", "judge", "cutter", "protected", "machine"],
  "types": {
   "protocol": "the version of the hive's protocol, a whole number",
   "identifier": "lower-case letters, digits and hyphens",
@@ -33,7 +33,8 @@
   "floors": "names of the judge's kept figures, each with a number",
   "waivers": "figures, each with the most a guardian's ruling may let it reach",
   "trusted accounts": "a list of entries, each {account: a GitHub account number, roles: a list of the roles the hive knows}",
-  "patterns": "a list of paths or path patterns (dir/** for everything below a folder): printable, relative, with no empty or dot part"
+  "patterns": "a list of paths or path patterns (dir/** for everything below a folder): printable, relative, with no empty or dot part",
+  "needs": "a list of entries, each {kind: program, file, document or resources, and the fields of its kind}"
  },
  "settings": [
   {"key": "protocol", "section": "project", "type": "protocol", "required": true, "fixed": 1, "what": "The version of the hive's protocol the file is written for. A file that names another does not load."},
@@ -96,13 +97,23 @@
    "always": {"at_the_root": ["hive/**"],
               "names_at_any_depth": [".aider.conf.yml", ".augment-guidelines", ".clinerules", ".continuerules", ".cursorrules", ".envrc", ".gitattributes", ".gitmodules", ".goosehints", ".mcp.json", ".roorules", ".rules", ".windsurfrules", "agent.md", "agents.md", "agents.override.md", "airules.md", "claude.local.md", "claude.md", "conventions.md", "copilot-instructions.md", "crush.md", "gemini.md", "junie.md", "opencode.md", "qwen.md", "replit.md", "skill.md", "warp.md"],
               "folders_at_any_depth": [".agents", ".aiassistant", ".aider", ".amazonq", ".augment", ".claude", ".clinerules", ".codex", ".continue", ".crush", ".cursor", ".devcontainer", ".gemini", ".github", ".idea", ".idx", ".junie", ".kilocode", ".kiro", ".opencode", ".openhands", ".qwen", ".roo", ".trae", ".vscode", ".warp", ".windsurf", ".zed"]},
-   "what": "Paths no candidate may change, beside those the hive protects in every project ('always': the hive's own folder at the root, and, at any depth and in any letter case, the names and folders that steer git, CI and editors, and that coding agents read as instructions). The project's own sandbox, judge and tests are not among them: a project's file lists them here."}
+   "what": "Paths no candidate may change, beside those the hive protects in every project ('always': the hive's own folder at the root, and, at any depth and in any letter case, the names and folders that steer git, CI and editors, and that coding agents read as instructions). The project's own sandbox, judge and tests are not among them: a project's file lists them here."},
+
+  {"key": "needs", "section": "machine", "type": "needs", "default": [], "most_entries": 10,
+   "kinds": {"program": {"fields": ["name", "package"], "optional": ["version"]},
+             "file": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 536870912},
+             "document": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 33554432},
+             "resources": {"fields": [], "optional": ["processors", "memory_mb", "disk_mb", "architectures"], "processors": [1, 256], "memory_mb": [64, 1048576],
+                           "disk_mb": [1, 4194304], "architectures": ["x86_64", "aarch64"], "most_entries": 1}},
+   "what": "What a worker's machine needs for the project, which a worker's tool checks before it asks for a task and before it starts one (none: a worker's machine is not checked before an ask). A program of the system (/usr/bin/<name>, the package that provides it, and a dotted prefix of its version); a file or a document the tool fetches over https, held to its SHA-256 and size, into a folder of its own outside the clone, shown to the sandbox read-only at /needs and never run on the machine, each with the licence its owner accepts before the yes; the machine's processors, memory, free disk and architecture. No entry is ever a command, an address other than https, a file without its fingerprint, a key, an account or a service: a file that names one does not load. Not a task's needs (the tasks done first), which the tasks file gives."}
+
  ],
  "joint_bounds": [
-  {"settings": ["limits.files", "limits.file_bytes"], "product_most": 268435456, "what": "What all the files one candidate leaves changed may weigh together: limits.files times limits.file_bytes, 256 MiB at most. Each is read whole in the judging step and again in the writing step, and the merged tree is written out for the judge."}
+  {"settings": ["limits.files", "limits.file_bytes"], "product_most": 268435456, "what": "What all the files one candidate leaves changed may weigh together: limits.files times limits.file_bytes, 256 MiB at most. Each is read whole in the judging step and again in the writing step, and the merged tree is written out for the judge."},
+  {"settings": ["needs"], "bytes_most": 2147483648, "what": "What all the files and documents of a project's needs may weigh together: 2 GiB at most. A worker's tool fetches them into a folder of its own and reads them all again, at each command that checks them."}
  ],
  "not_settings": [
-  "Where project code runs (the project's sandbox, the judge's containers, without network) is the hive's, the same for every project: no project file changes it.",
+  "Where project code runs (the project's sandbox, the judge's containers, without network) is the hive's, the same for every project: no project file changes it; a project's needs add to the sandbox only one read-only folder of files held to their fingerprints (/needs), and nothing to the judge's containers.",
   "What a member may write (branches of its own fork, nothing else) and what the hive keeps of a fork's text (nothing) are the hive's.",
   "The hive's own code is Bee-ruche/hive's, at the commit the project's workflow names: a project's file names a kind of judge, never brings one.",
   "What is protected in every project (the 'always' of the protected setting): a project's file adds paths to these; it removes none.",

@@ -143,6 +143,14 @@ The limits of this way, today:
    single firing, or firings more than two hours apart, ask and never work, and a task dealt and left costs your
    account a wait. The prompt states the schedule ("This worker runs every hour."): the worker cannot see it otherwise.
 
+**What the project needs.** A project's settings may name what a worker's machine needs: programs of the system and
+the packages that provide them, the machine's processors, memory, disk and architecture, and files or documents the
+worker's tool fetches, each held to its fingerprint, under a licence you accept. Run
+`python3 -I ~/.hive/protocol/tools/hive/hive.py needs --project <the project's repository>` once (on Linux, with the
+hive's protocol taken as the prompt below says: no clone and no login needed), or read the lines your worker's first
+run prints (`NEEDS-…`, `CANNOT-ASK`), and prepare the machine yourself. Nothing of the hive installs anything: the
+worker only says what is missing, and asks for no task while it is (at no cost).
+
 ## The prompt
 
 ```text
@@ -182,6 +190,19 @@ the project, never a task: a file that a single task names cannot be chosen; and
 without completing it is set aside while two others at least are free for you); otherwise your worker is dealt as
 anyone's, and the deal's line in the ledger says why. It never moves you ahead of anyone, and your worker does the
 task it is dealt, whichever it is.
+
+Three more sentences, each optional, for a project that names needs (`hive needs` prints them, and their digest):
+
+- "I accept the project's needs <digest>.", with the digest `hive needs` printed (`NEEDS-DIGEST`): the worker's tool
+  may then fetch the project's files and documents, from the hosts and under the licences it showed you, into a
+  folder of its own outside the clone (`~/.hive/needs`). If the project changes a file, a host or a licence, the
+  digest changes: your worker stops (`NEEDS-UNACCEPTED`) until you have read the change and given the new one.
+- "This machine may install, from the system's archive, the packages <list> before anything of the project runs.":
+  only those packages, by name, and only from the archive the machine already has. Without it, your worker installs
+  nothing.
+- "Ask even if this machine lacks what the project needs.": your worker asks all the same. It usually ends with the
+  task given back because the machine cannot run it (`cannot_run`), which costs the first wait: leave it out unless
+  you know why.
 
 If your schedule is not hourly, change the sentence "This worker runs every hour." to say what it is ("This worker
 runs every two hours from 18:00 to 23:00 UTC on Sundays."): the worker asks for a task only if it will be back within

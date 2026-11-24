@@ -979,6 +979,67 @@ Each fork is read with one listing and one fetch, both limited in time. When the
 forks runs out, what is left waits for the next run; the forks are read in an order drawn anew each hour from the
 hour and the fork's own number, which adding forks to the list does not shift.
 
+## What a worker's machine needs
+
+A project's settings may say what a worker's machine needs, in a block `needs` of `hive/project.json` (not a
+task's `needs`, the tasks done first, which the tasks file gives): a list of ten entries at most, each with its
+`kind` and the fields of that kind, no more and no fewer ([`hive/settings.json`](../hive/settings.json) gives each
+kind's fields and bounds):
+
+- `program`: `name`, a bare file name meaning `/usr/bin/<name>` and nothing else; `package`, the system's package
+  that provides it, only ever shown; `version` (optional), a dotted prefix of the version the program gives (`1.75`
+  takes 1.75.0 and 1.75.2, never 1.7.5).
+- `file` and `document`: `name` (one folder for both: each name once), `why`, `url`, `sha256`, `bytes` (512 MiB at
+  most for a file, 32 MiB for a document, 2 GiB for all of them together) and `licence`.
+- `resources`, once at most: `processors`, `memory_mb`, `disk_mb` (free on the clone's disk) and `architectures`
+  (`x86_64`, `aarch64`), one at least.
+
+**What is never allowed**, and a file that names it does not load, at any step of the hive or any command of a
+worker: a command written by the project (no field of any kind is run: a program is only asked `--version`, by the
+tool); an address other than `https://<a public name>/<path>` (no user, port, query or fragment, no machine's
+number, no `localhost`, no `..`, and no part of 32 characters or more that looks like a key or a token, but a
+commit's id or a fingerprint); a file or a document without its fingerprint and its size; a key, a token, an account
+to create, or a service to reach while working (there is no field for any of them, and a host that asks for an account
+is refused at the fetch).
+
+**The soft check.** `next` (before it says `ASK`, and after a task's data), `ready` (before it asks) and `start`
+(before it changes the clone) check the needs on the machine, and say what is missing:
+
+- a program must be a file of the system's (`/usr/bin/<name>` leads, once every link is followed, to a plain file
+  under `/usr/`, owned by root, that nobody else may write), and answer `--version` with exit 0 and, if the entry
+  names one, a version that begins with it. It is run in an empty folder of its own, with `PATH`, `LANG` and `LC_ALL`
+  alone, nothing on its input, for ten seconds at most, 64 KiB of its output read. A program the machine lacks is
+  met all the same when the project's commit holds `bee/sandbox/Dockerfile` and the system's docker answers
+  (`NEEDS-DOCKER`: the task is done in the sandbox's Docker form);
+- resources are read from the system alone (processors and memory, with the control group's bounds; free room on the
+  clone's disk; `uname`'s architecture);
+- files and documents are fetched only once the user accepted them, by their digest: the first 16 hexadecimal digits
+  of the SHA-256 of `[{name, url, sha256, bytes, licence}]` of each, in the file's order, as canonical JSON
+  (`--needs-accepted <digest>`). Another file, host or licence is another digest, and the workers of the project stop
+  (`NEEDS-UNACCEPTED`) until their users have read the change. They are fetched over https, by the tool itself
+  (`User-Agent: bee-hive-needs/1`, nothing of the user's; a redirection followed only to https on a public host,
+  five at most), into `~/.hive/needs/<owner>/<name>/` in the home the system's list of users gives (never `$HOME`):
+  outside the clone, a folder of the tool's own that holds the declared files alone, each mode 0444, held to its size
+  and SHA-256 again at every check. Nothing there is extracted, opened or run on the machine.
+
+What is missing is said in `NEEDS-MISSING` lines (`NEEDS-MET` when everything holds): `next` then says `CANNOT-ASK`
+in place of `ASK`, `ready` makes no ask, and `start` changes nothing, each at no cost. `--despite-needs`, from the
+user's own words alone, prints the lines and goes on. A deal whose needs show up unmet after the ask (an entry added
+since, a file that vanished, a fetch that fails) is given back as `cannot_run`. Nothing installs anything: the guide
+installs, from the system's archive, only the packages those lines name, and only where the user's own words allow
+it. `hive.py needs --project <owner/name>` prints the needs as the project's own address gives them, with their
+digest, for the user to read before the yes: it reads the settings at the default branch's commit from
+`raw.githubusercontent.com`, needs no clone and no login, and checks and fetches nothing.
+
+**What the sandbox sees.** The project's own launcher (`bee/sandbox/sans-docker.sh`) shows the needs' folder to
+project code at `/needs`, read-only, and nothing else of the home ([hosting.md](hosting.md), "What a project holds",
+gives its lines); `hive.py doctor` notes a launcher that does not.
+
+**No judge reads the needs.** The judge's data is the relay manifest's own (fetched at the image step, held to its
+fingerprint), the same for every candidate; `/needs` exists in a worker's sandbox alone, and project code the judge
+runs must not depend on it. The doctor notes a relay project whose data no file of the needs carries: its workers
+cannot measure on the judge's data.
+
 ## A project's files
 
 - `hive/project.json`, in the project's own repository, on the branch it publishes: the repository (`repo`, the one
@@ -1050,3 +1111,5 @@ hour and the fork's own number, which adding forks to the list does not shift.
   contributions a week.
 - Read only the forks that changed since the last run.
 - An "invited" mode for outside projects that want accepted work offered on a branch they pull from.
+- In a project's needs: a GPU, a version « at least » (a version is a dotted prefix), and an archive unpacked by the
+  tool (never: an archive is unpacked, if at all, by project code inside the sandbox).

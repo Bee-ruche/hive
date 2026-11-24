@@ -23,7 +23,8 @@ python3 tools/hive/hive.py doctor --project <owner/name> --repo <a full clone of
 
 It reads the clone's own branches (those under `refs/remotes/origin`), and, in the hive's tree it runs from
 (`--registry`), the list of settings (`hive/settings.json`), the judges' own checks of a manifest and the hive's
-history. It asks no address and runs no file of the project. A clone whose git would fetch what it reads (a partial
+history. It asks no address (but for the files of the project's needs, and only with `--network`) and runs no file
+of the project. A clone whose git would fetch what it reads (a partial
 clone, or one with a promisor remote) is refused. It writes nothing to the clone and pushes nothing: the ledger is
 written to a folder of its own in the system's temporary folder, read there, and removed. It prints one line per
 check, the explanation first:
@@ -75,6 +76,16 @@ holds it on files. A check that stops on what it read says so in its own WRONG l
 - `judge-tasks`, for a reference or relay judge: each open task is one the judge takes. A reference task names a unit
   of the manifest (`options.unit`), with exactly that unit's files; a relay task's files lie under the program.
 - `sandbox`: `bee/sandbox/sans-docker.sh` at that tip, protected: a worker runs project code only through it.
+- `needs`: what the settings say a worker's machine needs ([protocol.md](protocol.md), "What a worker's machine
+  needs"), counted by kind; the settings' loader holds their rules. A NOTE when they name files or documents and the
+  sandbox's launcher does not name `.hive/needs` (a test of its bytes: item 7 below gives the lines); a NOTE for a
+  relay judge whose data, given by an address, no file of the needs carries (its SHA-256 and size, of the data or of
+  what is fetched): workers cannot measure on it; and a CANNOT for the versions of the programs against the judge's
+  image, which only a build would show.
+- `needs-fetch`, for a project whose needs name files or documents: CANNOT unless the command is given `--network`.
+  With it, each is fetched as a worker's tool fetches it, into a folder of the system's temporary folder, removed
+  afterwards: OK with its size and host, WRONG when the host's answer is not the file (another size or SHA-256, an
+  account asked, a status), CANNOT when the host cannot be reached (it may be the doctor's own network).
 - `charter`: `hive/charter.md` on the published branch, said where it is. No run reads it: where a project with a
   cutter block has none, a NOTE says that the AI cutter writes no task of its own without it.
 - `members`: `members.only` and `members.banned` as the rule that decides whose fork is read takes them. `only` is
@@ -228,6 +239,41 @@ All of it in the project's own repository. Copies of the first test project's ar
    (held to the manifest's SHA-256) at every run on a hosted runner; a project that keeps its data in its own tree
    fetches nothing. Every project protects
    `hive/**` from contributions besides: no candidate can change the settings, the tasks or the caller.
+7. **What a worker's machine needs, if anything** (`needs` in the settings: [protocol.md](protocol.md), "What a
+   worker's machine needs"): the programs, the resources, and the files and documents a worker's tool fetches into
+   `~/.hive/needs/<owner>/<name>/` (the repository's name in lower case). Project code sees those files only if the
+   project's own sandbox shows them: the hive cannot, since the launcher is the project's file. The lines that show
+   them at `/needs`, read-only, and nothing else of the home, in a launcher built as the pilots' are
+   (`bee/sandbox/sans-docker.sh`; `<owner>/<name>` in lower case):
+   - in the outer part, after the checks of `.git`:
+
+     ```bash
+     # The project's needs (hive/project.json, « needs »): the files the hive's tool fetched and held to their
+     # fingerprints, in the folder it keeps for this project in the home of the user this launcher runs as (from the
+     # system's list of users, not from $HOME). Shown read-only at /needs, or not at all.
+     needs=$(getent passwd "$(id -u)" | cut -d: -f6)/.hive/needs/<owner>/<name>
+     if [ -e "$needs" ]; then
+       [ "$(realpath -- "$needs")" = "$needs" ] && [ -d "$needs" ] || refuse "the needs' folder is not a plain folder"
+     else needs=; fi
+     ```
+   - `$needs` given to `inside` as one more argument, and in `inside`, after `/tmp` is made:
+
+     ```bash
+     if [ -n "$needs" ]; then mkdir "$new/needs"; mount --rbind "$needs" "$new/needs"; readonly_tree "$new/needs"
+       mount -o remount,bind,ro,nosuid,nodev "$new/needs"; fi
+     ```
+   - `/needs` added to the paths the launcher checks are not writable inside the sandbox.
+
+   In the Docker form, one line before `docker run` (Docker refuses a bind whose source is missing):
+
+   ```bash
+   needs=$(getent passwd "$(id -u)" | cut -d: -f6)/.hive/needs/<owner>/<name>
+   [ -d "$needs" ] && mounts+=(--mount "type=bind,source=$needs,target=/needs,readonly")
+   ```
+
+   The sandbox's own test then shows that `/needs` is read-only and can be neither renamed nor removed, that no
+   folder means no `/needs`, and that a folder reached through a link is refused. No judge reads the needs: the
+   judge's data is its manifest's own.
 
 **Who can change the settings is whoever can write to the published branch.** A change acts at the next run that
 plans after it (see "What a run reads, and when").
