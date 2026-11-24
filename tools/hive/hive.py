@@ -213,7 +213,6 @@ DUTY_BRANCH = "hive/duty"
 DUTY_LINE = re.compile(r"(Hive-Action|Hive-Member|Hive-Role|Hive-Deal|Hive-Because): (.{1,200})\Z")
 CUT_BRANCH = "hive/cut"
 PROPOSAL_LINE = re.compile(r"(Hive-Action|Hive-Member|Hive-Deal|Hive-Published|Hive-Tasks|Hive-Backlog|Hive-Area): (.{1,200})\Z")
-DIGEST = re.compile(r"[0-9a-f]{64}\Z")  # a file's SHA-256, as the cutter's gate prints it (cmd_cut_check: CHECKED)
 # How a duty ends: its time ran out, its account gave it back (RELEASES), or the plan read its proposal: a cut that
 # stands, nothing to cut, or a proposal refused (CUT_REFUSALS).
 DUTY_OUTCOMES = ("expired", "released", "cut", "nothing", "refused")
