@@ -57,8 +57,11 @@ STREAM_BYTES = 64 << 20  # a whole file of cases, or of answers
 SOURCE_BYTES = 64 << 20  # what one container is given of the project's tree
 ENTRIES = 20000          # files and folders under the paths one container is given
 # An image's name -> the packages added to the common judge's image (tools/judge/Dockerfile.base). « rust »: the
-# compiler and the linker a port to Rust is built with, as the system's own release packages them.
-IMAGES = {"common": (), "rust": ("rustc", "lld")}
+# compiler and the linker a port to Rust is built with, as the system's own release packages them. « wasm »: what a
+# project builds a unit into a WebAssembly module with, and that module into a native driver: clang 18 for the wasm32
+# target, its linker (wasm-ld), and wabt (wasm-objdump, wasm-validate, wasm2c and its runtime), from the same release.
+# The relay kind reads the same table (relay.py).
+IMAGES = {"common": (), "rust": ("rustc", "lld"), "wasm": ("clang-18", "lld-18", "wabt")}
 CONTROL = 3              # the control's builds are given this many times a candidate's time
 GRACE = 30               # a container ends itself this many seconds after its time bound, should the judge be gone
 OVERHEAD = 10            # seconds counted for one container's start and end

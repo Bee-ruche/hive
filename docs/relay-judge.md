@@ -34,7 +34,7 @@ Four things its plugin contract does not hold ([common-judge.md](common-judge.md
 | Part | Where | Runs |
 | --- | --- | --- |
 | The kind: the steps below, the isolation (`container.py`), the safe reading (`reading.py`), the launcher that reads the kernel's clock (`chrono.c`), the gate that shuts a program's system calls (`gate.c`), the comparison, the count, the verdict | the hive | on the judge's machine |
-| The image | the hive: the manifest names an image the hive holds (`common`, `rust`), never brings one | — |
+| The image | the hive: the manifest names an image the hive holds (`common`, `rust`, `wasm`: the reference kind's table, `IMAGES`), never brings one | — |
 | The manifest `bee/relay/project.json`: data | the project's tip, a path no candidate can change | never: it is read, every field checked against a floor and a cap |
 | `bee/relay/build` and whatever it needs beside the program (the skeleton) | the project's tip, paths no candidate can change | in containers only |
 | The data: a file of the tip, or an address with its fingerprint | the project's tip; fetched once, at the image step | never: bytes |

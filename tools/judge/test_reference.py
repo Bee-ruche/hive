@@ -221,7 +221,7 @@ class TestTheManifest(Base):
         """An image is the registry's: a manifest names one of these, and what it names is the common judge's image
         with the packages the table lists, whatever else the manifest says."""
         import container
-        self.assertEqual(reference.IMAGES, {"common": (), "rust": ("rustc", "lld")})
+        self.assertEqual(reference.IMAGES, {"common": (), "rust": ("rustc", "lld"), "wasm": ("clang-18", "lld-18", "wabt")})
         self.assertTrue(all(container.PACKAGE.fullmatch(package) for packages in reference.IMAGES.values() for package in packages))
         for name, packages in reference.IMAGES.items():
             with mock.patch.object(reference.container, "build_image", return_value="label") as build, \
@@ -846,6 +846,19 @@ class TestTheJudgeInContainers(Base):
                                [], 16, 60, JudgeError, "the image's tools")
         said = ran.stdout.decode()
         self.assertRegex(said, r"(?s)\Arustc 1\.\d+\.\d+ .*LLD \d+\..*\bcc \(.*\n[1-9]\d*\n\Z")
+
+    def test_the_image_for_wasm_holds_its_compiler_its_linker_and_wasm2c(self):
+        """The image a project names to build a unit into a WebAssembly module, and that module into a native driver:
+        clang for the wasm32 target, its linker, wabt's reader and translator with the translator's runtime, and the
+        C compiler of the reference's side and of the driver."""
+        import container
+        docker = container.Docker(reference.image_of(reference.check_manifest({**MANIFEST, "image": "wasm"})), memory="256m")
+        ran = reference.launch(docker, ["sh", "-c", "clang-18 -print-targets | grep -cE '^ *wasm32 ' && wasm-ld-18 --version"
+                                        " && wasm2c --version && wasm-objdump --version && cc --version | head -n 1"
+                                        " && test -f /usr/include/wasm-rt.h && test -f /usr/share/wabt/wasm2c/wasm-rt-impl.c && echo runtime"],
+                               [], 16, 60, JudgeError, "the image's tools")
+        said = ran.stdout.decode()
+        self.assertRegex(said, r"\A1\n(Ubuntu )?LLD 18\.\d+\.\d+.*\n1\.0\.\d+\n1\.0\.\d+\ncc \(.*\nruntime\n\Z")
 
     def test_through_the_bases_own_judging_on_a_real_repository(self):
         """The base's judging step as it runs: it writes the tip's tree and the candidate's merged tree out of a git
