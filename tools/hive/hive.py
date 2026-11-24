@@ -14,9 +14,11 @@ Members stay strangers and nothing asked of them changes; a ruling is answered o
 
 A project may also trust accounts with a role, by their numbers: « cut », its cutting, is the one there is. Such an
 account asks for a DUTY of its role in its own fork; the hive deals one duty of a role at a time, to the least loaded
-account that asked, and the duty ends when its time is up or when its account gives it back. A duty is counted apart
-from everything a member does: no member's wait, day's limit or place reads it. This version reads nothing a duty
-produces.
+account that asked. A cut duty's work is a PROPOSAL, one commit in the account's own fork that changes the tasks file
+(and perhaps the backlog) on the published commit; the hive holds it to the cutter's gate and records whether it
+stands. A duty also ends when its time is up or when its account gives it back. A duty is counted apart from
+everything a member does: no member's wait, day's limit or place reads it. Nothing here publishes a proposal: the
+published branch is the project's own to move.
 
 Trust: everything that comes from a fork (objects, ref names, commit messages, logins) is hostile data. This file
 never checks a fork's tree out with git, never runs a hook or a filter, and never passes a fork's string to a
@@ -197,15 +199,31 @@ ACTIONS = ("ready", "submit", "release")
 # TRUSTED ACCOUNTS AND THEIR DUTIES. A project's file may name accounts it trusts with a role, by their numbers
 # (« trusted », trusted_of): « cut », the project's cutting, is the one role there is. Such an account that is free
 # asks for a duty of its role in its own fork, at one branch (DUTY_BRANCH), as a member asks for a task (read_duty);
-# the plan deals one duty of a role at a time (plan, step 5) and ends it when its time is up or when its account gives
-# it back. A duty and its end are lines of their own in the ledger (« duty », « duty-end »): no member's standing, no
+# the plan deals one duty of a role at a time (plan, step 5) and ends it on what the duty produced (below), when its
+# time is up, or when its account gives it back. A duty and its end are lines of their own in the ledger (« duty », « duty-end »): no member's standing, no
 # day's limit, no cover and no tally reads them, and an account's duties are counted apart from any work it does as a
-# member (Ledger.duty_wait). This version reads nothing a duty produces: every duty ends by its time or its account.
+# member (Ledger.duty_wait). What a cut duty produces is a PROPOSAL (read_proposal): one commit, on the published
+# commit it was cut against, that changes the tasks file and perhaps the backlog, at one branch of the account's fork
+# (CUT_BRANCH). The plan holds it to the duty, to the published commit and to the cutter's gate (proposal_end), and the
+# duty's end says which proposal stands (« cut »), that there was nothing to cut (« nothing »), or why it was refused.
+# Nothing here publishes it: the published branch is the project's own to move.
 ROLES = ("cut",)
 TRUSTED_MOST = 32  # the most accounts a project's file may trust (trusted.accounts)
 DUTY_BRANCH = "hive/duty"
 DUTY_LINE = re.compile(r"(Hive-Action|Hive-Member|Hive-Role|Hive-Deal|Hive-Because): (.{1,200})\Z")
-DUTY_OUTCOMES = ("expired", "released")  # how a duty ends: its time ran out, or its account gave it back (RELEASES)
+CUT_BRANCH = "hive/cut"
+PROPOSAL_LINE = re.compile(r"(Hive-Action|Hive-Member|Hive-Deal|Hive-Published|Hive-Tasks|Hive-Backlog|Hive-Area): (.{1,200})\Z")
+DIGEST = re.compile(r"[0-9a-f]{64}\Z")  # a file's SHA-256, as the cutter's gate prints it (cmd_cut_check: CHECKED)
+# How a duty ends: its time ran out, its account gave it back (RELEASES), or the plan read its proposal: a cut that
+# stands, nothing to cut, or a proposal refused (CUT_REFUSALS).
+DUTY_OUTCOMES = ("expired", "released", "cut", "nothing", "refused")
+# Why a proposal is refused: cut against an earlier commit the branch was at during the duty (« stale »: at no cost to
+# its account, the branch moved under it); not held to the gate because the hive could not read what it reads of its
+# own, the project's published backlog, its tip, the state (« unchecked »: at no cost either); not one commit on the
+# plan's commit that changes the tasks file and the backlog alone, with the digests its marker says (« malformed »); or
+# refused by the cutter's gate (« gate »). The first two cost nothing (CUT_FREE), the others the first wait.
+CUT_REFUSALS = ("stale", "unchecked", "malformed", "gate")
+CUT_FREE = ("stale", "unchecked")
 DUTY_HOURS_MOST = 24  # the longest a duty may last (duty_hours)
 CUT_HOURS_MOST = 7 * 24  # the longest a project may ask between two cut duties (trusted.cut_hours)
 WINDOW_DAYS_MOST = 365  # the longest a project may count the duties an account was dealt (trusted.window_days)
@@ -1317,25 +1335,28 @@ class Ledger:
             elif kind == "duty-end":
                 duty = state.get(e.get("role"))
                 if duty and duty["member_id"] == e.get("member_id") and duty["at"] == e.get("duty"):
-                    duty["state"] = "closed"
+                    duty.update(state="closed", outcome=e.get("outcome"))  # (how it ended: duty_due reads « nothing »)
         return state
 
     def duty_wait(self, member_id, instant, config):
         """The instant until which an account is dealt no duty, or None: its standing as a trusted account, read from
         the « duty-end » lines alone and kept apart from its standing as a member (standing, which reads no duty line,
         as this reads no deal or verdict). A duty that ran out costs the wait after a deal held for nothing
-        (backoff_hours, doubled at each such duty in a row, BACKOFF_MAX_HOURS at most); a duty its account gave back
-        costs the first wait, each time, never doubled (RELEASES); a duty ended at no fault of its account's (its role
-        taken from it by the project's file) costs nothing. Nothing ends a duty well in this version, so nothing clears
-        the doubling but its bound."""
+        (backoff_hours, doubled at each such duty in a row, BACKOFF_MAX_HOURS at most); a duty its account gave back, or
+        whose proposal was refused (malformed, or by the gate), costs the first wait, each time, never doubled; a cut that
+        stands, or nothing to cut, clears every wait, as an acceptance does a member's; a duty ended at no fault of its
+        account's (its role taken from it, a pause, a day without a run or a read, a proposal gone stale) costs nothing.
+        Endings are read in the ledger's order."""
         streak, last, given = 0, None, None
         for e in self.events:
             if e.get("type") != "duty-end" or e.get("member_id") != member_id or e.get("fault"):
                 continue
             if e.get("outcome") == "expired":
                 streak, last = streak + 1, e["at"]
-            elif e.get("outcome") == "released":
+            elif e.get("outcome") in ("released", "refused"):
                 given = e["at"]
+            elif e.get("outcome") in ("cut", "nothing"):
+                streak, last, given = 0, None, None
         waits = []
         if streak:
             waits.append(parse_iso(last) + dt.timedelta(hours=min(BACKOFF_MAX_HOURS, config["backoff_hours"] * 2 ** min(streak - 1, 20))))
@@ -1625,6 +1646,33 @@ def read_duty(message):
     if action == "release" and stamp(deal) and because in RELEASES:
         return {"action": "release", "member": member, "role": role, "deal": deal, "because": because}
     return None
+
+
+def read_proposal(message):
+    """The proposal a commit message carries (a cut duty's), or None. Each line alone on its line, each key once:
+      « Hive-Action: cut » + « Hive-Member: <login> » + « Hive-Deal: <the duty's instant> » + « Hive-Published: <the
+          published commit it was cut against> » + « Hive-Tasks: <the SHA-256 of the tasks file it proposes> »
+          (+ « Hive-Backlog: <the SHA-256 of the backlog it proposes> ») (+ « Hive-Area: null »).
+    The digests are those the cutter's gate prints (cmd_cut_check: CHECKED). « area » is reserved: absent or null,
+    and any other value is no proposal of this version's. The member is the account the commit is for: it counts only
+    in that account's own fork, at CUT_BRANCH, and only if the project trusts that account with « cut » (discover). A
+    message that names a task, a role, a commit, a waiver, a tier, a model, a preference or a code is another
+    marker's, never a proposal; and no other reader takes « cut »."""
+    if re.search(r"^Hive-(Task|Role|Commit|Waive|Tier|Model|Prefer|Because): ", message, re.M):
+        return None
+    found = {}
+    for line in message.split("\n"):
+        m = PROPOSAL_LINE.match(line.rstrip("\r"))
+        if m:
+            if m.group(1) in found:
+                return None  # twice the same key: no marker
+            found[m.group(1)] = m.group(2)
+    member, deal, published, tasks = (found.get(key) for key in ("Hive-Member", "Hive-Deal", "Hive-Published", "Hive-Tasks"))
+    backlog, area = found.get("Hive-Backlog"), found.get("Hive-Area", "null")
+    if not (found.get("Hive-Action") == "cut" and member and LOGIN.match(member) and stamp(deal) and is_sha(published)
+            and DIGEST.match(tasks or "") and (backlog is None or DIGEST.match(backlog)) and area == "null"):
+        return None
+    return {"action": "cut", "member": member, "deal": deal, "published": published, "tasks": tasks, "backlog": backlog, "area": None}
 
 
 def carries(repo, ruling, commit):
@@ -2235,7 +2283,10 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
     place: in such a fork, by that fork's owner, at the tip of DUTY_BRANCH, for a role the file gives that account. It
     is one entry (« action »: duty): the role, and for a release the duty's instant and the release's code. Anywhere
     else, under another name, or for a role the file does not give that account, a commit shaped like a duty marker is
-    nothing, for good. A fork read for its owner's duties alone is read for nothing else, as a guardian's is. Whether a
+    nothing, for good. A cut duty's proposal (read_proposal) counts the same way, at the tip of CUT_BRANCH, by the fork's
+    owner, for an account the file trusts with « cut »: one entry (« action »: cut) with the duty's instant, the published
+    commit and the digests its marker names; what the proposal holds, the plan reads (proposal_end). A fork read for
+    its owner's duties alone is read for nothing else, as a guardian's is. Whether a
     trusted account's fork was read is said in `duty_reads` (a dict the caller gives, filled here), by the same rules as
     `reads` for a member's: True when it was read whole or holds nothing for the hive by its owner's doing, False when
     the hive could not read it; an account with no fork listed is not in it."""
@@ -2331,6 +2382,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 marker = read_marker(message) if message is not None else None  # (a commit too long to be read: no marker)
                 ruling = read_ruling(message) if message is not None and not marker else None
                 duty = read_duty(message) if message is not None and not marker and not ruling else None
+                proposal = read_proposal(message) if message is not None and not marker and not ruling and not duty else None
                 if ruling:
                     if guardian and ruling["member"].lower() == fork["login"].lower() \
                             and branches.get("refs/heads/" + RULE_BRANCH.format(task=ruling["task"])) == sha:
@@ -2353,6 +2405,16 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                     else:
                         # Of an account the project does not trust with that role, in another's name, or at another
                         # branch than DUTY_BRANCH: nothing here, for good.
+                        mine.append(sha)
+                elif proposal:
+                    if "cut" in holds and proposal["member"].lower() == fork["login"].lower() \
+                            and branches.get("refs/heads/" + CUT_BRANCH) == sha:
+                        found.append({"sha": sha, "repo_id": fork["repo_id"], "login": fork["login"], "member_id": fork["id"],
+                                      "action": "cut", "deal": proposal["deal"], "published": proposal["published"],
+                                      "tasks": proposal["tasks"], "backlog": proposal["backlog"], "area": None})
+                    else:
+                        # Of an account the project does not trust with « cut », in another's name, or at another branch
+                        # than CUT_BRANCH: nothing here, for good.
                         mine.append(sha)
                 elif not marker:
                     mine.append(sha)
@@ -2691,14 +2753,19 @@ def check_duties(plan_, config, tasks, read, counted):
     twice. One whose account the project's file no longer trusts with its role is at the hive's fault, whatever its
     time. Of an account the file trusts: one that ran out is past its time and the project's grace, and at the hive's
     fault once it is a day past them (UNREAD_HOURS: the hive did not run, or could not read the fork, for that long);
-    one its account gave back names a release the plan sets aside (it sets aside every release it read), and no two
-    ends name one release. What the plan step alone read stays its word: that the account's fork held that release,
-    that it was read whole for a duty it says ran out at its account's cost, and that the published branch shows a
-    pause for one it says ran out at no cost within that day (paused_between).
+    one its account gave back names a release the plan sets aside (it sets aside every release it read); one ended on
+    its proposal is a cut duty of an account the file trusts with « cut », names a proposal the plan sets aside, and is
+    « stale » if and only if that proposal was cut against another commit than the one the plan reads the settings at;
+    no two ends name one release or one proposal. What the plan step alone read stays its word: that the account's fork
+    held that release or that proposal, what the proposal holds and what the cutter's gate said of it (proposal_end;
+    whoever publishes it holds it to the gate again), that the fork was read whole for a duty it says ran out at its
+    account's cost, and that the published branch shows a pause for one it says ran out at no cost within that day
+    (paused_between).
 
     Each duty dealt is one per role, of a role the file gives its account, to an account that holds no live duty and
     that its duty standing keeps waiting no longer (Ledger.duty_wait), at the project's pace (duty_due: no duty of its
-    role live, and trusted.cut_hours since the latest one, or the project short of tasks), and its asks are among
+    role live, and trusted.cut_hours since the latest one, or the project short of tasks unless the latest found a cut
+    or nothing to cut), and its asks are among
     what the plan sets aside. Which asker had it (the least loaded, then a draw) stays the plan's word, as a member's
     draw does. A plan that says otherwise is not the hive's: HiveError, and nothing of it is written."""
     instant, held, spent = parse_iso(plan_["at"]), read.duties(), {sha for shas in plan_["ignored"].values() for sha in shas}
@@ -2717,9 +2784,15 @@ def check_duties(plan_, config, tasks, read, counted):
             raise HiveError("the plan says a duty ran out at its account's cost a day past its time and the grace: nothing is written")
         if end["outcome"] == "released" and end["release"] not in spent:
             raise HiveError("the plan says a duty was given back by a release it does not set aside: nothing is written")
-    given = [end["release"] for end in ends if "release" in end]
+        if "proposal" in end and not (trusted and end["role"] == "cut" and end["proposal"] in spent):
+            raise HiveError("the plan ends a duty on a proposal it does not set aside, or of an account the project's file does not "
+                            "trust with « cut »: nothing is written")
+        if "proposal" in end and end.get("reason") != "malformed" and (end["published"] == plan_["settings"]) == (end.get("reason") == "stale"):
+            raise HiveError("the plan says a proposal was cut against the commit it reads the settings at, and calls it stale, or "
+                            "against another, and holds it as if it were not: nothing is written")
+    given = [end["release"] for end in ends if "release" in end] + [end["proposal"] for end in ends if "proposal" in end]
     if len({(end["role"], end["member_id"], end["duty"]) for end in ends}) != len(ends) or len(set(given)) != len(given):
-        raise HiveError("the plan ends one duty twice, or two by one release: nothing is written")
+        raise HiveError("the plan ends one duty twice, or two by one release or one proposal: nothing is written")
     now_held, done = counted.duties(), counted.done()
     left = sum(1 for task_id, task in tasks.items() if not task.get("closed") and task_id not in done)
     holding = {duty["member_id"] for duty in now_held.values() if duty["state"] == "live"}
@@ -2794,9 +2867,12 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        are fewer than the project's guardians cover (cover_of); beyond that it is passed over, at no cost, and its
        ask waits for a plan that finds room. Members the project has go on as they would, and the order of the
        askers is the one above.
-    5. Duties, in a project that trusts accounts with a role (trusted_of). A live duty ends when its account gives it
+    5. Duties, in a project that trusts accounts with a role (trusted_of). A live cut duty ends on its proposal (a
+       commit at CUT_BRANCH of its account's fork that names that duty, read while the duty is live, whatever its
+       time, as a candidate is: proposal_end says « cut », « nothing » or « refused », and a release of the same duty
+       is spent). Else a live duty ends when its account gives it
        back (a release of that duty, read_duty: « released », the code and the release's commit id), or at once and at
-       no cost when the project's file no longer trusts its account with its role. Once its time and the project's
+       no cost when the project's file no longer trusts its account with its role (before anything else). Once its time and the project's
        grace are past it runs out (« expired »): at no cost to its account if the project was paused while it was
        live (paused_between) or if this run comes a day after (UNREAD_HOURS: the hive did not run, or could not read
        the account's fork, for that long); else at its account's cost if the account's fork was read whole in this
@@ -2807,8 +2883,8 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        its duty standing still keeps waiting (Ledger.duty_wait); the least loaded first (the duties of that role the
        ledger dealt it within trusted.window_days: Ledger.duty_load), then a draw. Its ask is used. Nothing of it
        touches a member's standing, the day's limit, the cover or the tasks: a duty is no deal, and a trusted
-       account's work as a member goes on as anyone's. This version reads nothing a duty produces: a duty ends by
-       its time or by its account.
+       account's work as a member goes on as anyone's. A cut that stands is said on its duty's end, and published by
+       nothing here. After « cut » or « nothing », the next cut duty keeps to trusted.cut_hours, short of tasks or not.
     The draws use a key drawn AFTER the forks were read.
 
     A MEMBER MAY SAY WHICH PART OF THE PROJECT IT PREFERS, and the hive follows it only when that costs its rules
@@ -2847,8 +2923,8 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
 
     submits, asks, rulings, releases, duty_entries = {}, {}, [], {}, []
     for entry in sorted(entries, key=lambda e: e["sha"]):
-        if entry["action"] == "duty":
-            duty_entries.append(entry)  # a trusted account's ask for a duty, or its release of one: step 5, apart from every task
+        if entry["action"] in ("duty", "cut"):
+            duty_entries.append(entry)  # a trusted account's ask for a duty, its release of one, or its proposal: step 5, apart from every task
             continue
         deal = deals.get(entry["task"])
         if entry["action"] == ADMIT:
@@ -3082,20 +3158,32 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
                 ignored[str(entry["repo_id"])].append(entry["sha"])  # an ask is used once
 
     # 5. duties: those that are over, then the cut duty
-    held_duties, duty_asks, duty_releases, duty_ends, dealt_duties = ledger.duties(), {}, {}, [], []
+    held_duties, duty_asks, duty_releases, duty_ends, dealt_duties, offers = ledger.duties(), {}, {}, [], [], {}
     for entry in duty_entries:
-        if entry["deal"] is None:
+        if entry["action"] == "cut":
+            offers.setdefault((entry["member_id"], entry["deal"]), []).append(entry)
+            ignored[str(entry["repo_id"])].append(entry["sha"])  # a proposal is read once, whatever comes of it
+        elif entry["deal"] is None:
             duty_asks.setdefault(entry["member_id"], []).append(entry)
         else:
             duty_releases.setdefault((entry["member_id"], entry["role"], entry["deal"]), []).append(entry)
             ignored[str(entry["repo_id"])].append(entry["sha"])  # a release is read once, whatever comes of it
+    # The tasks dealt now, the plan's own deals included: a proposal closes none of them (cut_check).
+    dealt_now = {task_id for task_id, deal in deals.items() if deal["state"] == "live"} | {d["task"] for d in (*dealt, *conditional_deals)}
     for role, duty in sorted(held_duties.items()):
         if duty["state"] != "live":
             continue
         end = {"role": role, "member_id": duty["member_id"], "duty": duty["at"]}
         given = duty_releases.get((duty["member_id"], role, duty["at"]))
+        offered = offers.get((duty["member_id"], duty["at"])) if role == "cut" else None
         if duty["member_id"] not in trusted_accounts(config, role):
             duty_ends.append({**end, "outcome": "expired", "fault": True})  # the project took the role from its account: no cost to it
+        elif offered:
+            # The duty's proposal, read while the duty is live, whatever its time (as a candidate is): it ends the duty,
+            # and a release of the same duty is spent. Of two (two forks of one account), the draw takes one.
+            offered.sort(key=lambda e: draw(key, e["sha"]))
+            duty_ends.append({**end, **proposal_end(repo, offered[0], config, tasks, settings, tip, state_folder, dealt_now, done,
+                                                    integrations(ledger), since=duty.get("settings"))})
         elif given:
             given.sort(key=lambda e: draw(key, e["sha"]))  # of two releases of one duty, one (as of two of a deal)
             duty_ends.append({**end, "outcome": "released", "fault": False, "because": given[0]["because"], "release": given[0]["sha"]})
@@ -3109,7 +3197,7 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
                 duty_ends.append({**end, "outcome": "expired", "fault": False})
             # (Otherwise the account's fork could not be read in this run: nothing is decided, as for a deal.)
     for end in duty_ends:
-        held_duties[end["role"]]["state"] = "closed"
+        held_duties[end["role"]].update(state="closed", outcome=end["outcome"])
     ledger.append([duty_end_line(end, iso(instant), key) for end in duty_ends], write=False)  # (counted in this plan: a wait starts now)
     role, left = "cut", sum(1 for task_id in tasks if is_open(task_id))
     holding = {duty["member_id"] for duty in held_duties.values() if duty["state"] == "live"}
@@ -3138,11 +3226,134 @@ def duty_due(role, latest, instant, config, left):
     """True if a duty of a role may be dealt at an instant, by the project's pace: no duty of that role is live (its
     latest, None for none yet, is over), and either none was ever dealt, or trusted.cut_hours have passed since the
     latest one was, or the project has fewer tasks left to do (`left`: open or dealt, not closed and not done) than its
-    cutter aims at (cutter.open): it is short of tasks, or starves. The plan deals by it, and a step that writes holds
+    cutter aims at (cutter.open): it is short of tasks, or starves; but after a duty that ended on a cut that stands or
+    on nothing to cut, trusted.cut_hours alone (« outcome », as Ledger.duties gives it). The plan deals by it, and a step that writes holds
     the plan's duties to it again (check_duties). « cut » is the one role there is (ROLES), and the pace is its own."""
     if latest is not None and latest["state"] == "live":
         return False
-    return latest is None or left < config["cutter"]["open"] or instant >= parse_iso(latest["at"]) + dt.timedelta(hours=config["trusted"]["cut_hours"])
+    if latest is None:
+        return True
+    paced = instant >= parse_iso(latest["at"]) + dt.timedelta(hours=config["trusted"]["cut_hours"])
+    # After a cut that stands, or nothing to cut, the next cut duty keeps to the pace, short of tasks or not: a cut
+    # stands until it is published, and another duty at the next run would cut the same commit again, or find the
+    # same nothing.
+    return paced if latest.get("outcome") in ("cut", "nothing") else left < config["cutter"]["open"] or paced
+
+
+def proposal_end(repo, entry, config, tasks, settings, tip, state_folder, dealt, done, integrated, since=None):
+    """How a cut duty ends on its proposal (read_proposal, discover), as the plan finds it: the duty end's own fields.
+    The proposal is held, in this order, to:
+      - the published commit this plan reads the settings at (`settings`): cut against another that the branch was at
+        during the duty (one that descends from `since`, the commit the duty was dealt at, and that `settings` descends
+        from), it is « refused », « stale », at no cost to its account (the branch moved under it, which is no doing of
+        its own); cut against any other commit, it is « malformed »;
+      - its form: one commit whose one parent is that commit, whose files are that commit's but for the tasks file
+        and the backlog, each a plain file with the mode the published commit gives it, whose SHA-256 are the digests
+        its marker names (a backlog it changes has its digest; one it leaves as it is may have none): otherwise
+        « refused », « malformed », and so when git fails or runs out of time on that commit;
+      - no file changed: « nothing », a cut that found nothing to cut;
+      - its files read as a task file is read (tasks_of, check_goals, check_links): otherwise « refused », « gate »;
+      - the cutter's gate, with the inputs cut-check gathers (cmd_cut_check): the published tasks, the tasks dealt now
+        (`dealt`, this plan's own deals included) and those done, the files of the tip of the branch the hive writes
+        (`tip`), and, as « failing » and « passing », the judge's answers about that tip in the state (shown_at_the_tip)
+        and nothing else: no account's word is taken for a task that fails at the tip; the backlog is held by
+        backlog_check. What the hive reads there of its own (the published backlog, the tip's files, the state) and
+        cannot read ends the duty « refused », « unchecked », at no cost; a refusal of the gate: « refused », « gate »;
+      - a change of tasks: a task added or closed, or a task planned. Files whose bytes changed and whose tasks did
+        not (another order, other spaces) are « nothing »; else « cut ».
+    Every end names the proposal's commit and the published commit its marker names; « cut » and « nothing » add the
+    digests, which whoever publishes holds the files to. The proposal's commit is a fork's object: it is read with git's
+    plumbing alone, within the bounds blob_at sets, and none of its text is logged or kept."""
+    base, sha, published = {"proposal": entry["sha"], "published": entry["published"]}, entry["sha"], entry["published"]
+    malformed = {**base, "outcome": "refused", "fault": False, "reason": "malformed"}
+    try:
+        if published != settings:
+            # Stale, and at no cost, only when it names a commit the published branch was at during the duty: one that
+            # descends from the commit the duty was dealt at (its line's « settings ») and that this plan's descends
+            # from. Any other commit was never what the account was given to cut: the proposal is malformed.
+            dealt_at = since if is_sha(since) else None
+            moved = ancestor(repo, published, settings) and (dealt_at is None or ancestor(repo, dealt_at, published))
+            return {**base, "outcome": "refused", "fault": True, "reason": "stale"} if moved else malformed
+        listed = git(repo, "rev-list", "--parents", "--no-walk", need_sha(sha), check=False)
+        if listed.returncode != 0 or listed.stdout.split() != [sha, settings]:
+            return malformed
+        changed = git_raw(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", need_sha(settings), sha)
+        paths = {name for name in changed.stdout.split(b"\0") if name} if changed.returncode == 0 else None
+        if paths is None or not paths <= {TASKS_FILE.encode(), BACKLOG_FILE.encode()}:
+            return malformed
+        # Each of the two files keeps the mode the published commit gives it (a new backlog, a plain file's): what is
+        # published is a file's bytes, never a change of its mode.
+        before, after = file_modes(repo, settings), file_modes(repo, sha)
+        if any(mode != before.get(path, b"100644") for path, mode in after.items()):
+            return malformed
+        proposed, planned = blob_at(repo, sha, TASKS_FILE), blob_at(repo, sha, BACKLOG_FILE)
+    except HiveError:
+        # A git that failed, or ran out of time, on the fork's commit or its files (a link, a folder, a file too large
+        # are no plain files): what that commit is, is its account's doing.
+        return malformed
+    if proposed is None or hashlib.sha256(proposed).hexdigest() != entry["tasks"]:
+        return malformed
+    if entry["backlog"] is None and BACKLOG_FILE.encode() in paths:
+        return malformed  # a backlog changed with no digest of it
+    if entry["backlog"] is not None and (planned is None or hashlib.sha256(planned).hexdigest() != entry["backlog"]):
+        return malformed
+    digests = {"tasks": entry["tasks"], **({"backlog": entry["backlog"]} if entry["backlog"] else {})}
+    nothing = {**base, "outcome": "nothing", "fault": False, "digests": digests}
+    if not paths:
+        return nothing
+    refused = {**base, "outcome": "refused", "fault": False, "reason": "gate"}
+    try:  # the proposal's own files, read as a task file is read: what cannot be read so is refused
+        proposal = tasks_of(proposed.decode("utf-8").split("\n"), TASKS_FILE)
+        check_goals(config, proposal)
+        check_links(proposal)
+        backlog = None
+        if BACKLOG_FILE.encode() in paths:
+            backlog = tasks_of(planned.decode("utf-8").split("\n"), BACKLOG_FILE)
+            check_goals(config, backlog)
+            check_links({**backlog, **proposal})
+    except (HiveError, ValueError, TypeError, RecursionError):
+        log("a proposal is refused: its files cannot be read as task files")
+        return refused
+    new = {task_id: task for task_id, task in proposal.items() if task_id not in tasks}
+    try:  # what the hive itself reads for the gate: the project's own files and the state, never the account's doing
+        published_backlog = {}
+        if backlog is not None:
+            published_raw = blob_at(repo, settings, BACKLOG_FILE)
+            published_backlog = tasks_of(published_raw.decode("utf-8").split("\n"), BACKLOG_FILE) if published_raw is not None else {}
+        shown, paths_at_tip = shown_at_the_tip(repo, state_folder, config, new, tip, integrated), tip_paths(repo, tip)
+    except (HiveError, ValueError, TypeError, RecursionError, OSError):
+        log("a proposal could not be held to the gate: the project's published backlog, its tip or the state cannot be read; "
+            "the duty ends at no cost")
+        return {**base, "outcome": "refused", "fault": True, "reason": "unchecked"}
+    failing, passing = ({task_id for task_id, answer in shown.items() if answer == word} for word in ("failing", "passing"))
+    refusals = cut_check(config, tasks, proposal, dealt, done, paths_at_tip, failing, passing) \
+        + (backlog_check(config, published_backlog, backlog, proposal) if backlog is not None else [])
+    if refusals:
+        log(f"a proposal is refused by the cutter's gate ({len(refusals)} reason(s)): its account's own cut-check says which")
+        return refused
+    # A cut adds a task, closes one or plans one; files whose bytes changed and whose tasks did not cut nothing.
+    if not (new or any(task_json(proposal[task_id]) != task_json(task) for task_id, task in tasks.items())
+            or (backlog is not None and set(backlog) - set(published_backlog))):
+        return nothing
+    return {**base, "outcome": "cut", "fault": False, "digests": digests}
+
+
+def ancestor(repo, older, newer):
+    """True if commit `older` is `newer` or one it descends from, in the clone (a commit the clone does not hold is none)."""
+    return git(repo, "merge-base", "--is-ancestor", need_sha(older), need_sha(newer), check=False).returncode == 0
+
+
+def file_modes(repo, commit):
+    """{path: mode} of the tasks file and the backlog in a commit of the clone, as git lists them (bytes), for those it holds."""
+    listed = git_raw(repo, "--literal-pathspecs", "ls-tree", "-z", need_sha(commit), "--", TASKS_FILE, BACKLOG_FILE)
+    if listed.returncode != 0:
+        raise HiveError(f"the commit {commit} cannot be read")
+    found = {}
+    for entry in listed.stdout.split(b"\0"):
+        head, _, path = entry.partition(b"\t")
+        if entry:
+            found[path.decode("utf-8", errors="replace")] = head.split(b" ")[0]
+    return found
 
 
 def member_mark(login):
@@ -3347,11 +3558,25 @@ def read_plan(plan_, config):
                 and isinstance(c["member"], str) and bool(LOGIN.match(c["member"])) and type(c["member_id"]) is int
                 and type(c["repo_id"]) is int and isinstance(c["asks"], list) and bool(c["asks"]) and all(is_sha(x) for x in c["asks"]))
 
-    def duty_end_ok(c):  # a duty the plan ends: its time is up, or its account gave it back (a release's code and commit, never at the hive's fault)
-        released = isinstance(c, dict) and c.get("outcome") == "released"
-        return (isinstance(c, dict) and set(c) == {"role", "member_id", "duty", "outcome", "fault", *(("because", "release") if released else ())}
-                and c["role"] in ROLES and type(c["member_id"]) is int and stamp(c["duty"]) and c["outcome"] in DUTY_OUTCOMES
-                and type(c["fault"]) is bool and (not released or (c["because"] in RELEASES and c["fault"] is False and is_sha(c["release"]))))
+    def digests_ok(d):  # the SHA-256 of the files a proposal changes: the tasks file's, and the backlog's where it has one
+        return isinstance(d, dict) and set(d) in ({"tasks"}, {"tasks", "backlog"}) and all(isinstance(v, str) and bool(DIGEST.match(v)) for v in d.values())
+
+    def duty_end_ok(c):  # a duty the plan ends, with what its outcome adds (DUTY_END_FIELDS); never a release or a cut at the hive's fault
+        outcome = c.get("outcome") if isinstance(c, dict) else None
+        more = {"released": ("because", "release"), "cut": ("proposal", "published", "digests"), "nothing": ("proposal", "published", "digests"),
+                "refused": ("proposal", "published", "reason")}.get(outcome, ()) if isinstance(outcome, str) else ()
+        if not (isinstance(c, dict) and set(c) == {"role", "member_id", "duty", "outcome", "fault", *more} and c["role"] in ROLES
+                and type(c["member_id"]) is int and stamp(c["duty"]) and outcome in DUTY_OUTCOMES and type(c["fault"]) is bool):
+            return False
+        if outcome == "released":
+            return c["because"] in RELEASES and c["fault"] is False and is_sha(c["release"])
+        if outcome in ("cut", "nothing", "refused") and not (is_sha(c["proposal"]) and is_sha(c["published"])):
+            return False
+        if outcome in ("cut", "nothing"):
+            return c["fault"] is False and digests_ok(c["digests"])
+        if outcome == "refused":  # at no cost when the proposal went stale, and only then
+            return isinstance(c["reason"], str) and c["reason"] in CUT_REFUSALS and c["fault"] is (c["reason"] in CUT_FREE)
+        return True
 
     ledger_ok = isinstance(plan_, dict) and isinstance(plan_.get("ledger"), dict) and type(plan_["ledger"].get("lines")) is int \
         and plan_["ledger"]["lines"] >= 0 and isinstance(plan_["ledger"].get("sha256"), str)
@@ -3401,14 +3626,20 @@ def expired_line(expiry, at, run):
             "fault": expiry["fault"], **({"released": expiry["released"], "release": expiry["release"]} if "released" in expiry else {})}
 
 
+DUTY_END_FIELDS = ("because", "release", "proposal", "published", "digests", "reason")  # what an end adds, by its outcome
+
+
 def duty_end_line(end, at, run):
     """The ledger line of a duty the plan found over: « outcome » expired (its time and the project's grace were past,
-    or, at the hive's fault, the project's file no longer trusts its account with its role) or released (its account
+    or, at the hive's fault, the project's file no longer trusts its account with its role), released (its account
     gave it back: « because », the release's code, RELEASES; « release », the release's commit id, which anyone can
-    look up in the account's public fork). « duty » is the duty's instant. Every field is one the plan's own form
-    holds (read_plan)."""
+    look up in the account's public fork), or the outcome of its proposal (proposal_end: « proposal », its commit id,
+    and « published », the commit it was cut against; « cut » and « nothing » add « digests », the SHA-256 of the
+    files it proposes, and « refused » its « reason », CUT_REFUSALS). A « cut » line is what says which proposal stands,
+    for whoever publishes it. « duty » is the duty's instant. Every field is one the plan's own form holds (read_plan)."""
     return {"type": "duty-end", "at": at, "run": run, "role": end["role"], "member_id": end["member_id"], "duty": end["duty"],
-            "outcome": end["outcome"], "fault": end["fault"], **({"because": end["because"], "release": end["release"]} if "release" in end else {})}
+            "outcome": end["outcome"], "fault": end["fault"],
+            **{key: dict(end[key]) if key == "digests" else end[key] for key in DUTY_END_FIELDS if key in end}}
 
 
 def same_ledger(ledger, plan_):
@@ -5419,7 +5650,7 @@ def backlog_check(config, published_backlog, backlog, proposal):
     the cut adds is held to what the gate holds a new task's line to (new_task_refusals), under an id the tasks file
     does not use. (The caller has read it as a task file is read, its goals checked, and its links checked with the tasks.)
     When it is published, a planned task is held to the gate's rules for a new task, as any other is (cut)."""
-    refusals = []
+    refusals, known_options = [], options_known(config, proposal)  # (once: what the proposal's tasks name, for every line)
     for task_id in sorted(set(published_backlog) - set(backlog)):
         refusals.append(f"{task_id}: a line of the backlog is never removed")
     for task_id, task in backlog.items():
@@ -5429,7 +5660,7 @@ def backlog_check(config, published_backlog, backlog, proposal):
             if task_json(task) != task_json(published_backlog[task_id]):
                 refusals.append(f"{task_id}: a line of the backlog does not change")
         else:
-            refusals += new_task_refusals(config, task_id, task, options_known(config, proposal))
+            refusals += new_task_refusals(config, task_id, task, known_options)
             if task_id in proposal:
                 refusals.append(f"{task_id}: an id the tasks file uses: a planned task takes an id of its own")
     return refusals
@@ -10170,7 +10401,7 @@ def cmd_duty(args):
     the project's run deals duties at all (its feed has the keys), whether it says the project is paused, this
     login's live duty (its role and two instants) and its wait. A paused project (its own file, or its feed, as `next`
     reads them): WAIT, nothing pushed. With a live duty (its time and the project's grace not up): DUTY and DEAL,
-    nothing pushed, or WAIT where the fork holds a release of it; with a wait: WAIT, nothing pushed; else the ask is
+    nothing pushed, or WAIT where the fork holds a release of it or its proposal (CUT_BRANCH); with a wait: WAIT, nothing pushed; else the ask is
     made and pushed (ASKED). A release needs the live duty of that role and names that duty's instant as the feed
     gives it. Nothing is pushed when the project's settings trust no account with the role (the
     hive would deal no such duty), and whether they trust this one the hive says at its run: the settings name
@@ -10221,6 +10452,12 @@ def cmd_duty(args):
                 and given["deal"] == duty["at"]:
             print("WAIT: you gave this duty back and the hive has not read it yet: its next run ends the duty")
             return
+        # And so for its proposal, at the fork's branch for cuts.
+        cut = fork_tip(clone, fork, CUT_BRANCH) if duty["role"] == "cut" else None
+        offered = read_proposal(cut[1]) if cut else None
+        if offered and offered["member"].lower() == login.lower() and offered["deal"] == duty["at"]:
+            print("WAIT: your proposal is pushed and the hive has not read it yet: its next run holds it to the cutter's gate and ends the duty")
+            return
     stamped = now()  # (the instant makes each ask and each release a new commit)
     if args.release:
         if not live or duty["role"] != role:
@@ -10232,9 +10469,10 @@ def cmd_duty(args):
         if live:
             print(f"DUTY {duty['role']} until {duty['until']}")
             print(f"DEAL {duty['at']}")
-            print(f"THEN: the duty is yours until then, and the hive waits {config['grace_hours']} hour(s) more before it ends it. This "
-                  "version of the hive reads nothing a duty produces: the duty ends when that time is up, or when you give it back (this "
-                  "same command with --release and one of its codes), and either costs you a wait before your next duty")
+            print(f"THEN: the duty is yours until then, and the hive waits {config['grace_hours']} hour(s) more before it ends it. Push "
+                  f"your proposal to {CUT_BRANCH} in your fork (docs/protocol.md, \"Trusted accounts and their duties\"): the hive's next "
+                  "run holds it to the cutter's gate and ends the duty. Otherwise the duty runs out at that time, or ends when you give it "
+                  "back (this same command with --release and one of its codes), and either costs you a wait before your next duty")
         else:
             print("WAIT: your duty's time and the grace are up: the hive ends it at its next run (about an hour). Ask for no duty before then")
         return

@@ -5488,9 +5488,11 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     rf"NOT-PUSHED {COMMIT}: the release is made and nothing was pushed; run the same command again without --no-push to make the release anew "
     r"and push it",
     rf"DUTY cut until {INSTANT}",
-    r"THEN: the duty is yours until then, and the hive waits [0-9]+ hour\(s\) more before it ends it\. This version of the hive reads nothing "
-    r"a duty produces: the duty ends when that time is up, or when you give it back \(this same command with --release and one of its "
-    r"codes\), and either costs you a wait before your next duty",
+    r"THEN: the duty is yours until then, and the hive waits [0-9]+ hour\(s\) more before it ends it\. Push your proposal to hive/cut in your "
+    r"fork \(docs/protocol\.md, \"Trusted accounts and their duties\"\): the hive's next run holds it to the cutter's gate and ends the duty\. "
+    r"Otherwise the duty runs out at that time, or ends when you give it back \(this same command with --release and one of its codes\), and "
+    r"either costs you a wait before your next duty",
+    r"WAIT: your proposal is pushed and the hive has not read it yet: its next run holds it to the cutter's gate and ends the duty",
     r"WAIT: your duty's time and the grace are up: the hive ends it at its next run \(about an hour\)\. Ask for no duty before then",
     rf"WAIT until {INSTANT}: the hive deals you no duty before then \(a duty of yours ran out, or you gave one back\)",
     r"THEN: stop here\. The hive ends the duty at its next run \(about an hour\), then deals you no duty for [0-9]+ hour\(s\) from then, the "
@@ -17675,7 +17677,8 @@ class TestDuties(Base):
                                                 "release": "b" * 40}]), "the plan is unreadable"),
                               (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "expired", "fault": False, "because": "cannot_run",
                                                 "release": "b" * 40}]), "the plan is unreadable"),
-                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "cut", "fault": False}]), "the plan is unreadable")):
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "cut", "fault": False}]), "the plan is unreadable"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "bored", "fault": False}]), "the plan is unreadable")):
             with self.subTest(said), self.assertRaisesRegex(hive.HiveError, said):
                 self.w.record(**changes)
         released = {"role": "cut", "member_id": 301, "duty": carols, "outcome": "released", "fault": False, "because": "cannot_run", "release": "b" * 40}
@@ -17733,9 +17736,11 @@ class TestTheDutyCommand(Volunteer):
         code, text = self.duty()
         self.assertEqual((code, self.spoken(text)), (0, ["DUTY cut until 2026-11-12T14:00:00Z", f"DEAL {NOW}",
                                                          "THEN: the duty is yours until then, and the hive waits 1 hour(s) more before it ends "
-                                                         "it. This version of the hive reads nothing a duty produces: the duty ends when that "
-                                                         "time is up, or when you give it back (this same command with --release and one of its "
-                                                         "codes), and either costs you a wait before your next duty"]))
+                                                         "it. Push your proposal to hive/cut in your fork (docs/protocol.md, \"Trusted accounts "
+                                                         "and their duties\"): the hive's next run holds it to the cutter's gate and ends the duty. "
+                                                         "Otherwise the duty runs out at that time, or ends when you give it back (this same "
+                                                         "command with --release and one of its codes), and either costs you a wait before your "
+                                                         "next duty"]))
         self.assertEqual(self.fork_branch(hive.DUTY_BRANCH), asked, "nothing pushed")
         code, text = self.duty("--release", "cannot_run")
         given = self.fork_branch(hive.DUTY_BRANCH)
@@ -17812,6 +17817,437 @@ class TestTheDutyCommand(Volunteer):
         duty_release(self.alice, "2026-11-12T11:00:00Z")  # the fork holds a release of another duty: this one is still held
         (self.w.state / "feed.json").write_text(json.dumps({**feed, "duties": {mark: {"role": "cut", "at": NOW, "until": "2026-11-12T14:00:00Z"}}}))
         self.assertTrue(self.duty()[1].startswith("DUTY cut until 2026-11-12T14:00:00Z\n"), self.err)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# A cut duty's proposal (hive.read_proposal, discover at CUT_BRANCH, hive.proposal_end, the duty's end)
+
+CLOSED_FOUR = [dict(task, closed=True) if task["id"] == "toy-0004" else task for task in TASKS]
+NEW_SEVEN = {"id": "toy-0007", "title": "Make f1 faster", "files": ["lib.c"], "goal": PROVED_GAIN}  # a goal on a figure: it holds its proof
+
+
+def task_lines(tasks):
+    return "".join(json.dumps(task) + "\n" for task in tasks)
+
+
+def cut_proposal(fork, deal, tasks=None, backlog=None, published=None, parent=None, member=None, branch=hive.CUT_BRANCH, digest=None,
+                 backlog_digest=None, files=None, extra=(), modes=None, remove=(), parents=None, named=None):
+    """A cut duty's proposal, as a trusted cutter makes one: a commit whose one parent is the published commit (fetched
+    from the project's own repository: `published`, the branch's tip by default), whose files are that commit's but
+    for the tasks file (`tasks`, its text; the published one by default) and the backlog (`backlog`), pushed over the
+    fork's branch for cuts. The marker names the duty's instant, the published commit and the files' SHA-256 (or
+    `digest`, `backlog_digest`: what a marker made otherwise says; backlog_digest=False: none). `parent`, `member`,
+    `branch`, `files` ({path: text}, more files changed), `extra` (more lines of the message), `modes` ({path: mode}),
+    `remove` (paths taken out), `parents` (a list in place of the one parent, () for none), `named` (the published
+    commit the marker names, when it is not the one the proposal rests on): a proposal made otherwise. Returns its commit."""
+    world = fork.world
+    published = published or world.publish()
+    sh("git", "fetch", "--quiet", str(world.upstream), f"refs/heads/{world.published_branch}", cwd=fork.work)
+    tasks = tasks if tasks is not None else sh("git", "show", f"{published}:{hive.TASKS_FILE}", cwd=fork.work).stdout
+    changed = {hive.TASKS_FILE: tasks, **({hive.BACKLOG_FILE: backlog} if backlog is not None else {}), **(files or {})}
+    fork.asked += 1
+    with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": str(world.root / f"cut-index-{fork.login}-{fork.asked}")}):
+        sh("git", "read-tree", published, cwd=fork.work)
+        for path, text in changed.items():
+            blob = sh("git", "hash-object", "-w", "--stdin", cwd=fork.work, stdin=text).stdout.strip()
+            sh("git", "update-index", "--add", "--cacheinfo", f"{(modes or {}).get(path, '100644')},{blob},{path}", cwd=fork.work)
+        for path in remove:
+            sh("git", "update-index", "--force-remove", path, cwd=fork.work)
+        tree = sh("git", "write-tree", cwd=fork.work).stdout.strip()
+    lines = [f"Hive cut {fork.asked}", "", "Hive-Action: cut", f"Hive-Member: {member or fork.login}", f"Hive-Deal: {deal}", f"Hive-Published: {named or published}",
+             f"Hive-Tasks: {digest or hashlib.sha256(tasks.encode()).hexdigest()}"]
+    if backlog_digest is not False and (backlog is not None or backlog_digest):
+        lines.append(f"Hive-Backlog: {backlog_digest or hashlib.sha256(backlog.encode()).hexdigest()}")
+    lines += ["Hive-Area: null", *extra]
+    above = [arg for each in (parents if parents is not None else [parent or published]) for arg in ("-p", each)]
+    commit = sh("git", "commit-tree", tree, *above, "-m", "\n".join(lines), cwd=fork.work).stdout.strip()
+    sh("git", "push", "--quiet", "--force", "origin", f"{commit}:refs/heads/{branch}", cwd=fork.work)
+    return commit
+
+
+class TestTheProposalMarker(unittest.TestCase):
+    """read_proposal: « cut », the duty's instant, the published commit and the digests, area null; nothing else, and no
+    other reader takes it."""
+    CUT = (f"Hive cut\n\nHive-Action: cut\nHive-Member: carol\nHive-Deal: {NOW}\nHive-Published: {'a' * 40}\nHive-Tasks: {'b' * 64}\n"
+           f"Hive-Backlog: {'c' * 64}\nHive-Area: null\n")
+
+    def test_a_proposal_marker_is_a_cut_and_nothing_else(self):
+        self.assertEqual(hive.read_proposal(self.CUT), {"action": "cut", "member": "carol", "deal": NOW, "published": "a" * 40, "tasks": "b" * 64,
+                                                        "backlog": "c" * 64, "area": None})
+        bare = self.CUT.replace(f"Hive-Backlog: {'c' * 64}\n", "").replace("Hive-Area: null\n", "")
+        self.assertEqual({key: hive.read_proposal(bare)[key] for key in ("backlog", "area")}, {"backlog": None, "area": None}, "no backlog, no area: none")
+        self.assertEqual([reader(self.CUT) for reader in (hive.read_marker, hive.read_ruling, hive.read_duty)], [None, None, None])
+        for wrong in (self.CUT.replace("Hive-Area: null", "Hive-Area: src"), self.CUT.replace("Hive-Action: cut", "Hive-Action: duty"),
+                      self.CUT + "Hive-Area: null\n", self.CUT + "Hive-Task: toy-0001\n", self.CUT + "Hive-Role: cut\n", self.CUT + "Hive-Because: cannot_run\n",
+                      self.CUT + "Hive-Tier: 1\n", self.CUT.replace("b" * 64, "b" * 63), self.CUT.replace("b" * 64, "B" * 64),
+                      self.CUT.replace("c" * 64, "nope"), self.CUT.replace("a" * 40, "a" * 39), self.CUT.replace(NOW, "yesterday"),
+                      self.CUT.replace("carol", "-carol"), self.CUT.replace(f"Hive-Tasks: {'b' * 64}\n", ""), self.CUT.replace(f"Hive-Deal: {NOW}\n", ""),
+                      self.CUT + f"Hive-Published: {'a' * 40}\n", self.CUT + f"Hive-Tasks: {'b' * 64}\n", self.CUT + f"Hive-Backlog: {'c' * 64}\n"):
+            with self.subTest(wrong=wrong):
+                self.assertIsNone(hive.read_proposal(wrong))
+        for other in (TestTheDutyMarker.ASK, TestTheDutyMarker.GIVE, "x\n\nHive-Action: ready\nHive-Member: carol\n"):
+            self.assertIsNone(hive.read_proposal(other))
+
+
+class TestTheCutOutcomesInTheLedger(unittest.TestCase):
+    """What the proposal's outcomes cost: a cut that stands and nothing to cut clear every wait; a refusal costs the
+    first wait, and a stale proposal nothing. After nothing to cut, the next cut duty keeps to the pace."""
+    CONFIG = TestTheDutiesInTheLedger.CONFIG
+    setUp, end = TestTheDutiesInTheLedger.setUp, staticmethod(TestTheDutiesInTheLedger.end)
+
+    def wait(self, *ends):
+        ledger = hive.Ledger(self.tmp.name)
+        ledger.events = list(ends)
+        return ledger.duty_wait(301, hive.parse_iso(NOW), self.CONFIG)
+
+    def test_a_cut_or_nothing_to_cut_clears_the_waits_and_a_refusal_costs_the_first(self):
+        out = [self.end(301, f"2026-11-12T0{n}:00:00Z", f"2026-11-12T1{n}:00:00Z") for n in range(2)]  # two duties that ran out, at ten and eleven
+        self.assertEqual(self.wait(*out), "2026-11-12T15:00:00Z")
+        for outcome in ("cut", "nothing"):
+            ended = self.end(301, "2026-11-12T02:00:00Z", "2026-11-12T11:30:00Z", outcome=outcome)
+            self.assertEqual((self.wait(*out, ended), self.wait(*out, ended, self.end(301, "2026-11-12T03:00:00Z", "2026-11-12T11:40:00Z"))),
+                             (None, "2026-11-12T13:40:00Z"), f"{outcome}: every wait cleared, and the doubling starts again")
+        refused = self.end(301, "2026-11-12T02:00:00Z", "2026-11-12T11:30:00Z", outcome="refused")
+        self.assertEqual((self.wait(refused), self.wait(dict(refused, fault=True)), self.wait(*out, refused), self.wait(*out, dict(refused, fault=True))),
+                         ("2026-11-12T13:30:00Z", None, "2026-11-12T15:00:00Z", "2026-11-12T15:00:00Z"),
+                         "the first wait; a stale one nothing; neither clears the doubling")
+
+    def test_after_nothing_to_cut_the_next_cut_duty_keeps_to_the_pace_short_of_tasks_or_not(self):
+        config = hive.config_of({**TestTheSettingsList.MINIMAL, "trusted": {"accounts": [{"account": 301, "roles": ["cut"]}]}}, "toy.json")
+        instant = hive.parse_iso(NOW)
+        closed = {"at": "2026-11-12T11:00:00Z", "state": "closed"}
+        self.assertEqual([hive.duty_due("cut", {**closed, "outcome": outcome}, instant, config, 0) for outcome in ("nothing", "cut", "refused", "expired", None)],
+                         [False, False, True, True, True], "starving: at once, but after nothing to cut or a cut that stands")
+        self.assertTrue(hive.duty_due("cut", {**closed, "at": "2026-11-12T06:00:00Z", "outcome": "nothing"}, instant, config, 0), "six hours on")
+        ledger = hive.Ledger(self.tmp.name)
+        ledger.events = [TestTheDutiesInTheLedger.duty(301, "2026-11-12T08:00:00Z"), self.end(301, "2026-11-12T08:00:00Z", "2026-11-12T09:00:00Z", outcome="nothing")]
+        self.assertEqual({key: ledger.duties()["cut"][key] for key in ("state", "outcome")}, {"state": "closed", "outcome": "nothing"})
+
+
+class TestCuts(Base):
+    """A cut duty's proposal: one commit on the published commit, in the trusted account's fork at hive/cut, that
+    changes the tasks file and perhaps the backlog. The plan holds it to the live duty, to the published commit it
+    reads (stale: refused at no cost), to its form and digests, and to the cutter's gate with the judge's answers alone;
+    the duty ends « cut », « nothing » or « refused », and a cut's end says which proposal stands. Nothing is published."""
+    config = {"trusted": TRUSTED}
+    lines, ignored, wait_of, ended = TestDuties.lines, TestDuties.ignored, TestDuties.wait_of, TestDuties.ended
+
+    def setUp(self):
+        super().setUp()
+        self.carol, self.dave = self.w.fork("carol", 301), self.w.fork("dave", 302)
+
+    def dealt(self):
+        """carol is dealt the cut duty by a run: its instant."""
+        duty_ask(self.carol)
+        self.w.run()
+        return self.lines("duty")[-1]["at"]
+
+    def end_of(self):
+        return self.lines("duty-end")[-1]
+
+    def clear(self, clock):
+        """carol's waits cleared, as a cut that stood clears them (a line of the test's own): the next case starts afresh."""
+        hive.Ledger(self.w.state).append([{"type": "duty-end", "at": f"2026-11-12T{clock}Z", "run": f"test-clear-{clock}", "role": "cut",
+                                           "member_id": 301, "duty": f"clear-{clock}", "outcome": "cut", "fault": False}])
+
+    def test_a_proposal_the_gate_passes_ends_the_duty_as_the_cut_that_stands_and_publishes_nothing(self):
+        duty, published = self.dealt(), self.w.publish()
+        text = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+        proposal = cut_proposal(self.carol, duty, tasks=text)
+        duty_ask(self.dave)  # dave asks in the same run: short of tasks, and yet the next cut duty keeps to the pace after a cut
+        self.w.run()
+        self.assertEqual(self.lines("duty")[-1]["at"], duty, "a cut stands until it is published: no duty to cut the same commit again")
+        self.assertEqual(self.end_of(), {"type": "duty-end", "at": NOW, "run": self.w.made["key"], "role": "cut", "member_id": 301, "duty": duty,
+                                         "outcome": "cut", "fault": False, "proposal": proposal, "published": published,
+                                         "digests": {"tasks": hashlib.sha256(text.encode()).hexdigest()}})
+        self.assertEqual((self.w.publish(), self.w.tasks_file.read_text(), self.wait_of(self.carol), proposal in self.ignored(self.carol)),
+                         (published, task_lines(TASKS), None, True), "nothing is published, no wait, and the proposal is read once")
+        self.assertEqual(sh("git", "rev-parse", f"refs/heads/{self.w.published_branch}", cwd=self.w.upstream).stdout.strip(), published)
+        self.w.run()
+        self.assertEqual(len(self.lines("duty-end")), 1, "and never again")
+
+    def test_a_proposal_that_changes_no_file_is_nothing_to_cut(self):
+        duty = self.dealt()
+        for at in ("2026-11-12T08:00:00Z", "2026-11-12T09:00:00Z"):  # a streak of two duties that ran out, long over
+            hive.Ledger(self.w.state).append([{"type": "duty-end", "at": at, "run": f"test-{at}", "role": "cut", "member_id": 301, "duty": at,
+                                               "outcome": "expired", "fault": False}])
+        proposal = cut_proposal(self.carol, duty)
+        duty_ask(self.dave)  # dave asks in the same run
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["outcome"], end["fault"], end["proposal"], end["digests"]),
+                         ("nothing", False, proposal, {"tasks": hashlib.sha256(task_lines(TASKS).encode()).hexdigest()}))
+        config, _, ledger = self.w.load()
+        self.assertEqual(ledger.duty_wait(301, hive.now(), config), None)
+        self.w.run()
+        self.assertEqual(self.lines("duty")[-1]["at"], duty, "short of tasks, and yet no cut duty sooner than the pace after nothing to cut")
+
+    def test_a_proposal_cut_against_another_commit_is_refused_at_no_cost(self):
+        duty, before = self.dealt(), self.w.publish()
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 4}); self.w.publish()  # the published branch moves on
+        proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]), published=before)
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual({key: end[key] for key in ("outcome", "fault", "reason", "proposal", "published")},
+                         {"outcome": "refused", "fault": True, "reason": "stale", "proposal": proposal, "published": before})
+        self.assertIsNone(self.wait_of(self.carol))
+
+    def test_a_proposal_is_stale_at_no_cost_only_against_a_commit_the_branch_was_at_during_the_duty(self):
+        ancient = self.w.publish()  # the branch's commit before the duty was dealt
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 4})
+        duty = self.dealt()  # dealt at the commit the plan published
+        during = self.w.publish()
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 5}); self.w.publish()  # the branch moves on during the duty
+        cut_proposal(self.carol, duty, tasks=task_lines(TASKS), published=ancient)
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["outcome"], end["reason"], end["fault"], end["published"]), ("refused", "malformed", False, ancient),
+                         "a commit from before the duty was never what the account was given to cut")
+        self.clear("12:00:00")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:10:00Z"}):
+            again = self.dealt()
+            dealt_at = self.w.publish()
+            self.w.set_config({"trusted": TRUSTED, "deal_hours": 6}); self.w.publish()
+            cut_proposal(self.carol, again, tasks=task_lines(TASKS), published=dealt_at)
+            self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["duty"], end["outcome"], end["reason"], end["fault"], self.wait_of(self.carol)), (again, "refused", "stale", True, None))
+        self.assertNotEqual(during, dealt_at)
+
+    def test_a_proposal_the_hive_cannot_hold_to_the_gate_of_its_own_doing_ends_the_duty_at_no_cost(self):
+        duty = self.dealt()
+        proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]))
+        with mock.patch.object(hive, "tip_paths", side_effect=hive.HiveError("the files of the project's tip cannot be listed")):
+            self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["outcome"], end["reason"], end["fault"], end["proposal"], self.wait_of(self.carol)), ("refused", "unchecked", True, proposal, None))
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:10:00Z"}):
+            again = self.dealt()
+            cut_proposal(self.carol, again)  # nothing changed: nothing to hold to the gate, whatever the hive can read of its own
+            with mock.patch.object(hive, "tip_paths", side_effect=hive.HiveError("the files of the project's tip cannot be listed")):
+                self.w.run()
+        self.assertEqual((self.end_of()["duty"], self.end_of()["outcome"]), (again, "nothing"))
+
+    def test_files_whose_bytes_changed_and_whose_tasks_did_not_are_nothing_to_cut(self):
+        duty = self.dealt()
+        text = task_lines(list(reversed(TASKS)))  # the same tasks, in another order
+        proposal = cut_proposal(self.carol, duty, tasks=text)
+        self.w.run()
+        self.assertEqual({key: self.end_of()[key] for key in ("outcome", "proposal", "digests")},
+                         {"outcome": "nothing", "proposal": proposal, "digests": {"tasks": hashlib.sha256(text.encode()).hexdigest()}})
+
+    def test_the_gate_takes_the_judges_answers_about_the_tip_for_the_new_tasks(self):
+        fixes = {"id": "toy-0007", "title": "Fix f1", "files": ["lib.c"]}  # a goal « correct »
+        seen = []
+        for clock, answer, outcome in (("12:00:00", "passing", "refused"), ("12:10:00", None, "refused"), ("12:20:00", "failing", "cut")):
+            def shown(repo, state, config, tasks, tip, integrated):
+                seen.append((sorted(tasks), tip))
+                return {"toy-0007": answer} if answer else {}
+            with self.subTest(answer=answer), mock.patch.dict(os.environ, {"HIVE_NOW": f"2026-11-12T{clock}Z"}), \
+                    mock.patch.object(hive, "shown_at_the_tip", side_effect=shown):
+                self.clear(clock)
+                duty = self.dealt()
+                cut_proposal(self.carol, duty, tasks=task_lines([*TASKS, fixes]))
+                self.w.run()
+                self.assertEqual(self.end_of()["outcome"], outcome)
+        self.assertEqual({entry for entry in map(lambda e: (tuple(e[0]), e[1]), seen)}, {(("toy-0007",), self.w.made["tip"])},
+                         "asked of the new tasks alone, at the tip of the branch the hive writes")
+
+    def test_a_proposal_never_closes_a_task_kept_for_after_the_judging(self):
+        duty = self.dealt()
+        self.w.tasks_file.write_text(task_lines([TASKS[0], TASKS[1], TASKS[3]]))
+        self.w.publish()
+        dealt = self.w.deal(self.alice, "toy-0002")
+        self.alice.attempt("toy-0002", dealt)  # alice's candidate for toy-0002 is judged in this run
+        self.alice.ready(tier=1)  # and she asks: toy-0001 is kept for her, should her candidate be accepted
+        cut_proposal(self.carol, duty, tasks=task_lines([dict(TASKS[0], closed=True), TASKS[1], TASKS[3]]))
+        made = self.w.plan()
+        self.assertEqual(([d["task"] for d in made["conditional"]], made["duty_ends"][0]["outcome"], made["duty_ends"][0]["reason"]),
+                         (["toy-0001"], "refused", "gate"))
+
+    def test_a_proposal_of_another_form_is_refused_as_malformed_and_costs_the_first_wait(self):
+        text = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+        cases = [("another parent", lambda duty: cut_proposal(self.carol, duty, tasks=text, parent=self.w.tip())),
+                 ("another file changed", lambda duty: cut_proposal(self.carol, duty, tasks=text, files={"lib.c": LIB + "/* more */\n"})),
+                 ("a digest that is not the file's", lambda duty: cut_proposal(self.carol, duty, tasks=text, digest="0" * 64)),
+                 ("a backlog changed with no digest", lambda duty: cut_proposal(self.carol, duty, tasks=text, backlog=task_lines([NEW_SEVEN]),
+                                                                                 backlog_digest=False)),
+                 ("a backlog digest that is not the file's", lambda duty: cut_proposal(self.carol, duty, tasks=text, backlog=task_lines([NEW_SEVEN]),
+                                                                                        backlog_digest="1" * 64)),
+                 ("a backlog digest for no backlog", lambda duty: cut_proposal(self.carol, duty, tasks=text, backlog_digest="1" * 64)),
+                 ("a mode changed", lambda duty: cut_proposal(self.carol, duty, tasks=text, modes={hive.TASKS_FILE: "100755"})),
+                 ("a link in place of the file", lambda duty: cut_proposal(self.carol, duty, tasks="tasks.jsonl", modes={hive.TASKS_FILE: "120000"})),
+                 ("the tasks file taken out", lambda duty: cut_proposal(self.carol, duty, tasks=text, remove=[hive.TASKS_FILE])),
+                 ("no parent", lambda duty: cut_proposal(self.carol, duty, tasks=text, parents=())),
+                 ("two parents", lambda duty: cut_proposal(self.carol, duty, tasks=text, parents=[self.w.publish(), self.w.tip()])),
+                 ("a published commit that is none", lambda duty: cut_proposal(self.carol, duty, tasks=text, named="f" * 40))]
+        clocks = [f"1{hour}:{minute}0:00" for hour in (2, 3) for minute in range(6)]
+        for clock, (name, make) in zip(clocks, cases):
+            with self.subTest(name), mock.patch.dict(os.environ, {"HIVE_NOW": f"2026-11-12T{clock}Z"}):
+                self.clear(clock)
+                duty = self.dealt()
+                proposal = make(duty)
+                self.w.run()
+                end = self.end_of()
+                self.assertEqual((end["duty"], end["outcome"], end["fault"], end["reason"], end["proposal"]), (duty, "refused", False, "malformed", proposal))
+                config, _, ledger = self.w.load()
+                self.assertEqual(ledger.duty_wait(301, hive.now(), config), hive.iso(hive.now() + hive.dt.timedelta(hours=2)), "the first wait")
+
+    def test_the_gate_takes_the_judges_answers_alone_and_refuses_what_it_refuses(self):
+        cases = [("a task « correct » no answer shows to fail", task_lines([*TASKS, {"id": "toy-0007", "title": "Fix f1", "files": ["lib.c"]}])),
+                 ("a published task removed", task_lines(TASKS[1:])),
+                 ("a task that is not a task", task_lines(TASKS) + "{not json\n"),
+                 ("a backlog line removed", None)]
+        self.w.set_config({"trusted": TRUSTED})
+        self.w.tasks_file.parent.joinpath("backlog.jsonl").write_text(task_lines([{"id": "toy-0020", "title": "Later", "files": ["lib.c"], "goal": PROVED_GAIN}]))
+        for clock, (name, text) in zip(("12:00:00", "12:10:00", "12:20:00", "12:30:00"), cases):
+            with self.subTest(name), mock.patch.dict(os.environ, {"HIVE_NOW": f"2026-11-12T{clock}Z"}):
+                self.clear(clock)
+                duty = self.dealt()
+                proposal = cut_proposal(self.carol, duty, tasks=text) if text is not None else \
+                    cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]), backlog="")
+                self.w.run()
+                end = self.end_of()
+                self.assertEqual((end["duty"], end["outcome"], end["reason"], end["proposal"], end["fault"]), (duty, "refused", "gate", proposal, False))
+                self.assertEqual(self.wait_of(self.carol), hive.iso(hive.now() + hive.dt.timedelta(hours=2)), "the first wait")
+        # The same file with a backlog the gate takes passes.
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:40:00Z"}):
+            self.clear("12:40:00")
+            duty = self.dealt()
+            planned = self.w.tasks_file.parent.joinpath("backlog.jsonl").read_text() + task_lines([{"id": "toy-0021", "title": "Then", "files": ["lib.c"],
+                                                                                                     "goal": PROVED_GAIN}])
+            cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]), backlog=planned)
+            self.w.run()
+            end = self.end_of()
+            self.assertEqual((end["outcome"], end["digests"]), ("cut", {"tasks": hashlib.sha256(task_lines([*CLOSED_FOUR, NEW_SEVEN]).encode()).hexdigest(),
+                                                                         "backlog": hashlib.sha256(planned.encode()).hexdigest()}))
+
+    def test_a_proposal_never_closes_a_task_dealt_now_not_even_one_this_plan_deals(self):
+        duty = self.dealt()
+        self.w.tasks_file.write_text(task_lines([TASKS[0], TASKS[3]]))  # two tasks, toy-0001 and toy-0004 (tier 2)
+        self.w.publish()
+        self.alice.ready(tier=1)  # alice takes tier 1 alone: the plan deals her toy-0001
+        cut_proposal(self.carol, duty, tasks=task_lines([dict(TASKS[0], closed=True), TASKS[3]]))
+        made = self.w.plan()
+        self.assertEqual(([d["task"] for d in made["deals"]], made["duty_ends"][0]["outcome"], made["duty_ends"][0]["reason"]),
+                         (["toy-0001"], "refused", "gate"))
+
+    def test_a_proposal_counts_only_for_the_live_duty_its_account_holds_at_hive_cut_in_its_own_fork(self):
+        duty = self.dealt()
+        text = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+        stray = [cut_proposal(self.carol, "2026-11-12T11:00:00Z", tasks=text),  # another duty's instant
+                 cut_proposal(self.carol, duty, tasks=text, branch="hive/cut-two"),  # another branch
+                 cut_proposal(self.dave, duty, tasks=text, member="carol")]  # in carol's name, in dave's fork
+        alices = cut_proposal(self.alice, duty, tasks=text, member="alice")  # an account the project does not trust
+        self.w.run()
+        self.assertEqual(self.lines("duty-end"), [], "carol's duty goes on")
+        self.assertEqual((stray[0] in self.ignored(self.carol), stray[1] in self.ignored(self.carol), stray[2] in self.ignored(self.dave),
+                          alices in self.ignored(self.alice)), (True, True, True, True), "each is nothing, read once")
+        with mock.patch.object(hive, "ROLES", ("cut", "review")):  # trusted, but not with « cut »
+            self.w.set_config({"trusted": {"accounts": [{"account": 301, "roles": ["cut", "review"]}, {"account": 302, "roles": ["review"]}]}})
+            daves = cut_proposal(self.dave, duty, tasks=text)
+            self.w.run()
+            self.assertEqual((self.lines("duty-end"), daves in self.ignored(self.dave)), ([], True))
+
+    def test_a_proposal_in_another_s_name_is_nothing_even_from_the_account_that_holds_the_duty(self):
+        duty_ask(self.dave)
+        self.w.run()
+        duty = self.lines("duty")[-1]["at"]
+        named = cut_proposal(self.dave, duty, member="carol")  # dave's own fork and duty, in carol's name
+        self.w.run()
+        self.assertEqual((self.lines("duty-end"), named in self.ignored(self.dave)), ([], True), "dave's duty goes on")
+
+    def test_a_git_that_fails_on_the_proposal_s_commit_makes_it_malformed_and_stops_nothing(self):
+        duty = self.dealt()
+        real = hive.git_raw
+
+        def stalls(repo, *args, **options):
+            if args[:1] == ("diff-tree",):
+                raise hive.HiveError("git diff-tree: timeout after 120 s")
+            return real(repo, *args, **options)
+        proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]))
+        with mock.patch.object(hive, "git_raw", side_effect=stalls):
+            self.w.run()
+        self.assertEqual({key: self.end_of()[key] for key in ("outcome", "reason", "proposal")}, {"outcome": "refused", "reason": "malformed", "proposal": proposal})
+
+    def test_a_cut_that_only_closes_a_task_or_only_plans_one_stands(self):
+        duty = self.dealt()
+        cut_proposal(self.carol, duty, tasks=task_lines(CLOSED_FOUR))
+        self.w.run()
+        self.assertEqual(self.end_of()["outcome"], "cut", "a task closed")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T18:00:00Z"}):  # six hours on: the pace after a cut
+            again = self.dealt()
+            planned = task_lines([{"id": "toy-0020", "title": "Later", "files": ["lib.c"], "goal": PROVED_GAIN}])
+            cut_proposal(self.carol, again, backlog=planned)
+            self.w.run()
+        self.assertEqual((self.end_of()["duty"], self.end_of()["outcome"], self.end_of()["digests"]["backlog"]),
+                         (again, "cut", hashlib.sha256(planned.encode()).hexdigest()), "a task planned")
+
+    def test_a_proposal_wins_over_a_release_of_the_same_duty(self):
+        duty = self.dealt()
+        given = duty_release(self.carol, duty)
+        proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]))
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((len(self.lines("duty-end")), end["outcome"], end["proposal"], given in self.ignored(self.carol)), (1, "cut", proposal, True))
+
+    def test_a_proposal_read_after_the_duty_s_time_counts_while_the_duty_is_live(self):
+        duty = self.dealt()
+        proposal = cut_proposal(self.carol, duty)
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T14:59:59Z"}):  # its time is up, the grace not yet
+            self.w.run()
+        self.assertEqual((self.end_of()["outcome"], self.end_of()["proposal"]), ("nothing", proposal))
+
+    def test_the_duty_command_says_a_proposal_pushed_and_not_yet_read(self):
+        duty = self.dealt()
+        self.w.publish()
+        here = os.getcwd()
+
+        def duty_line():
+            os.chdir(self.carol.work)
+            try:
+                with mock.patch("sys.stdout") as out, mock.patch.object(hive, "LOCAL_REMOTES", True):
+                    hive.main(["duty", "--project", self.w.repository, "--upstream-url", str(self.w.upstream), "--state", str(self.w.state),
+                               "--login", "carol"])
+            finally:
+                os.chdir(here)
+            return "".join(c.args[0] for c in out.write.call_args_list).split("\n")[0]
+        self.assertEqual(duty_line(), "DUTY cut until 2026-11-12T14:00:00Z")
+        cut_proposal(self.carol, "2026-11-12T11:00:00Z")  # a proposal of another duty: this one is still held
+        self.assertEqual(duty_line(), "DUTY cut until 2026-11-12T14:00:00Z")
+        cut_proposal(self.carol, duty)
+        self.assertEqual(duty_line(), "WAIT: your proposal is pushed and the hive has not read it yet: its next run holds it to the cutter's gate "
+                                      "and ends the duty")
+
+    def test_the_step_that_writes_holds_a_proposal_s_end(self):
+        duty, published = self.dealt(), self.w.publish()
+        proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]))
+        made = self.w.plan()
+        good = made["duty_ends"][0]
+        for changes, said in ((dict(duty_ends=[{**good, "reason": "stale", "outcome": "refused", "fault": True, "digests": None}]), "unreadable"),
+                              (dict(duty_ends=[{key: value for key, value in {**good, "outcome": "refused", "fault": True, "reason": "stale"}.items()
+                                                if key != "digests"}]), "calls it stale"),
+                              (dict(duty_ends=[{**good, "published": "f" * 40}]), "calls it stale"),
+                              (dict(duty_ends=[{**good, "proposal": "e" * 40}]), "a proposal it does not set aside"),
+                              (dict(duty_ends=[{**good, "published": "nope"}]), "unreadable"),
+                              (dict(duty_ends=[{**good, "proposal": "nope"}]), "unreadable"),
+                              (dict(duty_ends=[{**good, "fault": True}]), "unreadable"),
+                              (dict(duty_ends=[{**good, "digests": {"tasks": "x"}}]), "unreadable"),
+                              (dict(duty_ends=[{**good, "digests": {"tasks": "a" * 64, "other": "a" * 64}}]), "unreadable"),
+                              (dict(duty_ends=[{key: value for key, value in {**good, "outcome": "refused", "reason": "bored"}.items() if key != "digests"}]),
+                               "unreadable"),
+                              (dict(duty_ends=[{key: value for key, value in {**good, "outcome": "refused", "reason": "gate", "fault": True}.items()
+                                                if key != "digests"}]), "unreadable"),
+                              (dict(duty_ends=[{key: value for key, value in good.items() if key != "digests"}]), "unreadable")):
+            with self.subTest(said, changes=changes), self.assertRaisesRegex(hive.HiveError, said):
+                self.w.record(**changes)
+        self.assertEqual(self.lines("duty-end"), [], "nothing of it is written")
+        self.w.set_config({"trusted": {**TRUSTED, "accounts": [{"account": 302, "roles": ["cut"]}]}})  # carol no longer trusted when record runs
+        with self.assertRaisesRegex(hive.HiveError, "at its account's cost where the project's file no longer trusts"):
+            self.w.record()
+        self.w.set_config({"trusted": TRUSTED})
+        self.w.record()
+        self.assertEqual((self.end_of()["proposal"], self.end_of()["published"]), (proposal, published))
 
 
 if __name__ == "__main__":

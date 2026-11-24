@@ -613,9 +613,9 @@ account once, with its roles. `cut`, the project's cutting, is the one role ther
 role, an account twice, more than 32 accounts, or an account it bans by number, does not load; an account it bans by
 a login and trusts by its number is read for its duties, as a guardian is for its rulings. A project that trusts
 nobody (the default) deals no duty: its plans and its ledger hold none, its feed carries `duties` and `duty_wait`
-empty, and the settings list and `hive.py doctor` still name `trusted.accounts` among its settings. **This version
-reads nothing a duty produces**: a duty ends by its time or by its account, and either costs that account a wait,
-but for the cases below where it costs nothing.
+empty, and the settings list and `hive.py doctor` still name `trusted.accounts` among its settings. A cut duty's
+work is a **proposal**, which the run holds to the cutter's gate and records (below). **Nothing in the run publishes
+it**: the published branch stays the project's own to move.
 
 **The ask.** A trusted account that is free asks for a **duty** of its role in its own fork, at one branch,
 `hive/duty` (`hive.py duty` makes the ask): a commit with no file and no parent, whose message says, each line alone
@@ -635,8 +635,9 @@ ever being taken for an ask for a task: one account may be a member and a truste
 
 **The deal.** At each run, after the tasks are dealt, the plan:
 
-1. ends each live duty that is over: given back by its account (below); at once and at no cost when the file no
-   longer trusts its account with its role; or, once its time and the project's grace are past, `expired`:
+1. ends each live duty that is over: at once and at no cost when the file no longer trusts its account with its
+   role; on its proposal (below), read while the duty is live, whatever its time, as a candidate is; given back by
+   its account (below); or, once its time and the project's grace are past, `expired`:
    - at no cost to its account if the project was paused while the duty was live (a version of `hive/project.json`
      with `"paused": true` on the published branch, after the commit the duty was dealt at: the account's tool told
      it to stop), or if the run comes a day after its time and grace (`UNREAD_HOURS`: the hive did not run, or could
@@ -645,7 +646,9 @@ ever being taken for an ask for a task: one account may be a member and a truste
    - else not yet: its account's fork could not be read, as for a deal, and nothing is decided;
 2. deals a cut duty when none is live and either none was ever dealt, or `trusted.cut_hours` (6 by default) have
    passed since the latest one was dealt, or the project has fewer tasks left to do (open or dealt) than its cutter
-   aims at (`cutter.open`), which a project that starves always has;
+   aims at (`cutter.open`), which a project that starves always has; after a duty that ended on a cut that stands
+   or on nothing to cut, the next keeps to `trusted.cut_hours`, short of tasks or not (a cut stands until it is
+   published, and another duty would cut the same commit again);
 3. deals it to one of the accounts the file trusts with the role whose ask stands, but not one that holds a live
    duty, nor one whose duty wait (below) is not over: the least loaded first (how many duties of that role the
    ledger dealt it in the last `trusted.window_days`, 7 by default), then a draw with the run's key, drawn after the
@@ -656,8 +659,56 @@ A duty lasts `duty_hours` (2 by default, from 1 to 24) from the moment it is wri
 a role whose latest duty is over, to an account the file trusts with it that holds no duty and does not wait, at the
 project's pace, on asks the plan sets aside; and each end against the ledger as the plan read it (that duty was
 live; the file took the role away, at no cost, or its time and grace are past, and a day past them it costs
-nothing; a release the plan sets aside, used once). Which asker had the duty stays the plan's word, as a member's
-draw does, and so do that the account's fork was read and that the published branch shows a pause.
+nothing; a release or a proposal the plan sets aside, used once; a proposal called stale if and only if it was cut
+against another commit than the plan's). Which asker had the duty stays the plan's word, as a member's draw does,
+and so do that the account's fork was read, that the published branch shows a pause, and what a proposal holds and
+what the gate said of it.
+
+**The proposal.** A cut duty's account pushes its cut to its own fork, at one branch, `hive/cut`: **one commit whose
+one parent is the published commit it was cut against, whose files are that commit's but for `hive/tasks.jsonl` and,
+if the cut changes it, `hive/backlog.jsonl`**. Its message says, each line alone on its line:
+
+```
+Hive-Action: cut
+Hive-Member: carol
+Hive-Deal: 2026-11-24T10:00:03Z
+Hive-Published: 4f1c0e9a3b2d5c6e7f8091a2b3c4d5e6f7081920
+Hive-Tasks: <the SHA-256 of the tasks file it proposes>
+Hive-Backlog: <the SHA-256 of the backlog it proposes, if it changes it>
+Hive-Area: null
+```
+
+`Hive-Deal` is the duty's instant; the digests are those `hive.py cut-check` prints (`CHECKED`); `Hive-Area` is
+reserved, and a proposal that gives it another value is none. It counts only in the fork of an account the project
+trusts with `cut`, by that fork's owner, at the tip of `hive/cut`, for the live duty that account holds at that
+instant; anything else is nothing, and every proposal is read once. It is pushed straight to `hive/cut`: a commit the
+hive has read at another branch of the fork is not read again; and once pushed it is not taken back (`hive.py duty
+--withdraw` takes back an ask): the next run reads it. The plan holds it, in this order:
+
+1. to the published commit it reads the settings at: cut against an earlier commit the branch was at during the duty
+   (one that descends from the commit the duty was dealt at), it is `refused` as `stale`, at no cost (the branch
+   moved under it); cut against any other commit, it is `malformed`;
+2. to its form: one commit on that commit, no other file changed, each file plain and with the mode the published
+   commit gives it, and the digests its marker names (a backlog it changes has its digest): otherwise `refused` as
+   `malformed`, and so when git fails or runs out of time on that commit;
+3. no file changed: `nothing`, a duty that found nothing to cut;
+4. its files read as a task file is read: otherwise `refused` as `gate`;
+5. to the cutter's gate (`cut_check`, and `backlog_check` for the backlog: [cutter.md](cutter.md), "The gate"), with
+   the inputs `hive.py cut-check` gathers: the published tasks, the tasks dealt now (this plan's own deals
+   included) and those done, the files of the tip of the branch the hive writes, and, as the tasks shown to fail or
+   to pass at that tip, **the judge's answers in the state and nothing else**: no account's word is taken for a task
+   « correct ». Refused: `refused` as `gate`. What the hive reads there of its own (the project's published backlog,
+   the tip's files, the state) and cannot read: `refused` as `unchecked`, at no cost;
+6. a change of tasks, a task added or closed or a task planned: `cut`. Files whose bytes changed and whose tasks did
+   not (another order, other spaces): `nothing`.
+
+A proposal and a release of the same duty: the proposal is read, and the release is spent. The duty's end names the
+proposal's commit and the published commit; `cut` and `nothing` add the digests. **A `cut` line is the record of
+which proposal stands**, for whoever publishes it: the latest `cut` whose published commit is the published branch's
+tip. The steps that write hold what the ledger can tell of it (above); what the proposal holds and what the gate
+said stay the plan's word, so whoever publishes it fetches the commit from the account's own fork (the duty's line
+names the fork) and holds it again to its one parent, its paths, its digests and the gate, against the published
+branch as it is then.
 
 **Giving a duty back.** A release is a commit at the same branch, with one of the codes of a release ("How tasks
 are dealt": `out_of_reach`, `cannot_run`):
@@ -676,10 +727,11 @@ tool gives nothing back once the duty's time is up); a duty whose role the file 
 release of another duty, of a duty that is over, or of someone else's, ends nothing.
 
 **What a duty costs.** A duty that ran out costs its account the wait after a deal held for nothing: `backoff_hours`,
-doubled for each duty of the account's that ran out, seven days at most. In this version no duty ends well, so
-nothing brings that doubling back down. One given back costs the first wait, each time, never doubled; one ended at
-no cost (the role taken away, a pause, a day without a run or a read of its fork) costs nothing. That wait is the account's duty standing, read from the duty lines
-alone. **A duty never reaches a member's standing, the day's limit, the cover or the tally**: none of them reads a
+doubled for each duty of the account's that ran out in a row, seven days at most. A cut that stands, or nothing to
+cut, clears every wait, as an acceptance clears a member's. One given back, or whose proposal was refused as
+`malformed` or by the `gate`, costs the first wait, each time, never doubled; one ended at no cost (the role taken
+away, a pause, a day without a run or a read of its fork, a proposal gone `stale` or `unchecked`) costs nothing. That wait is the
+account's duty standing, read from the duty lines alone. **A duty never reaches a member's standing, the day's limit, the cover or the tally**: none of them reads a
 duty line, and a duty is no deal. A trusted account that is also a member is dealt tasks as anyone is.
 
 ## What holds over time
@@ -836,10 +888,13 @@ The hive's files there:
   A `duty` line carries the role, its account's login, the account's number and its fork's, when the duty starts
   and until when, `settings` (the commit of the published branch its plan read the settings at, from which a later
   plan reads a pause), and `area`, null: no part of the project is named yet. A `duty-end` line carries the role,
-  the account's number, the duty's instant (`duty`), `outcome` (`expired` or `released`) and `fault` (true when it
-  ended at no cost to its account: the role taken away, a pause, or a day without a run or a read); one given back adds `because`, the release's
-  code, and `release`, its commit id. A duty is recorded once per role and run, its end once per duty. No reader of
-  deals, verdicts or expiries reads either line.
+  the account's number, the duty's instant (`duty`), `outcome` (`expired`, `released`, `cut`, `nothing` or
+  `refused`) and `fault` (true when it ended at no cost to its account: the role taken away, a pause, a day without
+  a run or a read, a proposal gone stale or unchecked); one given back adds `because`, the release's code, and `release`, its
+  commit id; one ended on its proposal adds `proposal`, the proposal's commit id, and `published`, the commit it was
+  cut against, and then `digests` (`tasks`, and `backlog` where it changes it: SHA-256) for `cut` and `nothing`, or
+  `reason` (`stale`, `unchecked`, `malformed` or `gate`) for `refused`. A duty is recorded once per role and run, its end once per
+  duty. No reader of deals, verdicts or expiries reads either line.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
   of judged refusals and the task's context (a probe adds `kind`, how many answers it asks and how many it has, and
   its answers are no refusals there); and, **under a hash of each login** that a worker computes for its
@@ -861,8 +916,8 @@ The hive's files there:
 - `ignored.json`: fork by fork, the branch tips the hive does not read again (no marker, a marker for another
   member, an ask that was used, a submit that is not a candidate, a release once read, a commit shaped like a
   ruling in a fork whose owner the project does not name a guardian, under another account's name, or at another
-  branch than its task's ruling branch; a duty marker anywhere but at its place, an ask for a duty that was used, and
-  a duty's release once read). A guardian's ruling at its branch is not listed there: it is read at each
+  branch than its task's ruling branch; a duty marker or a proposal anywhere but at its place, an ask for a duty that
+  was used, and a duty's release or a proposal once read). A guardian's ruling at its branch is not listed there: it is read at each
   run until the ledger holds its answer. Only what is still at a tip of that fork is kept: what one fork pushes
   never costs another its entries.
 - `accounts.json`: when each account that owns a fork was created, asked of GitHub once.

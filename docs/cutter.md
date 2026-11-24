@@ -325,6 +325,12 @@ against (`CHECKED`), then the new tasks « correct » the judge showed to fail (
 published is that file, on that commit; a deal made in between, or an answer of the judge that no longer holds, is
 caught by running the gate again just before publishing.
 
+The project's run holds a trusted account's cut to the same gate ([protocol.md](protocol.md), "Trusted accounts and
+their duties"): the proposal that account pushes for its cut duty, against the commit the run reads, with the
+inputs `cut-check` gathers, and with the judge's answers alone for the tasks « correct »: the run takes no account's
+word that a task fails at the tip, the architect's included. Its marker names the digests `CHECKED` prints. The run
+records whether it stands and publishes nothing.
+
 ## The proof at the tip
 
 A new task whose goal is « correct » is worth publishing only if the project's tip fails it: one the tip passes
