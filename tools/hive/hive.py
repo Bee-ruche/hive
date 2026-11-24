@@ -2754,7 +2754,8 @@ def check_duties(plan_, config, tasks, read, counted):
     fault once it is a day past them (UNREAD_HOURS: the hive did not run, or could not read the fork, for that long);
     one its account gave back names a release the plan sets aside (it sets aside every release it read); one ended on
     its proposal is a cut duty of an account the file trusts with « cut », names a proposal the plan sets aside, and is
-    « stale » if and only if that proposal was cut against another commit than the one the plan reads the settings at;
+    « stale » if and only if that proposal was cut against another commit than the one the plan reads the settings at
+    (a « malformed » or an « unchecked » one, decided before or without that commit, may name any);
     no two ends name one release or one proposal. What the plan step alone read stays its word: that the account's fork
     held that release or that proposal, what the proposal holds and what the cutter's gate said of it (proposal_end;
     whoever publishes it holds it to the gate again), that the fork was read whole for a duty it says ran out at its
@@ -2786,7 +2787,8 @@ def check_duties(plan_, config, tasks, read, counted):
         if "proposal" in end and not (trusted and end["role"] == "cut" and end["proposal"] in spent):
             raise HiveError("the plan ends a duty on a proposal it does not set aside, or of an account the project's file does not "
                             "trust with « cut »: nothing is written")
-        if "proposal" in end and end.get("reason") != "malformed" and (end["published"] == plan_["settings"]) == (end.get("reason") == "stale"):
+        if "proposal" in end and end.get("reason") not in ("malformed", "unchecked") \
+                and (end["published"] == plan_["settings"]) == (end.get("reason") == "stale"):
             raise HiveError("the plan says a proposal was cut against the commit it reads the settings at, and calls it stale, or "
                             "against another, and holds it as if it were not: nothing is written")
     given = [end["release"] for end in ends if "release" in end] + [end["proposal"] for end in ends if "proposal" in end]
@@ -3260,19 +3262,45 @@ def proposal_end(repo, entry, config, tasks, settings, tip, state_folder, dealt,
         cannot read ends the duty « refused », « unchecked », at no cost; a refusal of the gate: « refused », « gate »;
       - a change of tasks: a task added or closed, or a task planned. Files whose bytes changed and whose tasks did
         not (another order, other spaces) are « nothing »; else « cut ».
-    Every end names the proposal's commit and the published commit its marker names; « cut » and « nothing » add the
-    digests, which whoever publishes holds the files to. The proposal's commit is a fork's object: it is read with git's
-    plumbing alone, within the bounds blob_at sets, and none of its text is logged or kept."""
-    base, sha, published = {"proposal": entry["sha"], "published": entry["published"]}, entry["sha"], entry["published"]
-    malformed = {**base, "outcome": "refused", "fault": False, "reason": "malformed"}
+    Every end names the proposal's commit, the published commit its marker names and the number of the fork it was read
+    in (« repo_id »); « cut » and « nothing » add the digests, which whoever publishes holds the files to. The
+    proposal's commit is a fork's object: it is read with git's plumbing alone, within the bounds blob_at sets, and none
+    of its text is logged or kept. What the hive reads of its own fails at no cost to the account (« unchecked »), and
+    so does anything unforeseen, of which the type alone is logged: a proposal never stops the plan, and it is read once
+    (the plan sets it aside before it holds it), so it stops no later run either."""
     try:
+        return proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt, done, integrated, since)
+    except Exception as error:  # noqa: BLE001 (nothing a proposal holds may stop the plan, for this run or the next)
+        log(f"a proposal could not be held ({type(error).__name__}): the duty ends at no cost")
+        return {"proposal": entry["sha"], "published": entry["published"], "repo_id": entry["repo_id"], "outcome": "refused", "fault": True,
+                "reason": "unchecked"}
+
+
+def proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt, done, integrated, since):
+    """proposal_end's own work, in the order it says. What fails on the hive's side (its clone, the project's own
+    files, the state) ends « unchecked », at no cost; what fails on the fork's commit is « malformed »."""
+    base = {"proposal": entry["sha"], "published": entry["published"], "repo_id": entry["repo_id"]}
+    sha, published = entry["sha"], entry["published"]
+    malformed = {**base, "outcome": "refused", "fault": False, "reason": "malformed"}
+    unchecked = {**base, "outcome": "refused", "fault": True, "reason": "unchecked"}
+    try:  # the hive's own commits, read first: the plan's, and the one the duty was dealt at
         if published != settings:
             # Stale, and at no cost, only when it names a commit the published branch was at during the duty: one that
             # descends from the commit the duty was dealt at (its line's « settings ») and that this plan's descends
-            # from. Any other commit was never what the account was given to cut: the proposal is malformed.
-            dealt_at = since if is_sha(since) else None
-            moved = ancestor(repo, published, settings) and (dealt_at is None or ancestor(repo, dealt_at, published))
+            # from. Any other commit, or a duty whose line names no commit, was never what the account was given to cut.
+            if not is_sha(since):
+                return malformed
+            for own in (since, settings):
+                git(repo, "cat-file", "-e", f"{need_sha(own)}^{{commit}}")
+            moved = ancestor(repo, since, published) and ancestor(repo, published, settings)
             return {**base, "outcome": "refused", "fault": True, "reason": "stale"} if moved else malformed
+        # Each of the two files keeps the mode the published commit gives it (a new backlog, a plain file's): what is
+        # published is a file's bytes, never a change of its mode.
+        before = file_modes(repo, settings)
+    except HiveError:
+        log("a proposal could not be held: the hive's clone could not read its own commits; the duty ends at no cost")
+        return unchecked
+    try:  # the fork's commit and its files
         listed = git(repo, "rev-list", "--parents", "--no-walk", need_sha(sha), check=False)
         if listed.returncode != 0 or listed.stdout.split() != [sha, settings]:
             return malformed
@@ -3280,9 +3308,7 @@ def proposal_end(repo, entry, config, tasks, settings, tip, state_folder, dealt,
         paths = {name for name in changed.stdout.split(b"\0") if name} if changed.returncode == 0 else None
         if paths is None or not paths <= {TASKS_FILE.encode(), BACKLOG_FILE.encode()}:
             return malformed
-        # Each of the two files keeps the mode the published commit gives it (a new backlog, a plain file's): what is
-        # published is a file's bytes, never a change of its mode.
-        before, after = file_modes(repo, settings), file_modes(repo, sha)
+        after = file_modes(repo, sha)
         if any(mode != before.get(path, b"100644") for path, mode in after.items()):
             return malformed
         proposed, planned = blob_at(repo, sha, TASKS_FILE), blob_at(repo, sha, BACKLOG_FILE)
@@ -3323,7 +3349,7 @@ def proposal_end(repo, entry, config, tasks, settings, tip, state_folder, dealt,
     except (HiveError, ValueError, TypeError, RecursionError, OSError):
         log("a proposal could not be held to the gate: the project's published backlog, its tip or the state cannot be read; "
             "the duty ends at no cost")
-        return {**base, "outcome": "refused", "fault": True, "reason": "unchecked"}
+        return unchecked
     failing, passing = ({task_id for task_id, answer in shown.items() if answer == word} for word in ("failing", "passing"))
     refusals = cut_check(config, tasks, proposal, dealt, done, paths_at_tip, failing, passing) \
         + (backlog_check(config, published_backlog, backlog, proposal) if backlog is not None else [])
@@ -3562,14 +3588,15 @@ def read_plan(plan_, config):
 
     def duty_end_ok(c):  # a duty the plan ends, with what its outcome adds (DUTY_END_FIELDS); never a release or a cut at the hive's fault
         outcome = c.get("outcome") if isinstance(c, dict) else None
-        more = {"released": ("because", "release"), "cut": ("proposal", "published", "digests"), "nothing": ("proposal", "published", "digests"),
-                "refused": ("proposal", "published", "reason")}.get(outcome, ()) if isinstance(outcome, str) else ()
+        more = {"released": ("because", "release"), "cut": ("proposal", "published", "repo_id", "digests"),
+                "nothing": ("proposal", "published", "repo_id", "digests"),
+                "refused": ("proposal", "published", "repo_id", "reason")}.get(outcome, ()) if isinstance(outcome, str) else ()
         if not (isinstance(c, dict) and set(c) == {"role", "member_id", "duty", "outcome", "fault", *more} and c["role"] in ROLES
                 and type(c["member_id"]) is int and stamp(c["duty"]) and outcome in DUTY_OUTCOMES and type(c["fault"]) is bool):
             return False
         if outcome == "released":
             return c["because"] in RELEASES and c["fault"] is False and is_sha(c["release"])
-        if outcome in ("cut", "nothing", "refused") and not (is_sha(c["proposal"]) and is_sha(c["published"])):
+        if outcome in ("cut", "nothing", "refused") and not (is_sha(c["proposal"]) and is_sha(c["published"]) and type(c["repo_id"]) is int):
             return False
         if outcome in ("cut", "nothing"):
             return c["fault"] is False and digests_ok(c["digests"])
@@ -3625,7 +3652,7 @@ def expired_line(expiry, at, run):
             "fault": expiry["fault"], **({"released": expiry["released"], "release": expiry["release"]} if "released" in expiry else {})}
 
 
-DUTY_END_FIELDS = ("because", "release", "proposal", "published", "digests", "reason")  # what an end adds, by its outcome
+DUTY_END_FIELDS = ("because", "release", "proposal", "published", "repo_id", "digests", "reason")  # what an end adds, by its outcome
 
 
 def duty_end_line(end, at, run):
@@ -3633,7 +3660,8 @@ def duty_end_line(end, at, run):
     or, at the hive's fault, the project's file no longer trusts its account with its role), released (its account
     gave it back: « because », the release's code, RELEASES; « release », the release's commit id, which anyone can
     look up in the account's public fork), or the outcome of its proposal (proposal_end: « proposal », its commit id,
-    and « published », the commit it was cut against; « cut » and « nothing » add « digests », the SHA-256 of the
+    « published », the commit it was cut against, and « repo_id », the number of the fork the plan read it in, where
+    whoever publishes it fetches it; « cut » and « nothing » add « digests », the SHA-256 of the
     files it proposes, and « refused » its « reason », CUT_REFUSALS). A « cut » line is what says which proposal stands,
     for whoever publishes it. « duty » is the duty's instant. Every field is one the plan's own form holds (read_plan)."""
     return {"type": "duty-end", "at": at, "run": run, "role": end["role"], "member_id": end["member_id"], "duty": end["duty"],

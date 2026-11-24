@@ -17958,7 +17958,7 @@ class TestCuts(Base):
         self.w.run()
         self.assertEqual(self.lines("duty")[-1]["at"], duty, "a cut stands until it is published: no duty to cut the same commit again")
         self.assertEqual(self.end_of(), {"type": "duty-end", "at": NOW, "run": self.w.made["key"], "role": "cut", "member_id": 301, "duty": duty,
-                                         "outcome": "cut", "fault": False, "proposal": proposal, "published": published,
+                                         "outcome": "cut", "fault": False, "proposal": proposal, "published": published, "repo_id": 1301,
                                          "digests": {"tasks": hashlib.sha256(text.encode()).hexdigest()}})
         self.assertEqual((self.w.publish(), self.w.tasks_file.read_text(), self.wait_of(self.carol), proposal in self.ignored(self.carol)),
                          (published, task_lines(TASKS), None, True), "nothing is published, no wait, and the proposal is read once")
@@ -18027,6 +18027,60 @@ class TestCuts(Base):
             with mock.patch.object(hive, "tip_paths", side_effect=hive.HiveError("the files of the project's tip cannot be listed")):
                 self.w.run()
         self.assertEqual((self.end_of()["duty"], self.end_of()["outcome"]), (again, "nothing"))
+
+    def test_nothing_a_proposal_holds_stops_the_plan_and_what_is_unforeseen_costs_nothing(self):
+        text, real = task_lines([*CLOSED_FOUR, NEW_SEVEN]), hive.git_raw
+
+        def deep(repo, *args, **options):
+            if args[:1] == ("diff-tree",):
+                raise RecursionError("deep")
+            return real(repo, *args, **options)
+        for clock, (name, patch) in zip(("12:00:00", "12:10:00", "12:20:00"), (
+                ("the gate", mock.patch.object(hive, "cut_check", side_effect=KeyError("goal"))),
+                ("reading the goals", mock.patch.object(hive, "check_goals", side_effect=AttributeError("strip"))),
+                ("the fork's commit", mock.patch.object(hive, "git_raw", side_effect=deep)))):
+            with self.subTest(name), mock.patch.dict(os.environ, {"HIVE_NOW": f"2026-11-12T{clock}Z"}):
+                self.clear(clock)
+                duty = self.dealt()
+                proposal = cut_proposal(self.carol, duty, tasks=text)
+                with patch, mock.patch.object(hive, "log") as logged:
+                    self.w.run()
+                end = self.end_of()
+                self.assertEqual((end["duty"], end["outcome"], end["reason"], end["fault"], proposal in self.ignored(self.carol), self.wait_of(self.carol)),
+                                 (duty, "refused", "unchecked", True, True, None))
+                said = [call.args[0] for call in logged.call_args_list if "proposal" in call.args[0]]
+                self.assertEqual(len(said), 1)
+                self.assertTrue(said[0].startswith("a proposal could not be held (") and "goal" not in said[0] and "strip" not in said[0]
+                                and "deep" not in said[0], "the exception's type alone")
+
+    def test_the_hives_own_commits_that_cannot_be_read_cost_the_account_nothing(self):
+        real_modes = hive.file_modes
+        cases = [("the published commit's files", lambda settings: mock.patch.object(
+                     hive, "file_modes", side_effect=lambda repo, commit: (_ for _ in ()).throw(hive.HiveError("unreadable")) if commit == settings
+                     else real_modes(repo, commit))),
+                 ("the commit the duty was dealt at", lambda settings: mock.patch.object(hive, "ancestor", side_effect=hive.HiveError("timeout")))]
+        for clock, (name, patch) in zip(("12:00:00", "12:10:00"), cases):
+            with self.subTest(name), mock.patch.dict(os.environ, {"HIVE_NOW": f"2026-11-12T{clock}Z"}):
+                self.clear(clock)
+                duty = self.dealt()
+                dealt_at = self.w.publish()
+                if name == "the commit the duty was dealt at":  # a proposal of an earlier commit: the hive reads its own history
+                    self.w.set_config({"trusted": TRUSTED, "deal_hours": 4}); self.w.publish()
+                proposal = cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]), published=dealt_at)
+                with patch(self.w.publish()):
+                    self.w.run()
+                end = self.end_of()
+                self.assertEqual((end["duty"], end["outcome"], end["reason"], end["fault"], end["proposal"], self.wait_of(self.carol)),
+                                 (duty, "refused", "unchecked", True, proposal, None))
+
+    def test_a_duty_whose_line_names_no_commit_takes_no_proposal_as_stale(self):
+        ancient = self.w.publish()
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 4}); self.w.publish()
+        duty = TestDuties.held(self, self.carol, "2026-11-12T11:30:00Z")  # a duty line with no « settings »
+        cut_proposal(self.carol, duty, tasks=task_lines(TASKS), published=ancient)
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["duty"], end["outcome"], end["reason"], end["fault"]), (duty, "refused", "malformed", False))
 
     def test_files_whose_bytes_changed_and_whose_tasks_did_not_are_nothing_to_cut(self):
         duty = self.dealt()
@@ -18231,6 +18285,8 @@ class TestCuts(Base):
                               (dict(duty_ends=[{**good, "proposal": "e" * 40}]), "a proposal it does not set aside"),
                               (dict(duty_ends=[{**good, "published": "nope"}]), "unreadable"),
                               (dict(duty_ends=[{**good, "proposal": "nope"}]), "unreadable"),
+                              (dict(duty_ends=[{key: value for key, value in good.items() if key != "repo_id"}]), "unreadable"),
+                              (dict(duty_ends=[{**good, "repo_id": "1301"}]), "unreadable"),
                               (dict(duty_ends=[{**good, "fault": True}]), "unreadable"),
                               (dict(duty_ends=[{**good, "digests": {"tasks": "x"}}]), "unreadable"),
                               (dict(duty_ends=[{**good, "digests": {"tasks": "a" * 64, "other": "a" * 64}}]), "unreadable"),

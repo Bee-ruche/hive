@@ -686,8 +686,9 @@ hive has read at another branch of the fork is not read again; and once pushed i
 --withdraw` takes back an ask): the next run reads it. The plan holds it, in this order:
 
 1. to the published commit it reads the settings at: cut against an earlier commit the branch was at during the duty
-   (one that descends from the commit the duty was dealt at), it is `refused` as `stale`, at no cost (the branch
-   moved under it); cut against any other commit, it is `malformed`;
+   (one that descends from the commit the duty was dealt at, which the duty's line records), it is `refused` as
+   `stale`, at no cost (the branch moved under it); cut against any other commit, or for a duty whose line records
+   no commit, it is `malformed`;
 2. to its form: one commit on that commit, no other file changed, each file plain and with the mode the published
    commit gives it, and the digests its marker names (a backlog it changes has its digest): otherwise `refused` as
    `malformed`, and so when git fails or runs out of time on that commit;
@@ -703,12 +704,24 @@ hive has read at another branch of the fork is not read again; and once pushed i
    not (another order, other spaces): `nothing`.
 
 A proposal and a release of the same duty: the proposal is read, and the release is spent. The duty's end names the
-proposal's commit and the published commit; `cut` and `nothing` add the digests. **A `cut` line is the record of
-which proposal stands**, for whoever publishes it: the latest `cut` whose published commit is the published branch's
-tip. The steps that write hold what the ledger can tell of it (above); what the proposal holds and what the gate
-said stay the plan's word, so whoever publishes it fetches the commit from the account's own fork (the duty's line
-names the fork) and holds it again to its one parent, its paths, its digests and the gate, against the published
-branch as it is then.
+proposal's commit, the published commit and the fork the plan read it in (`repo_id`); `cut` and `nothing` add the
+digests. **A `cut` line is the record of which proposal stands**, for whoever publishes it: the latest `cut` whose
+published commit is the published branch's tip. The steps that write hold what the ledger can tell of it (above);
+what the proposal holds and what the gate said stay the plan's word. So whoever publishes it fetches the commit from
+that fork and holds it again, against the published branch as it is then, to its marker, its one parent, its paths,
+its digests and the gate, and never takes it on where it was fetched from: the forks of one project share their
+objects.
+
+What the hive reads of its own for a proposal (its clone's commits, the project's published backlog, the tip's
+files, the state) and cannot read, and anything else unforeseen, ends the duty `refused` as `unchecked`, at no cost:
+a proposal never stops the plan, and it is read once, so it stops no later run either.
+
+**What an account can do with it, and what it is charged for.** An account may answer `nothing` at any time of its
+duty, at no cost: the next cut duty then keeps to `trusted.cut_hours`, so a trusted account can hold the project's
+cuts off that long, and no longer than until the next duty, which may be another's. And the gate the plan runs is the
+gate at the plan's instant: what moved after the account ran `cut-check` (the tip of the branch the hive writes, the
+judge's answers, a task dealt in the same plan, its own deals included) can make the plan refuse what `cut-check`
+passed, and that refusal (`gate`) costs the account the first wait, as any other.
 
 **Giving a duty back.** A release is a commit at the same branch, with one of the codes of a release ("How tasks
 are dealt": `out_of_reach`, `cannot_run`):
@@ -891,8 +904,8 @@ The hive's files there:
   the account's number, the duty's instant (`duty`), `outcome` (`expired`, `released`, `cut`, `nothing` or
   `refused`) and `fault` (true when it ended at no cost to its account: the role taken away, a pause, a day without
   a run or a read, a proposal gone stale or unchecked); one given back adds `because`, the release's code, and `release`, its
-  commit id; one ended on its proposal adds `proposal`, the proposal's commit id, and `published`, the commit it was
-  cut against, and then `digests` (`tasks`, and `backlog` where it changes it: SHA-256) for `cut` and `nothing`, or
+  commit id; one ended on its proposal adds `proposal`, the proposal's commit id, `published`, the commit it was
+  cut against, and `repo_id`, the number of the fork it was read in, and then `digests` (`tasks`, and `backlog` where it changes it: SHA-256) for `cut` and `nothing`, or
   `reason` (`stale`, `unchecked`, `malformed` or `gate`) for `refused`. A duty is recorded once per role and run, its end once per
   duty. No reader of deals, verdicts or expiries reads either line.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
