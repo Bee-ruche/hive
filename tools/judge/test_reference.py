@@ -850,15 +850,31 @@ class TestTheJudgeInContainers(Base):
     def test_the_image_for_wasm_holds_its_compiler_its_linker_and_wasm2c(self):
         """The image a project names to build a unit into a WebAssembly module, and that module into a native driver:
         clang for the wasm32 target, its linker, wabt's reader and translator with the translator's runtime, and the
-        C compiler of the reference's side and of the driver."""
+        C compiler of the reference's side and of the driver. The whole chain is run, not only listed: a freestanding C
+        function compiled for wasm32 with no C library and no compiler-rt (which the image does not hold), linked into
+        a module with one export and no import, validated, read back and translated to C."""
         import container
         docker = container.Docker(reference.image_of(reference.check_manifest({**MANIFEST, "image": "wasm"})), memory="256m")
+        unit = ("int bee_answer(const unsigned char *in, unsigned long n, unsigned char *out, unsigned long *len)"
+                " { unsigned long i; for (i = 0; i < n; i++) out[i] = (unsigned char)(in[i] ^ 0x5a); *len = n; return 0; }")
+        chain = ("cd /tmp && printf '%s\\n' \"$0\" > unit.c"
+                 " && clang-18 --target=wasm32 -mcpu=mvp -std=gnu11 -O2 -ffreestanding -nostdlib -fvisibility=hidden -c -o unit.o unit.c"
+                 " && wasm-ld-18 --no-entry --export=bee_answer --strip-all --fatal-warnings"
+                 " --initial-memory=1048576 --max-memory=1048576 -o unit.wasm unit.o"
+                 " && wasm-validate unit.wasm"
+                 " && wasm-objdump -x -j Export unit.wasm | grep -c '^ - '"
+                 " && { wasm-objdump -h unit.wasm | grep -c ' Import ' || true; }"
+                 " && wasm2c -n unit -o module.c unit.wasm && grep -c '^void wasm2c_unit_instantiate(w2c_unit\\*);$' module.h")
         ran = reference.launch(docker, ["sh", "-c", "clang-18 -print-targets | grep -cE '^ *wasm32 ' && wasm-ld-18 --version"
                                         " && wasm2c --version && wasm-objdump --version && cc --version | head -n 1"
-                                        " && test -f /usr/include/wasm-rt.h && test -f /usr/share/wabt/wasm2c/wasm-rt-impl.c && echo runtime"],
+                                        " && " + chain +
+                                        " && test -f /usr/include/wasm-rt.h && test -f /usr/share/wabt/wasm2c/wasm-rt-impl.c"
+                                        " && test -f /usr/share/wabt/wasm2c/wasm-rt-impl.h && echo runtime", unit],
                                [], 16, 60, JudgeError, "the image's tools")
         said = ran.stdout.decode()
-        self.assertRegex(said, r"\A1\n(Ubuntu )?LLD 18\.\d+\.\d+.*\n1\.0\.\d+\n1\.0\.\d+\ncc \(.*\nruntime\n\Z")
+        # The target; the versions; the module's two exports (bee_answer, its memory), no Import section, and an
+        # instantiation that takes the instance alone; the runtime's header, source and its own header.
+        self.assertRegex(said, r"\A1\n(Ubuntu )?LLD 18\.\d+\.\d+.*\n1\.0\.\d+\n1\.0\.\d+\ncc \(.*\n2\n0\n1\nruntime\n\Z")
 
     def test_through_the_bases_own_judging_on_a_real_repository(self):
         """The base's judging step as it runs: it writes the tip's tree and the candidate's merged tree out of a git
