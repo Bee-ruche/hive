@@ -11,13 +11,15 @@ as its only volunteer; inviting other people, and opening a project to any accou
 
 ## With your own AI
 
-On a machine of yours, in a clone of your project's repository, give your assistant one line:
+On a machine of yours, start your assistant in a folder that holds no clone of your project, neither inside nor
+above it (an assistant loads the agent files of the folder it starts in before it reads you), and give it one line:
 
 > Help me put <owner/project> in the hive: take https://github.com/Bee-ruche/hive afresh into ~/.hive/architect and
-> follow its .claude/skills/bee-architect/SKILL.md.
+> follow its .claude/skills/bee-architect/SKILL.md. The clone is at <path>.
 
 It asks, reads, writes and checks; you decide each choice, and you apply what is set on GitHub's site yourself. It
-runs nothing of your project outside a container, writes no secret anywhere, and stops when something refuses.
+runs nothing of your project outside a container, writes no secret anywhere, invites and writes to no one, and stops
+when something refuses.
 
 ## 1. Can a machine judge your progress?
 
@@ -42,23 +44,28 @@ person. Take a part a machine can check, or write the tests first.
 | `relay` | run twice, the second run with the first's message alone, it gives the data back | an exact total: the message's bytes plus the program's | [relay-judge.md](relay-judge.md) |
 
 A reference given as a published program needs its units built as WebAssembly, or a candidate could call the
-original. When none of the three fits (a tolerance, a score, a proof assistant, the network, particular hardware), the
+original. Every kind mounts memory file systems for its containers, as root or through `sudo` without a password
+(as GitHub's hosted runners allow), and the relay judge's gate and the common judge's instruction analysis are for
+x86-64. When none of the three fits (a tolerance, a score, a proof assistant, the network, particular hardware), the
 project needs a new kind of judge: that is the hive's own code, built on its founder's decision. Your AI can write the
 proposal with you.
 
 ## 3. An open goal
 
-Make it checkable before anything is cut: one measured figure, tests that fail today, a reference to match, or a
-total to lower. Then the step, the least gain a task may ask (`cutter.floors`), from a measure, not a guess. Where
-nobody can price an idea, the cutter cuts a **probe** (one named thing to try, at the floor, whose short answer is
-recorded at no cost to its member), and the charter may hold a **free task** (a probe whose idea is its worker's).
-Never open a project with probes alone: they are dealt to members with an accepted task. [cutter.md](cutter.md),
-"Probes".
+Make it checkable before anything is cut: one measured figure, a reference to match, a total to lower, or tests the
+project fails today (the `reference` kind's route: the common judge compares a candidate with the project itself).
+Then the step, the least gain a task may ask (`cutter.floors`), from a measure, not a guess. Where nobody can price an
+idea, the cutter cuts a **probe** (one named thing to try, at the floor, whose short answer is recorded at no cost to
+its member), once the hive's commit your project pins holds probes. Your charter may also ask for a **free task**, a
+probe whose idea is its worker's: a practice the cutter applies, not a mechanism of the hive. Never open a project
+with probes alone: they are dealt to members with an accepted task. [cutter.md](cutter.md), "Probes".
 
 ## 4. The files
 
 As [hosting.md](hosting.md), "What a project holds", lists them: `hive/project.json` (every setting described in
-[`hive/settings.json`](../hive/settings.json); start from its `trial` preset), `hive/charter.md` (your words for the
+[`hive/settings.json`](../hive/settings.json); start from its `trial` preset, your own account number in
+`members.only` from the first commit, so that the project is never open to anyone, and `"paused": true` until the
+first run), `hive/charter.md` (your words for the
 cutter: [cutter.md](cutter.md), "The backlog and the charter"), the first tasks in `hive/tasks.jsonl`, the caller
 `.github/workflows/hive.yml` with its forty zeros kept until the first run, the judge's files and the workers'
 sandbox (`bee/sandbox/sans-docker.sh`), the branch the hive writes, and the branch `hive-state`. The repository
@@ -70,20 +77,23 @@ for you to decide (`DECIDE`).
 ## 5. The step and the bounds
 
 [hosting.md](hosting.md), "Measuring a project": `hive.py measure` judges your project's tip with its own judge, a few
-times, on your machine (Linux and Docker), and proposes the step, the judge's bounds and the time of a judgement from
-what it measured. You decide each number. Leave room for the program to grow: a pilot's time bound set by hand was
-reached in two days, and its first step, guessed, was lowered once probes had measured what ideas gave.
+times, on your machine (Linux, Docker, and root or `sudo` without a password), and proposes the step, the judge's
+bounds and the time of a judgement from what it measured. You run it, and decide each number. Leave room for the
+program to grow: in a pilot project (November 2026), a time bound set by hand was reached in two days, and a first
+step, guessed, was lowered once probes had measured what ideas gave.
 
 ## 6. The repository's settings
 
 [hosting.md](hosting.md), "The repository's settings": Actions permissions, workflow permissions, and the rulesets
 that keep the run's token to the two branches the hive writes. Your AI prepares the list for your repository; you
-apply it on GitHub.
+apply it on GitHub. One choice goes with the rule that asks a review on your published branch: your cutter runs with
+your account, so either your account is in that rule's bypass list and the cutter publishes directly (and that
+account can change anything there), or your charter asks the cutter to open a pull request for each cut.
 
 ## 7. The first run
 
-Your own account is the only member (`members.only`, the `trial` preset). Write the hive's commit into the caller,
-fork the project with your account, and point your assistant at your fork as [join.md](join.md), "One task now, with
+Your own account is the only member (`members.only`, the `trial` preset). Write the hive's commit into the caller, check
+with the doctor that it is on the hive's main (`hive-commit` must read OK), then take `"paused"` out; fork the project with your account, and point your assistant at your fork as [join.md](join.md), "One task now, with
 your assistant", says. Start a run by hand ("Run workflow", or `gh workflow run hive.yml`) and read what it did. A
 judge that refuses your own honest work is mended before anyone else is asked in.
 
@@ -91,7 +101,8 @@ judge that refuses your own honest work is mended before anyone else is asked in
 
 On the founder's word: the `invitation` preset, the invited accounts' numbers in `members.only`, guardians where your
 judge gives a figure they may waive ([guardians.md](guardians.md)), your cutter scheduled once a day
-([cutter.md](cutter.md), "Where the cutter runs"), and [join.md](join.md) for the people you invite.
+([cutter.md](cutter.md), "Where the cutter runs"; its prompt says whether your pinned commit holds probes), and
+[join.md](join.md), which you send to the people you invite.
 
 ## 9. Your regular work
 
