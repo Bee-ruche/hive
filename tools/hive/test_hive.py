@@ -143,6 +143,10 @@ class FakeApi:
         f = self.world.forks[login]
         return self.users.get(login, {"id": f.id, "created_at": f.created, "type": f.type})
 
+    def repository(self, repo_id):
+        f = next((f for f in self.world.forks.values() if f.id + 1000 == repo_id), None)
+        return None if f is None else {"full_name": f.full_name, "login": f.login, "id": f.id}
+
     def local_url(self, full_name):
         return str(next(f for f in self.world.forks.values() if f.full_name == full_name).bare)
 
@@ -18304,6 +18308,372 @@ class TestCuts(Base):
         self.w.set_config({"trusted": TRUSTED})
         self.w.record()
         self.assertEqual((self.end_of()["proposal"], self.end_of()["published"]), (proposal, published))
+
+    def test_a_plan_says_how_many_proposals_it_held_and_says_it_aloud_when_every_one_is_unchecked(self):
+        self.assertEqual(hive.duties_said({"duties": [], "duty_ends": [{"proposal": "a" * 40, "reason": "unchecked"}, {"proposal": "b" * 40, "outcome": "cut"},
+                                                                       {"outcome": "expired"}]}),
+                         ", 0 duty(ies) dealt, 3 ended (2 on a proposal, 1 of them unchecked)")
+        unchecked, cut = {"proposal": "a" * 40, "reason": "unchecked"}, {"proposal": "b" * 40, "outcome": "cut"}
+        self.assertEqual([hive.unchecked_alarm({"duty_ends": ends}) for ends in ([unchecked, cut], [unchecked, dict(unchecked, proposal="c" * 40)], [],
+                                                                                 [{"outcome": "expired"}])],
+                         [None, hive.ALL_UNCHECKED.format(held=2), None, None], "every proposal, one at least, and no other")
+        duty = self.dealt()
+        cut_proposal(self.carol, duty, tasks=task_lines([*CLOSED_FOUR, NEW_SEVEN]))
+        argv = ("plan", *TestTheProjectHoldsItsSettingsAndItsState.COMMON, "--out", "plan.json", "--bundle", "candidates.bundle")
+        for patch, unchecked in ((mock.patch.object(hive, "tip_paths", side_effect=hive.HiveError("the files of the project's tip cannot be listed")), True),
+                                 (contextlib.nullcontext(), False)):
+            with self.subTest(unchecked=unchecked), patch, mock.patch("sys.stderr") as said:
+                self.step(self.job(f"plan-{unchecked}"), *argv)
+            lines = "".join(c.args[0] for c in said.write.call_args_list).splitlines()
+            summary = next(line for line in lines if "duty(ies) dealt" in line)
+            self.assertTrue(summary.endswith(f"0 duty(ies) dealt, 1 ended (1 on a proposal, {int(unchecked)} of them unchecked)"), summary)
+            self.assertEqual([line for line in lines if line.startswith("every proposal")], [hive.ALL_UNCHECKED.format(held=1)] if unchecked else [])
+
+
+def share_state(world):
+    """The state's folder as the project's repository holds it, on its branch hive-state, where the publisher reads it."""
+    work = world.root / "state-shared"
+    if not work.exists():
+        sh("git", "init", "--quiet", "-b", hive.STATE_BRANCH, str(work), cwd=world.root)
+    for name in ("ledger.jsonl", hive.TIP_FILE):
+        source, target = world.state / name, work / name
+        if source.exists():
+            target.write_bytes(source.read_bytes())
+        elif target.exists():
+            target.unlink()
+    sh("git", "add", "-A", cwd=work)
+    sh("git", "commit", "--quiet", "--allow-empty", "-m", "state", cwd=work)
+    sh("git", "push", "--quiet", "--force", str(world.upstream), f"HEAD:refs/heads/{hive.STATE_BRANCH}", cwd=work)
+
+
+class TestPublishCut(Base):
+    """The publisher (hive.py publish-cut): the cut the ledger says stands, held again to its line, its duty, the published
+    branch, the account's trust, its fork and branch, its marker, its form and the gate, as they are now; then one commit
+    of its files, of the tool's words, pushed on the published commit, or nothing and a word that says why."""
+    config = {"trusted": TRUSTED}
+    lines, held = TestDuties.lines, TestDuties.held
+    TEXT = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+
+    def setUp(self):
+        super().setUp()
+        self.carol, self.dave = self.w.fork("carol", 301), self.w.fork("dave", 302)
+        self.architect = self.w.root / "architect"
+        sh("git", "clone", "--quiet", str(self.w.upstream), str(self.architect), cwd=self.w.root)
+
+    def stood(self, text=None, extra=()):
+        """A cut that stands, as two runs leave it: carol is dealt the cut duty, and her proposal is held. (proposal, its line)."""
+        duty = TestCuts.dealt(self)
+        proposal = cut_proposal(self.carol, duty, tasks=text or self.TEXT, extra=extra)
+        self.w.run()
+        end = self.lines("duty-end")[-1]
+        self.assertEqual((end["outcome"], end["proposal"]), ("cut", proposal))
+        return proposal, end
+
+    def forge(self, end, **changes):
+        """A line written straight into the ledger, as a leaked token could write it: the latest line becomes `end` with `changes`."""
+        with open(self.w.state / "ledger.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({**end, **changes, "run": "forged"}) + "\n")
+
+    def publish(self, share=True):
+        """publish-cut, run in the architect's clone: (what it printed, the error it ended on, or None)."""
+        if share:
+            share_state(self.w)
+        out, error = io.StringIO(), None
+        with contextlib.redirect_stdout(out):
+            try:
+                hive.publish_cut(str(self.architect), self.w.repository, self.w.api, allow_local=True)
+            except hive.HiveError as e:
+                error = str(e)
+        return out.getvalue(), error
+
+    def published(self):
+        return sh("git", "rev-parse", f"refs/heads/{self.w.published_branch}", cwd=self.w.upstream).stdout.strip()
+
+    def refused(self, check, share=True):
+        """publish-cut refuses, on that check: what it printed. Nothing is pushed."""
+        before = self.published()
+        said, error = self.publish(share)
+        self.assertEqual((said.split(":")[0], error, self.published()), (f"REFUSED {check}", f"the cut is not published ({check}): nothing is pushed", before), said)
+        return said
+
+    def test_the_cut_that_stands_is_published_as_one_commit_of_its_files_and_the_tools_words(self):
+        proposal, end = self.stood(extra=("Fixes #1: a word of carol's",))
+        before = self.published()
+        self.assertEqual(before, end["published"])
+        said, error = self.publish()
+        commit = self.published()
+        self.assertEqual((said, error), (f"PUBLISHED {commit} on stable: the cut of the duty at {end['duty']}, of account 301, proposal {proposal}\n", None))
+
+        def upstream(*args):
+            return sh("git", *args, cwd=self.w.upstream).stdout
+        self.assertEqual(upstream("rev-list", "--parents", "--no-walk", commit).split(), [commit, before], "one commit, on the published one")
+        self.assertEqual(upstream("rev-parse", f"{commit}^{{tree}}"), sh("git", "rev-parse", f"{proposal}^{{tree}}", cwd=self.architect).stdout,
+                         "the proposal's files, all of them and nothing else")
+        at = int(hive.parse_iso(end["at"]).timestamp())
+        self.assertEqual(upstream("show", "-s", "--format=%an <%ae>|%cn <%ce>|%at|%ct", commit).strip(),
+                         f"carol <301+carol@users.noreply.github.com>|La Ruche <ruche@users.noreply.github.com>|{at}|{at}")
+        message = upstream("cat-file", "commit", commit).split("\n\n", 1)[1]
+        self.assertEqual(message, hive.publication_message(end))
+        self.assertTrue(message.endswith(f"\n\nHive-Cut: {proposal}\nHive-Deal: {end['duty']}\n") and "carol's" not in message and "Fixes" not in message,
+                        "the tool's words: nothing the account wrote")
+        self.assertEqual(upstream("show", f"{commit}:{hive.TASKS_FILE}"), self.TEXT)
+        self.assertEqual(self.publish(), (f"NOTHING published: the published branch is at {commit}, the cut of the duty at {end['duty']} published\n", None),
+                         "a second run finds it published, and pushes nothing")
+        self.assertEqual(self.published(), commit)
+
+    def test_a_push_the_repository_declines_moves_nothing_and_the_next_run_makes_that_very_commit(self):
+        self.stood()
+        made = []
+
+        def declined(repo, remote, branch, expected, new, allow_local=False, isolated=True):
+            made.append((expected, new, isolated))
+            return False
+        with mock.patch.object(hive, "guarded_push", side_effect=declined):
+            self.assertEqual(self.refused("push"), "REFUSED push: the project's repository declined the commit (a rule or a hook on what may be "
+                                                   "pushed)\n")
+        tip, new, isolated = made[0]
+        self.assertEqual((tip, isolated), (self.published(), False), "from the commit the cut was held against, with the account's own git settings")
+        with mock.patch.object(hive, "guarded_push", side_effect=hive.HiveError("the push did not land")):
+            self.refused("push")
+        said, _ = self.publish()
+        self.assertEqual((said.split()[:2], self.published()), (["PUBLISHED", new], new), "the same line makes the same commit, on any run")
+
+    def test_a_published_branch_moved_while_the_cut_is_held_is_left_as_it_is(self):
+        self.stood()
+        moved, real_tip = [], hive.work_tip
+
+        def overtaken(repo, config, allow_local=False):  # the published branch moves while the publisher holds the cut
+            if not moved:
+                self.w.set_config({"trusted": TRUSTED, "deal_hours": 4})
+                moved.append(self.w.publish())
+            return real_tip(repo, config, allow_local)
+        with mock.patch.object(hive, "work_tip", side_effect=overtaken):
+            said, error = self.publish()
+        self.assertEqual((said.split(":")[0], self.published()), ("REFUSED push", moved[0]), "never pushed over what moved")
+        self.assertEqual(self.publish()[0].split(":")[0], "NOTHING tip", "and the next run publishes nothing: the cut was held against another commit")
+
+    def test_nothing_is_published_where_no_cut_stands_where_the_branch_moved_or_while_the_project_is_paused(self):
+        self.assertEqual(self.publish(share=False), ("NOTHING cut: no cut duty of the ledger ended on a cut\n", None), "no state yet")
+        self.assertEqual(self.publish(), ("NOTHING cut: no cut duty of the ledger ended on a cut\n", None))
+        proposal, end = self.stood()
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 4})
+        moved = self.w.publish()
+        said, error = self.publish()
+        self.assertEqual((said, error, self.published()), ("NOTHING tip: the published branch is no longer at the commit the latest cut was held "
+                                                           "against (that cut was published, or the branch moved since): nothing to publish\n", None, moved))
+        self.w.set_config({"trusted": TRUSTED, "paused": True})
+        paused = self.w.publish()
+        self.assertEqual(self.publish(), ("NOTHING paused: the project is paused: nothing is published while it is\n", None))
+        self.assertEqual(self.published(), paused)
+
+    def test_a_commit_that_says_it_is_the_publication_on_another_commit_is_none(self):
+        proposal, end = self.stood()
+        self.w.set_config({"trusted": TRUSTED, "deal_hours": 4})
+        self.w.publish()
+        leads_git("commit", "--quiet", "--allow-empty", "-m", hive.publication_message(end), cwd=self.w.published)
+        leads_git("push", "--quiet", "origin", f"HEAD:refs/heads/{self.w.published_branch}", cwd=self.w.published)
+        self.assertEqual(sh("git", "log", "-1", "--format=%B", self.w.published_branch, cwd=self.w.upstream).stdout.strip(),
+                         hive.publication_message(end).strip())
+        self.assertEqual(self.publish()[0].split(":")[0], "NOTHING tip", "its one parent is not the cut's published commit")
+
+    def test_the_gate_takes_the_judges_answers_from_the_state_the_project_holds(self):
+        text = task_lines([*TASKS, {"id": "toy-0007", "title": "Fix f1", "files": ["lib.c"]}])  # a goal « correct »
+
+        def shown(repo, state, config, tasks, tip, integrated):  # the answer the state's own file holds
+            held = Path(state, hive.TIP_FILE)
+            return {"toy-0007": "failing"} if held.is_file() and held.read_text() == "failing at the tip" else {}
+        with mock.patch.object(hive, "shown_at_the_tip", side_effect=shown):
+            self.w.state.mkdir(exist_ok=True)
+            (self.w.state / hive.TIP_FILE).write_text("failing at the tip")
+            proposal, end = self.stood(text)
+            (self.w.state / hive.TIP_FILE).unlink()
+            self.refused("gate")
+            (self.w.state / hive.TIP_FILE).write_text("failing at the tip")
+            self.assertEqual(self.publish()[0].split()[0], "PUBLISHED")
+
+    def test_a_line_of_another_shape_or_of_a_duty_never_dealt_is_refused(self):
+        proposal, end = self.stood()
+        for check, changes in (("line", {"proposal": "nope"}), ("line", {"digests": {"tasks": "a" * 64, "more": "b" * 64}}), ("line", {"repo_id": "1301"}),
+                               ("line", {"member_id": True}), ("line", {"at": "now"}), ("duty", {"duty": "2026-11-12T11:59:00Z"}),
+                               ("duty", {"member_id": 302})):
+            with self.subTest(check, changes=changes):
+                self.forge(end, **changes)
+                self.refused(check)
+                self.forge(end)  # (the real line again, the latest)
+
+    def test_an_account_the_file_does_not_trust_with_cut_now_is_refused(self):
+        erin, tip = self.w.fork("erin", 303), self.w.publish()
+        duty = self.held(erin, "2026-11-12T11:30:00Z", settings=tip)
+        proposal = cut_proposal(erin, duty, tasks=self.TEXT)
+        self.forge({"type": "duty-end", "at": NOW, "role": "cut", "member_id": 303, "duty": duty, "outcome": "cut", "fault": False, "proposal": proposal,
+                    "published": tip, "repo_id": 1303, "digests": {"tasks": hashlib.sha256(self.TEXT.encode()).hexdigest()}})
+        self.refused("trusted")
+
+    def test_a_fork_github_does_not_give_to_the_account_is_refused(self):
+        proposal, end = self.stood()
+        self.forge(end, repo_id=1302)  # dave's fork
+        self.refused("fork")
+        self.forge(end)
+        for answer in (mock.patch.object(self.w.api, "repository", side_effect=hive.HiveError("gh api failed")),
+                       mock.patch.object(self.w.api, "repository", return_value=None),
+                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/toy", "login": "carol", "id": "301"}),
+                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/toy", "login": "-carol", "id": 301}),
+                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/../toy", "login": "carol", "id": 301})):
+            with self.subTest(answer=answer), answer:
+                self.refused("fork")
+
+    def test_a_commit_the_accounts_own_branch_does_not_name_is_refused_wherever_its_objects_are(self):
+        proposal, end = self.stood()
+        mallory = self.w.fork("mallory", 304)
+        other = cut_proposal(mallory, end["duty"], tasks=task_lines([*CLOSED_FOUR, {**NEW_SEVEN, "title": "Make f1 faster still"}]), member="carol")
+        sh("git", "fetch", "--quiet", str(mallory.bare), other, cwd=self.architect)  # the forks of a project share their objects
+        text = sh("git", "show", f"{other}:{hive.TASKS_FILE}", cwd=self.architect).stdout
+        self.forge(end, proposal=other, repo_id=1301, digests={"tasks": hashlib.sha256(text.encode()).hexdigest()})
+        self.assertIn("does not hold the proposal at hive/cut now", self.refused("branch"))
+        self.forge(end)
+        cut_proposal(self.carol, end["duty"], tasks=task_lines(TASKS))  # carol's branch moves on
+        self.refused("branch")
+        with mock.patch.object(hive, "listed_heads", side_effect=hive.HiveError("the fork cannot be listed")):
+            self.refused("branch")
+
+    def test_a_proposal_that_cannot_be_fetched_is_refused(self):
+        self.stood()
+        with mock.patch.object(hive, "fetch_heads", return_value=set()):
+            self.refused("fetch")
+        with mock.patch.object(hive, "fetch_heads", side_effect=hive.Unfetched("no")):
+            self.refused("fetch")
+
+    def test_a_marker_that_does_not_name_the_line_and_the_fork_is_refused(self):
+        proposal, end = self.stood()
+        self.forge(end, digests={"tasks": "a" * 64})
+        self.assertTrue(self.refused("marker").endswith(": tasks\n"))
+        self.forge(end, digests={**end["digests"], "backlog": "b" * 64})
+        self.assertTrue(self.refused("marker").endswith(": backlog\n"))
+        later = self.held(self.carol, "2026-11-12T11:30:00Z")
+        self.forge(end, duty=later)
+        self.assertTrue(self.refused("marker").endswith(": deal\n"))
+        named = cut_proposal(self.carol, end["duty"], tasks=self.TEXT, member="dave")
+        self.forge(end, proposal=named)
+        self.assertTrue(self.refused("marker").endswith(": member\n"))
+        older = sh("git", "rev-parse", f"{end['published']}^", cwd=self.w.upstream).stdout.strip()
+        named = cut_proposal(self.carol, end["duty"], tasks=self.TEXT, named=older)  # on the published commit, and naming another
+        self.forge(end, proposal=named)
+        self.assertTrue(self.refused("marker").endswith(": published\n"))
+        tree = sh("git", "rev-parse", f"{end['published']}^{{tree}}", cwd=self.carol.work).stdout.strip()
+        plain = sh("git", "commit-tree", tree, "-p", end["published"], "-m", "no marker", cwd=self.carol.work).stdout.strip()
+        sh("git", "push", "--quiet", "--force", "origin", f"{plain}:refs/heads/{hive.CUT_BRANCH}", cwd=self.carol.work)
+        self.forge(end, proposal=plain)
+        self.assertEqual(self.refused("marker"), "REFUSED marker: the proposal's commit carries no proposal's marker\n")
+
+    def test_a_proposal_of_another_form_is_refused_by_the_check_it_fails(self):
+        proposal, end = self.stood()
+        published = end["published"]
+        older = sh("git", "rev-parse", f"{published}^", cwd=self.w.upstream).stdout.strip()
+        digest = hashlib.sha256(self.TEXT.encode()).hexdigest()
+        for check, options, digests in (("paths", {"files": {"lib.c": "int x;\n"}}, None), ("modes", {"modes": {hive.TASKS_FILE: "100755"}}, None),
+                                        ("parent", {"parents": [older], "named": published}, None), ("digests", {"digest": "0" * 64}, {"tasks": "0" * 64}),
+                                        ("task files", {"tasks": "not a task\n"}, {"tasks": hashlib.sha256(b"not a task\n").hexdigest()}),
+                                        ("nothing", {"tasks": task_lines(TASKS)}, {"tasks": hashlib.sha256(task_lines(TASKS).encode()).hexdigest()})):
+            with self.subTest(check):
+                options = {"tasks": self.TEXT, **options}
+                made = cut_proposal(self.carol, end["duty"], **options)
+                self.forge(end, proposal=made, digests=digests or {"tasks": digest})
+                self.assertEqual(self.refused(check), f"REFUSED {check}: {hive.PROPOSAL_CHECKS[check]}\n")
+        made = cut_proposal(self.carol, end["duty"], tasks=self.TEXT)
+        self.forge(end, proposal=made)
+        real_blob, real_modes = hive.blob_at, hive.file_modes
+        for check, patch in (("files", mock.patch.object(hive, "blob_at", side_effect=lambda repo, commit, path, most=hive.SETTINGS_BYTES:
+                                                         (_ for _ in ()).throw(hive.HiveError("too large")) if commit == made else real_blob(repo, commit, path, most))),
+                             ("clone", mock.patch.object(hive, "file_modes", side_effect=lambda repo, commit:
+                                                         (_ for _ in ()).throw(hive.HiveError("unreadable")) if commit == published else real_modes(repo, commit)))):
+            with self.subTest(check), patch:
+                self.assertEqual(self.refused(check), f"REFUSED {check}: {hive.PROPOSAL_CHECKS[check]}\n")
+
+    def test_the_gate_is_run_again_now_on_the_state_as_the_project_holds_it(self):
+        proposal, end = self.stood()
+        self.w.deal(self.alice, "toy-0004")  # a run dealt the task the cut closes, after the cut was held
+        self.refused("gate")
+        cases = (("gate inputs", mock.patch.object(hive, "tip_paths", side_effect=hive.HiveError("the files of the project's tip cannot be listed"))),
+                 ("unforeseen", mock.patch.object(hive, "cut_check", side_effect=KeyError("a word of carol's"))))
+        lines = [line for line in hive.Ledger(self.w.state).events if line.get("type") != "deal" or line.get("task") != "toy-0004"]
+        (self.w.state / "ledger.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+        for check, patch in cases:
+            with self.subTest(check), patch:
+                said = self.refused(check)
+                self.assertNotIn("carol's", said)
+        self.assertEqual(said, "REFUSED unforeseen: the proposal could not be held (KeyError)\n")
+        self.assertEqual(self.publish()[0].split()[0], "PUBLISHED", "and with the deal gone, the gate passes")
+
+    def test_the_state_is_read_as_the_project_holds_it_now_and_its_latest_commit_alone(self):
+        self.stood()
+        share_state(self.w)
+        first = sh("git", "rev-parse", "HEAD", cwd=self.w.root / "state-shared").stdout.strip()
+        self.w.deal(self.alice, "toy-0004")  # a deal a run wrote since: the gate sees it
+        self.refused("gate")
+        latest = sh("git", "rev-parse", "HEAD", cwd=self.w.root / "state-shared").stdout.strip()
+
+        def held(commit):
+            return sh("git", "cat-file", "-e", f"{commit}^{{commit}}", cwd=self.architect, check=False).returncode == 0
+        self.assertEqual((held(first), held(latest)), (False, True), "the branch's latest commit, and none of its history")
+        with mock.patch.object(hive, "fetch_bounded", return_value="heavy"):
+            share_state(self.w)
+            self.refused("state", share=False)
+
+    def test_a_state_that_cannot_be_read_is_refused(self):
+        self.stood()
+        with open(self.w.state / "ledger.jsonl", "r+", encoding="utf-8") as f:
+            text = f.read()
+            f.seek(0)
+            f.write("not json\n" + text)
+        self.refused("state")
+
+    def test_the_command_says_one_line_and_no_word_of_the_account_no_path_and_no_token(self):
+        self.stood(extra=("Fixes #1: a word of carol's",))
+        share_state(self.w)
+        code, out, err = self.command(mock.patch.object(hive, "fetch_heads", return_value=set()))
+        self.assertEqual((code, out, err), (2, "REFUSED fetch: the proposal's commit could not be fetched from the account's fork\n",
+                                            "hive: the cut is not published (fetch): nothing is pushed\n"))
+        self.assertEqual(self.command(mock.patch.object(hive.sys, "platform", "win32")), (2, "", f"hive: {hive.ONLY_ON_LINUX_PUBLISHER}\n"))
+        code, out, err = self.command(mock.patch.object(hive, "published_tip", side_effect=ValueError(str(self.architect))))
+        self.assertEqual((code, out), (2, ""))
+        self.assertRegex(err, r"\Ahive: this command stopped on an error of the tool's own \(ValueError, line \d+ of hive\.py\): what it had done "
+                              r"stays done\n\Z")
+        code, out, err = self.command()
+        self.assertEqual((code, out.split()[0], err), (0, "PUBLISHED", ""))
+        for said in (out, err):
+            self.assertNotIn("carol's", said)
+            self.assertNotIn(str(self.w.root), said)
+        self.assertFalse(hive.VOLUNTEER_SIDE, "and the tool is as it was after the command")
+
+    def test_a_push_that_does_not_land_says_what_git_said_of_the_ref_and_no_address(self):
+        self.stood()
+        share_state(self.w)
+        moved, real_tip = [], hive.work_tip
+
+        def overtaken(repo, config, allow_local=False):  # the published branch moves while the publisher holds the cut
+            if not moved:
+                self.w.set_config({"trusted": TRUSTED, "deal_hours": 4})
+                moved.append(self.w.publish())
+            return real_tip(repo, config, allow_local)
+        code, out, err = self.command(mock.patch.object(hive, "work_tip", side_effect=overtaken))
+        self.assertEqual((code, out.split(":")[0], err.splitlines()[-1], self.published()),
+                         (2, "REFUSED push", "hive: the cut is not published (push): nothing is pushed", moved[0]))
+        self.assertTrue(err.startswith("push: git said (data): ! ") and str(self.w.root) not in err, err)
+
+    def command(self, *patches):
+        """publish-cut as its command line runs it, in the architect's clone: (exit code, what it printed, what it said on its error output)."""
+        real = hive.publish_cut
+        out, err, code = io.StringIO(), io.StringIO(), 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.object(hive, "GhApi", return_value=self.w.api), \
+                mock.patch.object(hive, "publish_cut", side_effect=lambda *a, **k: real(*a, **{**k, "allow_local": True})), \
+                contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            try:
+                hive.main(["publish-cut", "--project", self.w.repository, "--repo", str(self.architect)])
+            except SystemExit as ended:
+                code = ended.code
+        return code, out.getvalue(), err.getvalue()
 
 
 if __name__ == "__main__":

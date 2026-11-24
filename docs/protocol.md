@@ -615,7 +615,9 @@ a login and trusts by its number is read for its duties, as a guardian is for it
 nobody (the default) deals no duty: its plans and its ledger hold none, its feed carries `duties` and `duty_wait`
 empty, and the settings list and `hive.py doctor` still name `trusted.accounts` among its settings. A cut duty's
 work is a **proposal**, which the run holds to the cutter's gate and records (below). **Nothing in the run publishes
-it**: the published branch stays the project's own to move.
+it**: the published branch stays the project's own to move, and the project's publisher, `hive.py publish-cut`, run
+with the project's own account, publishes the cut that stands once it has held it again itself (below, "Publishing a
+cut").
 
 **The ask.** A trusted account that is free asks for a **duty** of its role in its own fork, at one branch,
 `hive/duty` (`hive.py duty` makes the ask): a commit with no file and no parent, whose message says, each line alone
@@ -705,16 +707,66 @@ hive has read at another branch of the fork is not read again; and once pushed i
 
 A proposal and a release of the same duty: the proposal is read, and the release is spent. The duty's end names the
 proposal's commit, the published commit and the fork the plan read it in (`repo_id`); `cut` and `nothing` add the
-digests. **A `cut` line is the record of which proposal stands**, for whoever publishes it: the latest `cut` whose
-published commit is the published branch's tip. The steps that write hold what the ledger can tell of it (above);
-what the proposal holds and what the gate said stay the plan's word. So whoever publishes it fetches the commit from
-that fork and holds it again, against the published branch as it is then, to its marker, its one parent, its paths,
-its digests and the gate, and never takes it on where it was fetched from: the forks of one project share their
-objects.
+digests. **A `cut` line is the record of which proposal stands.** The steps that write hold what the ledger can tell
+of it (above); what the proposal holds and what the gate said stay the plan's word, which the publisher does not take
+(below).
 
 What the hive reads of its own for a proposal (its clone's commits, the project's published backlog, the tip's
 files, the state) and cannot read, and anything else unforeseen, ends the duty `refused` as `unchecked`, at no cost:
-a proposal never stops the plan, and it is read once, so it stops no later run either.
+a proposal never stops the plan, and it is read once, so it stops no later run either. The plan's job says how many
+of the duties it ended were on a proposal and how many of those were `unchecked`, and says so on a line of its own
+when every one was: run after run, that is a fault of the hive's own side, which would make every proposal a free end.
+
+**Publishing a cut.** `hive.py publish-cut --project <owner/name> --repo <clone>` is the project's publisher. It is
+run on Linux with the project's own account, in a full clone of the project whose `origin` is its `https://` address
+(as `cut-check` reads it), and whose git settings (a credential helper) let that account push the published branch:
+by hand, or on the architect's schedule. No run calls it, and the run's token never writes the published branch. It
+reads the state on the project's branch `hive-state` as the project's repository holds it when it runs, its latest
+commit alone and within a bound in bytes (never a clone of it that may be behind: `state` when it cannot), and takes
+from the ledger the latest `cut` line of a cut duty, and from that line nothing but which commit to look at. It then
+holds, in this order, and says the first check that fails:
+
+1. `line`: the line has the shape a run writes; `duty`: the ledger dealt that account a cut duty at the line's
+   instant;
+2. the published branch: already the publication of that cut (`NOTHING published`), or still at the commit the cut
+   was held against; else nothing is published, at no harm (`NOTHING tip`: that cut was published, or the branch
+   moved since, and the next cut starts from it as it is); a paused project publishes nothing (`NOTHING paused`);
+3. `trusted`: the project's file trusts the account with `cut` now;
+4. `fork`: GitHub says the fork the line names (`repo_id`) is that account's own; `branch`: that fork's `hive/cut`
+   still names the proposal's commit; `fetch`: a clone that lacks the commit fetches that branch, and takes what
+   comes only if it is that very commit. **The forks of one project share their objects**: a commit may sit in a
+   clone, or come from a fork that never pushed it. What binds the commit to its account is the account's own
+   branch, which no other account can move, and the publisher takes the commit on nothing else of where it came
+   from;
+5. `marker`: a proposal's marker, naming that account, that duty, that published commit and the line's digests;
+6. what the run held, again, against the published branch and the state as they are now: `clone` when this clone
+   cannot read the published commit, then `parent`, `paths`, `modes`, `files`, `digests`, `task files`, `nothing`,
+   then the cutter's `gate` with the deals and the judge's answers of the state; `gate inputs` when the project's
+   own files or the state cannot be read for it, and `unforeseen` (with the error's type alone) for anything else;
+7. `push`: the push itself (below).
+
+A cut that passes is pushed as **one commit of the publisher's own on the published commit, whose files are the
+proposal's** (its tree, so nothing but the tasks file and the backlog changes): the account as its author, under its
+GitHub address `<number>+<login>@users.noreply.github.com`, the hive's name as committer, the cut line's instant as
+its date, and the tool's words as its message, which end with two lines:
+
+```
+Hive-Cut: <the proposal's commit>
+Hive-Deal: <the duty's instant>
+```
+
+The proposal's own message, author, date or signature never reach the published branch: nothing the account wrote
+lands there but the two files the gate passed. That commit is the record of the publication: a commit of the published
+branch whose one parent is the cut's published commit and whose message is that one is that cut, published, and a
+second run says so and pushes nothing. The same line always makes the same commit (no signature, no clock), whichever
+machine runs it. **A published cut is taken back by a commit that undoes it**: a published branch moved back to the
+commit the cut was held against, while that cut is still the latest, gets the same commit again at the next run. The push moves the branch only from the commit the cut was held against to that commit, never over
+what moved meanwhile (git's lease, as a run's push does), and with no terminal question: a push declined by the
+repository, or that did not land, is `push`, and nothing is pushed. The publisher prints `PUBLISHED`, `NOTHING` or
+`REFUSED` and the check's name, then commits, instants and the account's number: never a path, a token or a word
+the account wrote. Like the volunteer's commands, it keeps what git writes on its error output to itself (of a push
+that did not land, it says the status git gives the branch, made plain), and what it did not foresee ends in one line
+that gives the error's type and where.
 
 **What an account can do with it, and what it is charged for.** An account may answer `nothing` at any time of its
 duty, at no cost: the next cut duty then keeps to `trusted.cut_hours`, so a trusted account can hold the project's
@@ -807,9 +859,10 @@ with it the tasks that share a file with that one.
   git takes as a branch's name, with no `refs/` or `heads/` in front, not `HEAD` nor a name that ends in `_HEAD`,
   and not a commit's full id. The hive's own branch reaches git only inside a full reference (`refs/heads/<name>`
   on a repository, `refs/remotes/…/<name>` in a clone), never as a bare word; the published one reaches no git
-  command: the hive only compares it. What is on the hive's branch was accepted by a judge and
-  read by nobody: each of its commits says so. The published branch moves when a maintainer, having read what
-  accumulated, moves it; a release, an offer to another project, anything that leaves the repository, is a
+  command of a run's: the hive only compares it (the project's publisher pushes to it, inside a full reference). What
+  is on the hive's branch was accepted by a judge and read by nobody: each of its commits says so. The published
+  branch moves when a maintainer, having read what accumulated, moves it, or, for the tasks file and the backlog
+  alone, when the project's publisher pushes a cut that stands ("Publishing a cut"); a release, an offer to another project, anything that leaves the repository, is a
   maintainer's act. The judge's scan of a candidate's source is a filter, not a review of what a change does.
   What a maintainer commits on the published branch (a fix, a revert) the maintainer also brings to the hive's
   branch: the hive works on its own branch's tip and takes nothing from the other by itself. The file's two names
@@ -983,7 +1036,8 @@ hour and the fork's own number, which adding forks to the list does not shift.
 
 - `hive/project.json`, in the project's own repository, on the branch it publishes: the repository (`repo`, the one
   that holds the file), the hive's own branch in it (`branch`) and the
-  branch the project publishes (`published`, which the hive never writes), the protected paths, the limits,
+  branch the project publishes (`published`, which no run of the hive writes: the project's publisher pushes a cut
+  there with the project's own account), the protected paths, the limits,
   the member rules (`min_account_age_days`, `deals_per_day`, `banned`, `only`, `preferences`: whether the
   part of the project an ask prefers is followed, true unless the file says false; and `per_guardian` and
   `active_days`: how many active members one guardian covers, a whole number of 1 or more, and for how many days
