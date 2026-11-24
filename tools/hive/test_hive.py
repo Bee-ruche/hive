@@ -145,7 +145,7 @@ class FakeApi:
 
     def repository(self, repo_id):
         f = next((f for f in self.world.forks.values() if f.id + 1000 == repo_id), None)
-        return None if f is None else {"full_name": f.full_name, "login": f.login, "id": f.id}
+        return None if f is None else {"full_name": f.full_name, "login": f.login, "id": f.id, "parent": self.world.repository}
 
     def local_url(self, full_name):
         return str(next(f for f in self.world.forks.values() if f.full_name == full_name).bare)
@@ -18370,9 +18370,13 @@ class TestPublishCut(Base):
         return proposal, end
 
     def forge(self, end, **changes):
-        """A line written straight into the ledger, as a leaked token could write it: the latest line becomes `end` with `changes`."""
-        with open(self.w.state / "ledger.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**end, **changes, "run": "forged"}) + "\n")
+        """A line written straight into the ledger, as a leaked token could write it: the latest line becomes `end` with `changes`,
+        in place of the lines that ended the duty it names (a duty ends on one line)."""
+        line = {**end, **changes, "run": "forged"}
+        lines = [json.loads(text) for text in (self.w.state / "ledger.jsonl").read_text(encoding="utf-8").splitlines() if text]
+        kept = [e for e in lines if not (e.get("type") == "duty-end" and e.get("role") == "cut" and e.get("member_id") == line.get("member_id")
+                                         and e.get("duty") == line.get("duty"))]
+        (self.w.state / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in [*kept, line]), encoding="utf-8")
 
     def publish(self, share=True):
         """publish-cut, run in the architect's clone: (what it printed, the error it ended on, or None)."""
@@ -18495,7 +18499,7 @@ class TestPublishCut(Base):
         proposal, end = self.stood()
         for check, changes in (("line", {"proposal": "nope"}), ("line", {"digests": {"tasks": "a" * 64, "more": "b" * 64}}), ("line", {"repo_id": "1301"}),
                                ("line", {"member_id": True}), ("line", {"at": "now"}), ("duty", {"duty": "2026-11-12T11:59:00Z"}),
-                               ("duty", {"member_id": 302})):
+                               ("duty", {"member_id": 302}), ("duty", {"repo_id": 1302})):
             with self.subTest(check, changes=changes):
                 self.forge(end, **changes)
                 self.refused(check)
@@ -18509,18 +18513,71 @@ class TestPublishCut(Base):
                     "published": tip, "repo_id": 1303, "digests": {"tasks": hashlib.sha256(self.TEXT.encode()).hexdigest()}})
         self.refused("trusted")
 
-    def test_a_fork_github_does_not_give_to_the_account_is_refused(self):
+    def test_a_line_naming_another_fork_of_the_account_than_the_dutys_is_refused(self):
         proposal, end = self.stood()
-        self.forge(end, repo_id=1302)  # dave's fork
-        self.refused("fork")
-        self.forge(end)
+        real = self.w.api.repository
+        self.forge(end, repo_id=1999)
+        # GitHub says 1999 is carol's fork of the project too, and its hive/cut holds the proposal: the duty was dealt in another
+        with mock.patch.object(self.w.api, "repository", side_effect=lambda repo_id: real(1301 if repo_id == 1999 else repo_id)):
+            self.assertEqual(self.refused("duty"), "REFUSED duty: the line names another fork than the one the duty was dealt in\n")
+            self.forge(end)
+            self.assertEqual(self.publish()[0].split()[0], "PUBLISHED")
+
+    def test_a_duty_ended_on_more_than_one_line_is_refused_whichever_says_cut(self):
+        duty = TestCuts.dealt(self)
+        proposal = cut_proposal(self.carol, duty, tasks=self.TEXT)
+        with mock.patch.object(hive, "cut_check", return_value=["a reason of the gate"]):
+            self.w.run()
+        refused = self.lines("duty-end")[-1]
+        self.assertEqual((refused["outcome"], refused["reason"], refused["proposal"]), ("refused", "gate", proposal))
+        line = {"type": "duty-end", "at": refused["at"], "role": "cut", "member_id": 301, "duty": duty, "outcome": "cut", "fault": False,
+                "proposal": proposal, "published": refused["published"], "repo_id": 1301,
+                "digests": {"tasks": hashlib.sha256(self.TEXT.encode()).hexdigest()}, "run": "forged"}
+        with open(self.w.state / "ledger.jsonl", "a", encoding="utf-8") as f:  # appended after the duty ended « refused »
+            f.write(json.dumps(line) + "\n")
+        self.assertEqual(self.refused("duty"), "REFUSED duty: the ledger ends that duty on more than one line\n")
+        self.forge(line)  # (the one line that ends it, now)
+        self.assertEqual(self.publish()[0].split()[0], "PUBLISHED", "the same cut, on one line, passes as it is now")
+
+    def test_a_cut_line_written_twice_is_refused(self):
+        proposal, end = self.stood()
+        with open(self.w.state / "ledger.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(end) + "\n")
+        self.refused("duty")
+
+    def test_a_fork_github_does_not_give_to_the_account_or_to_the_project_is_refused(self):
+        proposal, end = self.stood()
+        fork = {"full_name": "carol/toy", "login": "carol", "id": 301}
+        mine = {**fork, "parent": self.w.repository}  # (each answer below fails on the one check it is for)
         for answer in (mock.patch.object(self.w.api, "repository", side_effect=hive.HiveError("gh api failed")),
+                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "dave/toy", "login": "dave", "id": 302,
+                                                                                 "parent": self.w.repository}),
+                       mock.patch.object(self.w.api, "repository", return_value=fork),
+                       mock.patch.object(self.w.api, "repository", return_value={**fork, "parent": None}),
+                       mock.patch.object(self.w.api, "repository", return_value={**fork, "parent": "carol/elsewhere"}),
+                       mock.patch.object(self.w.api, "repository", return_value={**fork, "parent": "dave/toy"}),  # a fork of a fork
                        mock.patch.object(self.w.api, "repository", return_value=None),
-                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/toy", "login": "carol", "id": "301"}),
-                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/toy", "login": "-carol", "id": 301}),
-                       mock.patch.object(self.w.api, "repository", return_value={"full_name": "carol/../toy", "login": "carol", "id": 301})):
+                       mock.patch.object(self.w.api, "repository", return_value={**mine, "id": "301"}),
+                       mock.patch.object(self.w.api, "repository", return_value={**mine, "login": "-carol"}),
+                       mock.patch.object(self.w.api, "repository", return_value={**mine, "full_name": "carol/../toy"})):
             with self.subTest(answer=answer), answer:
                 self.refused("fork")
+        with mock.patch.object(self.w.api, "repository", return_value={**fork, "parent": self.w.repository.upper()}):
+            self.assertEqual(self.publish()[0].split()[0], "PUBLISHED", "GitHub's names are the same in any case")
+
+    def test_github_is_asked_whose_repository_a_number_is_and_what_it_is_a_fork_of(self):
+        api, asked = hive.GhApi(), []
+        said = {"full_name": "carol/toy", "login": "carol", "id": 301, "parent": "Bee-ruche/toy"}
+
+        def answered(args, **kwargs):
+            asked.append(args)
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(said) + "\n", stderr="")
+        with mock.patch.object(hive.subprocess, "run", side_effect=answered):
+            self.assertEqual(api.repository(1301), said)
+            for number in (0, -1, "1301", True):
+                with self.subTest(number=number), self.assertRaises(hive.HiveError):
+                    api.repository(number)
+        self.assertEqual(asked, [["gh", "api", "repositories/1301", "--jq", "{full_name, login: .owner.login, id: .owner.id, parent: .parent.full_name}"]])
 
     def test_a_commit_the_accounts_own_branch_does_not_name_is_refused_wherever_its_objects_are(self):
         proposal, end = self.stood()
@@ -18570,10 +18627,12 @@ class TestPublishCut(Base):
         published = end["published"]
         older = sh("git", "rev-parse", f"{published}^", cwd=self.w.upstream).stdout.strip()
         digest = hashlib.sha256(self.TEXT.encode()).hexdigest()
-        for check, options, digests in (("paths", {"files": {"lib.c": "int x;\n"}}, None), ("modes", {"modes": {hive.TASKS_FILE: "100755"}}, None),
+        compact = "".join(json.dumps(task, separators=(",", ":")) + "\n" for task in TASKS)
+        for check, options, digests in (("paths",{"files": {"lib.c": "int x;\n"}}, None), ("modes", {"modes": {hive.TASKS_FILE: "100755"}}, None),
                                         ("parent", {"parents": [older], "named": published}, None), ("digests", {"digest": "0" * 64}, {"tasks": "0" * 64}),
                                         ("task files", {"tasks": "not a task\n"}, {"tasks": hashlib.sha256(b"not a task\n").hexdigest()}),
-                                        ("nothing", {"tasks": task_lines(TASKS)}, {"tasks": hashlib.sha256(task_lines(TASKS).encode()).hexdigest()})):
+                                        ("nothing", {"tasks": task_lines(TASKS)}, {"tasks": hashlib.sha256(task_lines(TASKS).encode()).hexdigest()}),
+                                        ("nothing", {"tasks": compact}, {"tasks": hashlib.sha256(compact.encode()).hexdigest()})):  # other bytes, the same tasks
             with self.subTest(check):
                 options = {"tasks": self.TEXT, **options}
                 made = cut_proposal(self.carol, end["duty"], **options)
@@ -18615,9 +18674,16 @@ class TestPublishCut(Base):
         def held(commit):
             return sh("git", "cat-file", "-e", f"{commit}^{{commit}}", cwd=self.architect, check=False).returncode == 0
         self.assertEqual((held(first), held(latest)), (False, True), "the branch's latest commit, and none of its history")
-        with mock.patch.object(hive, "fetch_bounded", return_value="heavy"):
-            share_state(self.w)
-            self.refused("state", share=False)
+        self.assertEqual((self.architect / ".git" / "shallow").read_text().split(), [latest], "a shallow boundary at the state's commit alone")
+        published = self.published()
+        self.assertEqual(sh("git", "rev-list", "--count", published, cwd=self.architect).stdout,
+                         sh("git", "rev-list", "--count", published, cwd=self.w.upstream).stdout, "the published branch's history is whole")
+        real = hive.fetch_bounded
+        for fetched in (mock.patch.object(hive, "fetch_bounded", return_value="heavy"),
+                        mock.patch.object(hive, "fetch_bounded", side_effect=lambda *a, **k: (real(*a, **k), "heavy")[1])):  # what came, and was too heavy
+            with self.subTest(fetched=fetched), fetched:
+                share_state(self.w)
+                self.refused("state", share=False)
 
     def test_a_state_that_cannot_be_read_is_refused(self):
         self.stood()

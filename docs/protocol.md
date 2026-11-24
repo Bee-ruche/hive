@@ -722,22 +722,25 @@ run on Linux with the project's own account, in a full clone of the project whos
 (as `cut-check` reads it), and whose git settings (a credential helper) let that account push the published branch:
 by hand, or on the architect's schedule. No run calls it, and the run's token never writes the published branch. It
 reads the state on the project's branch `hive-state` as the project's repository holds it when it runs, its latest
-commit alone and within a bound in bytes (never a clone of it that may be behind: `state` when it cannot), and takes
-from the ledger the latest `cut` line of a cut duty, and from that line nothing but which commit to look at. It then
-holds, in this order, and says the first check that fails:
+commit alone and within a bound in bytes (never a clone of it that may be behind: `state` when it cannot). A deal a
+run records after that read may find its task closed by the published cut, and it then ends at no cost, as a deal
+on any task the project closes does. That fetch (`--depth=1`) marks a shallow boundary in that clone at the state's
+commit alone: the published branch's history is not affected. The publisher takes from the ledger the latest `cut`
+line of a cut duty, and from that line nothing but which commit to look at. It then holds, in this order, and says
+the first check that fails:
 
 1. `line`: the line has the shape a run writes; `duty`: the ledger dealt that account a cut duty at the line's
-   instant;
+   instant, in the fork the line names, and ends that duty on that one line;
 2. the published branch: already the publication of that cut (`NOTHING published`), or still at the commit the cut
    was held against; else nothing is published, at no harm (`NOTHING tip`: that cut was published, or the branch
    moved since, and the next cut starts from it as it is); a paused project publishes nothing (`NOTHING paused`);
 3. `trusted`: the project's file trusts the account with `cut` now;
-4. `fork`: GitHub says the fork the line names (`repo_id`) is that account's own; `branch`: that fork's `hive/cut`
-   still names the proposal's commit; `fetch`: a clone that lacks the commit fetches that branch, and takes what
-   comes only if it is that very commit. **The forks of one project share their objects**: a commit may sit in a
-   clone, or come from a fork that never pushed it. What binds the commit to its account is the account's own
-   branch, which no other account can move, and the publisher takes the commit on nothing else of where it came
-   from;
+4. `fork`: GitHub says the fork the line names (`repo_id`) is that account's own, and a fork of the project itself;
+   `branch`: that fork's `hive/cut` still names the proposal's commit; `fetch`: a clone that lacks the commit
+   fetches that branch, and takes what comes only if it is that very commit. **The forks of one project share their
+   objects**: a commit may sit in a clone, or come from a fork that never pushed it. What binds the commit to its
+   account is the account's own branch, which no other account can move, and the publisher takes the commit on
+   nothing else of where it came from;
 5. `marker`: a proposal's marker, naming that account, that duty, that published commit and the line's digests;
 6. what the run held, again, against the published branch and the state as they are now: `clone` when this clone
    cannot read the published commit, then `parent`, `paths`, `modes`, `files`, `digests`, `task files`, `nothing`,
@@ -759,8 +762,9 @@ The proposal's own message, author, date or signature never reach the published 
 lands there but the two files the gate passed. That commit is the record of the publication: a commit of the published
 branch whose one parent is the cut's published commit and whose message is that one is that cut, published, and a
 second run says so and pushes nothing. The same line always makes the same commit (no signature, no clock), whichever
-machine runs it. **A published cut is taken back by a commit that undoes it**: a published branch moved back to the
-commit the cut was held against, while that cut is still the latest, gets the same commit again at the next run. The push moves the branch only from the commit the cut was held against to that commit, never over
+machine runs it. **A published cut is taken back by a commit that undoes it**: a published branch reset (not
+reverted) to the commit the cut was held against, while that cut is still the latest, gets the same commit again at
+the next run. The push moves the branch only from the commit the cut was held against to that commit, never over
 what moved meanwhile (git's lease, as a run's push does), and with no terminal question: a push declined by the
 repository, or that did not land, is `push`, and nothing is pushed. The publisher prints `PUBLISHED`, `NOTHING` or
 `REFUSED` and the check's name, then commits, instants and the account's number: never a path, a token or a word

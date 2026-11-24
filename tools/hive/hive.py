@@ -1543,11 +1543,11 @@ class GhApi:
         return answer[0] if answer else None
 
     def repository(self, repo_id):
-        """The repository GitHub numbers `repo_id` (a fork's number, as a ledger line names it): its name, and its
-        owner's login and number, as GitHub says them now."""
+        """The repository GitHub numbers `repo_id` (a fork's number, as a ledger line names it): its name, its
+        owner's login and number, and the name of the repository it is a fork of (null for none), as GitHub says them now."""
         if type(repo_id) is not int or repo_id <= 0:
             raise HiveError("a repository's number unreadable")
-        answer = self._json_lines(f"repositories/{repo_id}", "--jq", "{full_name, login: .owner.login, id: .owner.id}")
+        answer = self._json_lines(f"repositories/{repo_id}", "--jq", "{full_name, login: .owner.login, id: .owner.id, parent: .parent.full_name}")
         return answer[0] if answer else None
 
     def url(self, full_name):
@@ -5907,13 +5907,15 @@ def publish_cut(repo, repository, api, allow_local=False):
     """The project's publisher: pushes to the published branch the cut that stands, as the ledger says it (the latest
     « cut » line of a cut duty), once it has held it again itself. It trusts nothing of the line but « look at this
     commit », and nothing of the commit but what it checks, in this order:
-      - the line: of the shape a run writes, for a cut duty the ledger dealt that account at that instant;
+      - the line: of the shape a run writes, for a cut duty the ledger dealt that account at that instant in that fork,
+        and the one line that ends that duty;
       - the published branch: already the publication of that cut (published_already), or still at the commit the cut
         was held against; else nothing is published, at no harm (the next cut starts from the branch as it is);
       - the account: trusted with « cut » by the project's file as it is now;
-      - the fork: the one the line names (« repo_id »), whose owner GitHub says is that account, and whose branch
-        CUT_BRANCH still names the proposal's commit. A clone that lacks the commit fetches that branch and keeps what
-        comes only if it is that very commit, which is taken for nothing of where it came from: the forks of a project
+      - the fork: the one the line names (« repo_id »), whose owner GitHub says is that account, which GitHub says is
+        a fork of the project, and whose branch CUT_BRANCH still names the proposal's commit. A clone that lacks the
+        commit fetches that branch and keeps what comes only if it is that very commit, which is taken for nothing of
+        where it came from: the forks of a project
         share their objects, so what binds the commit to its account is the account's own branch, which no other
         account can move;
       - its marker: a proposal's (read_proposal), naming that account, that duty, that published commit and the line's
@@ -5948,6 +5950,13 @@ def publish_cut(repo, repository, api, allow_local=False):
                      and e.get("member_id") == end["member_id"] and e.get("at") == end["duty"]), None)
         if duty is None:
             return not_published("duty", "the ledger dealt that account no cut duty at the instant the line names")
+        if duty.get("repo_id") != end["repo_id"]:
+            return not_published("duty", "the line names another fork than the one the duty was dealt in")
+        # A duty ends once: a second line for it (one that says « cut » after the duty ended otherwise, say) is a doubt.
+        ends = [e for e in ledger.events if isinstance(e, dict) and e.get("type") == "duty-end" and e.get("role") == "cut"
+                and e.get("member_id") == end["member_id"] and e.get("duty") == end["duty"]]
+        if ends != [end]:
+            return not_published("duty", "the ledger ends that duty on more than one line")
         if published_already(repo, tip, end):
             return nothing_published("published", f"the published branch is at {tip}, the cut of the duty at {end['duty']} published")
         if end["published"] != tip:
@@ -5962,6 +5971,8 @@ def publish_cut(repo, repository, api, allow_local=False):
         if not (isinstance(fork, dict) and type(fork.get("id")) is int and fork["id"] == end["member_id"] and isinstance(fork.get("login"), str)
                 and LOGIN.match(fork["login"]) and isinstance(fork.get("full_name"), str) and REPO_NAME.match(fork["full_name"])):
             return not_published("fork", "GitHub does not say that the fork the line names is that account's own")
+        if not (isinstance(fork.get("parent"), str) and fork["parent"].casefold() == repository.casefold()):
+            return not_published("fork", "GitHub does not say that the fork the line names is a fork of the project")
         sha, url, branches = end["proposal"], fork_url(api, fork["full_name"], allow_local), {}
         try:
             listed_heads(repo, url, allow_local, branches=branches)
@@ -10995,7 +11006,9 @@ def main(argv=None):
     p.set_defaults(run=cmd_cut_check)
     p = sub.add_parser("publish-cut", help="the project's publisher: push to the published branch the cut a trusted account's duty ended "
                                            "on, once held again to its fork, its marker, its form and the gate (docs/protocol.md); run "
-                                           "with the project's own account")
+                                           "with the project's own account. A published branch reset (not reverted) to the commit the "
+                                           "latest cut was held against gets that cut published again: take a published cut back with a "
+                                           "commit that undoes it")
     p.add_argument("--project", required=True, help="the project's repository (owner/name)")
     p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin, whose origin is "
                                                  "the project's https address, and which this account's git settings let it push to")
