@@ -1313,7 +1313,7 @@ class Ledger:
             kind = e.get("type")
             if kind == "duty":
                 state[e["role"]] = {"role": e["role"], "member": e["member"], "member_id": e["member_id"], "repo_id": e["repo_id"],
-                                    "at": e["at"], "until": e["until"], "run": e.get("run"), "state": "live"}
+                                    "at": e["at"], "until": e["until"], "run": e.get("run"), "settings": e.get("settings"), "state": "live"}
             elif kind == "duty-end":
                 duty = state.get(e.get("role"))
                 if duty and duty["member_id"] == e.get("member_id") and duty["at"] == e.get("duty"):
@@ -2189,7 +2189,7 @@ def in_upstream(repo, sha):
     return bool(git(repo, "for-each-ref", "--count=1", "--contains", sha, "refs/remotes/origin", "refs/heads").stdout.strip())
 
 
-def discover(repo, config, api, skip, instant, allow_local=False, known=None, accounts=None, parts=()):
+def discover(repo, config, api, skip, instant, allow_local=False, known=None, accounts=None, parts=(), duty_reads=None):
     """Lists the project's forks and returns (entries, ignored, reads): one entry per marked commit at the tip of a
     branch of an eligible member's fork, for commits the hive has not answered yet; what need not be read again
     (`known`, the list so far, brought up to date for each fork that was listed: see read_ignored); and, for each
@@ -2235,7 +2235,10 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
     place: in such a fork, by that fork's owner, at the tip of DUTY_BRANCH, for a role the file gives that account. It
     is one entry (« action »: duty): the role, and for a release the duty's instant and the release's code. Anywhere
     else, under another name, or for a role the file does not give that account, a commit shaped like a duty marker is
-    nothing, for good. A fork read for its owner's duties alone is read for nothing else, as a guardian's is."""
+    nothing, for good. A fork read for its owner's duties alone is read for nothing else, as a guardian's is. Whether a
+    trusted account's fork was read is said in `duty_reads` (a dict the caller gives, filled here), by the same rules as
+    `reads` for a member's: True when it was read whole or holds nothing for the hive by its owner's doing, False when
+    the hive could not read it; an account with no fork listed is not in it."""
     started, limits, entries, slot = time.monotonic(), config["limits"], [], 0
     skip, known, accounts = set(skip), known or {}, {} if accounts is None else accounts
     hour = int(instant.timestamp() // 3600)
@@ -2247,6 +2250,15 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
     # An account that is not here has no fork the hive reads for a member (a fork the project bars is one of them,
     # even when it is read for its owner's rulings or duties).
     reads = {fork["id"]: False for fork in forks if not barred(fork, config)}
+    duty_reads = {} if duty_reads is None else duty_reads
+    duty_reads.update({fork["id"]: False for fork in forks if fork["id"] in roles})  # (a trusted account's fork: read, or not, as below)
+
+    def read_as(fork, member, holds, whole):
+        # What `reads` says of a fork read for a member, and `duty_reads` of one read for its owner's duties.
+        if member:
+            reads[fork["id"]] = whole
+        if holds:
+            duty_reads[fork["id"]] = whole
     most, held = max(FETCH_WEIGHTS * limits["history_bytes"], FETCH_FLOOR), packs_weight(repo)
     for fork in forks:
         if time.monotonic() - started > limits["discovery_seconds"]:
@@ -2271,8 +2283,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 continue
             if heads is None:
                 log("discovery: a fork has more branches than the hive lists; it is not read")
-                if member:
-                    reads[fork["id"]] = True  # its owner's doing: for the hive it holds nothing
+                read_as(fork, member, holds, True)  # its owner's doing: for the hive it holds nothing
                 continue
             mine = ignored[str(fork["repo_id"])] = [sha for sha in ignored[str(fork["repo_id"])] if sha in heads]  # still at a tip
             fresh = [(sha, ref) for sha, ref in heads.items() if sha not in skip and sha not in mine]
@@ -2280,12 +2291,10 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 # All of a fork's new branch tips are read, or none: nothing can be pushed and kept out of the hive's
                 # sight behind the others.
                 log("discovery: a fork has more new branches than the hive reads at once; it is not read until it has fewer")
-                if member:
-                    reads[fork["id"]] = True  # its owner's doing: for the hive it holds nothing
+                read_as(fork, member, holds, True)  # its owner's doing: for the hive it holds nothing
                 continue
             if not fresh:
-                if member:
-                    reads[fork["id"]] = True
+                read_as(fork, member, holds, True)
                 continue
             slot += 1
             missing = [(sha, ref) for sha, ref in fresh
@@ -2294,8 +2303,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 got = fetch_heads(repo, url, missing, slot, allow_local, most) if missing else set()
             except Heavy:
                 log("discovery: a fork holds more than the hive reads from one fork at once; it is not read until it holds less")
-                if member:
-                    reads[fork["id"]] = True  # its owner's doing: for the hive it holds nothing
+                read_as(fork, member, holds, True)  # its owner's doing: for the hive it holds nothing
                 continue
             except Unfetched:
                 # The fetch did not end well, and does not say why. The fork is listed again: if its branches are no
@@ -2306,8 +2314,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 changed = False
                 try:
                     changed = listed_heads(repo, url, allow_local) != heads
-                    if member:
-                        reads[fork["id"]] = changed
+                    read_as(fork, member, holds, changed)
                 except HiveError:
                     pass
                 log("discovery: one fork's fetch did not end well; " + ("it changed while it was read" if changed else "it is not read"))
@@ -2361,8 +2368,7 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
             entries.extend(found)
             # The fetch ended well: the fork was read as it stood. A listed tip it did not bring is a branch that moved
             # since the listing (its owner's doing): the commit that stands there now is listed at the next run.
-            if member:
-                reads[fork["id"]] = True
+            read_as(fork, member, holds, True)
         except HiveError as error:
             log(f"discovery: one fork skipped ({error})")
     return entries, ignored, reads
@@ -2682,10 +2688,13 @@ def check_duties(plan_, config, tasks, read, counted):
     read it, before the duties the plan says are over; `counted`: the same with them (as_the_plan_counted).
 
     Each end is of a duty the ledger holds as live, of that account, that role and that instant, and no duty ends
-    twice. It is at the hive's fault if and only if the project's file no longer trusts its account with its role.
-    One that ran out at no fault is past its time and the project's grace. One its account gave back names a release
-    the plan sets aside (it sets aside every release it read), and no two ends name one release. That the account's
-    fork held the release stays the plan's word.
+    twice. One whose account the project's file no longer trusts with its role is at the hive's fault, whatever its
+    time. Of an account the file trusts: one that ran out is past its time and the project's grace, and at the hive's
+    fault once it is a day past them (UNREAD_HOURS: the hive did not run, or could not read the fork, for that long);
+    one its account gave back names a release the plan sets aside (it sets aside every release it read), and no two
+    ends name one release. What the plan step alone read stays its word: that the account's fork held that release,
+    that it was read whole for a duty it says ran out at its account's cost, and that the published branch shows a
+    pause for one it says ran out at no cost within that day (paused_between).
 
     Each duty dealt is one per role, of a role the file gives its account, to an account that holds no live duty and
     that its duty standing keeps waiting no longer (Ledger.duty_wait), at the project's pace (duty_due: no duty of its
@@ -2698,11 +2707,14 @@ def check_duties(plan_, config, tasks, read, counted):
         duty = held.get(end["role"])
         if not (duty and duty["state"] == "live" and duty["member_id"] == end["member_id"] and duty["at"] == end["duty"]):
             raise HiveError("the plan says a duty is over that the ledger does not hold as live: nothing is written")
-        if end["fault"] != (end["member_id"] not in trusted_accounts(config, end["role"])):
-            raise HiveError("the plan says a duty ended at the hive's fault where the project's file still trusts its account with its "
-                            "role, or the other way round: nothing is written")
-        if end["outcome"] == "expired" and not end["fault"] and instant <= parse_iso(duty["until"]) + dt.timedelta(hours=config["grace_hours"]):
+        trusted, over = end["member_id"] in trusted_accounts(config, end["role"]), parse_iso(duty["until"]) + dt.timedelta(hours=config["grace_hours"])
+        if not trusted and not end["fault"]:
+            raise HiveError("the plan says a duty ended at its account's cost where the project's file no longer trusts its account with its "
+                            "role: nothing is written")
+        if trusted and end["outcome"] == "expired" and instant <= over:
             raise HiveError("the plan says a duty ran out whose time is not up: nothing is written")
+        if trusted and end["outcome"] == "expired" and not end["fault"] and instant > over + dt.timedelta(hours=UNREAD_HOURS):
+            raise HiveError("the plan says a duty ran out at its account's cost a day past its time and the grace: nothing is written")
         if end["outcome"] == "released" and end["release"] not in spent:
             raise HiveError("the plan says a duty was given back by a release it does not set aside: nothing is written")
     given = [end["release"] for end in ends if "release" in end]
@@ -2783,9 +2795,12 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
        ask waits for a plan that finds room. Members the project has go on as they would, and the order of the
        askers is the one above.
     5. Duties, in a project that trusts accounts with a role (trusted_of). A live duty ends when its account gives it
-       back (a release of that duty, read_duty: « released », the code and the release's commit id), when its time
-       and the project's grace are past (« expired »), or at once and at no cost when the project's file no longer
-       trusts its account with its role. Then a cut duty is dealt when no duty of that role is live, and either
+       back (a release of that duty, read_duty: « released », the code and the release's commit id), or at once and at
+       no cost when the project's file no longer trusts its account with its role. Once its time and the project's
+       grace are past it runs out (« expired »): at no cost to its account if the project was paused while it was
+       live (paused_between) or if this run comes a day after (UNREAD_HOURS: the hive did not run, or could not read
+       the account's fork, for that long); else at its account's cost if the account's fork was read whole in this
+       run, or it has none; else nothing is decided, as for a deal whose fork could not be read. Then a cut duty is dealt when no duty of that role is live, and either
        trusted.cut_hours have passed since the latest one was dealt, or the project has fewer tasks left to do (open or
        dealt) than its cutter aims at (cutter.open; none left: it starves), or none was ever dealt (duty_due). It goes
        to one of the accounts the file trusts with the role whose ask stands: not one that holds a live duty, nor one
@@ -2824,8 +2839,9 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
     landed = landings(repo, tip, ledger, instant)
     ledger.append(settle(ledger, instant, landed), write=False)
     accounts = read_accounts(state_folder)
+    duty_reads = {}  # (whether each trusted account's fork was read in this run: discover)
     entries, ignored, reads = discover(repo, config, api, ledger.seen() | ledger.ruled() | upstream_tips(repo), instant, allow_local,
-                                       read_ignored(state_folder), accounts, project_parts(tasks))
+                                       read_ignored(state_folder), accounts, project_parts(tasks), duty_reads=duty_reads)
     key = secrets.token_hex(16)
     deals, done, models, rivals = ledger.deals(), ledger.done(), set(config["models"]), rivals_of(tasks)
 
@@ -3084,7 +3100,14 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
             given.sort(key=lambda e: draw(key, e["sha"]))  # of two releases of one duty, one (as of two of a deal)
             duty_ends.append({**end, "outcome": "released", "fault": False, "because": given[0]["because"], "release": given[0]["sha"]})
         elif instant > parse_iso(duty["until"]) + dt.timedelta(hours=config["grace_hours"]):
-            duty_ends.append({**end, "outcome": "expired", "fault": False})
+            over = parse_iso(duty["until"]) + dt.timedelta(hours=config["grace_hours"])
+            if instant > over + dt.timedelta(hours=UNREAD_HOURS) or paused_between(repo, duty.get("settings"), settings):
+                # The hive did not run, or could not read the account's fork, for a day past the duty's end; or the
+                # project was paused while the duty was live: it ends at no cost to its account.
+                duty_ends.append({**end, "outcome": "expired", "fault": True})
+            elif duty_reads.get(duty["member_id"], True):  # its fork was read (or the account has none): it ran out
+                duty_ends.append({**end, "outcome": "expired", "fault": False})
+            # (Otherwise the account's fork could not be read in this run: nothing is decided, as for a deal.)
     for end in duty_ends:
         held_duties[end["role"]]["state"] = "closed"
     ledger.append([duty_end_line(end, iso(instant), key) for end in duty_ends], write=False)  # (counted in this plan: a wait starts now)
@@ -4065,12 +4088,38 @@ def deal_lines(deals, key, config, tasks):
     return lines
 
 
-def duty_lines(duties, key, config):
+def duty_lines(duties, key, config, settings):
     """The ledger lines of duties: their time starts now, when they are written and can be seen, as a deal's does, and
-    lasts duty_hours. « area » is null: what part of the project a duty is about is not said yet."""
+    lasts duty_hours. « settings » is the commit of the published branch the plan read the project's settings at: a
+    later plan reads from there whether the project was paused while the duty was live (paused_between). « area » is
+    null: what part of the project a duty is about is not said yet."""
     at = now()
     return [{"type": "duty", "at": iso(at), "until": iso(at + dt.timedelta(hours=config["duty_hours"])), "run": key, "role": d["role"],
-             "member": d["member"], "member_id": d["member_id"], "repo_id": d["repo_id"], "area": None} for d in duties]
+             "member": d["member"], "member_id": d["member_id"], "repo_id": d["repo_id"], "settings": settings, "area": None} for d in duties]
+
+
+PAUSE_COMMITS = 200  # the most commits of the published branch that touch the project's file a plan reads back for a pause
+
+
+def paused_between(repo, since, until):
+    """True if the project's file said « paused: true » at a commit of the published branch after `since` (the commit
+    the plan that dealt a duty read the settings at) and up to `until` (the commit this plan reads them at): the
+    branch's own steps (first parents), those that touch the file, PAUSE_COMMITS at most. A paused project runs no
+    step: the account of a duty that was live meanwhile was told by its tool to stop (cmd_duty), and is not charged
+    for it. The published branch is the project's trusted base's to write, as its settings are. False where there is
+    nothing to read: a duty line without that commit, or a commit this clone does not hold."""
+    if not (is_sha(since) and is_sha(until)) or since == until:
+        return False
+    listed = git(repo, "rev-list", "--first-parent", f"--max-count={PAUSE_COMMITS}", f"{since}..{until}", "--", PROJECT_FILE, check=False)
+    for sha in listed.stdout.split() if listed.returncode == 0 else ():
+        shown = git(repo, "cat-file", "blob", f"{sha}:{PROJECT_FILE}", check=False) if is_sha(sha) else None
+        try:
+            raw = json.loads(shown.stdout) if shown is not None and shown.returncode == 0 else None
+        except ValueError:
+            raw = None
+        if isinstance(raw, dict) and raw.get("paused") is True:
+            return True
+    return False
 
 
 def expired_lines(plan_):
@@ -4109,7 +4158,7 @@ def record(plan_, config, tasks, ledger, state_folder):
     # the project's tip has not moved since, can say that it never did.
     ledger.append(settle(ledger, instant, {commit: True for commit, landed in plan_["landed"].items() if landed}, own=key))
     ledger.append(expired_lines(plan_) + duty_end_lines(plan_) + deal_lines(plan_["deals"], key, config, tasks)
-                  + duty_lines(plan_.get("duties", ()), key, config))
+                  + duty_lines(plan_.get("duties", ()), key, config, plan_["settings"]))
     # Run again once the write step has run, this step leaves what that step decided: an ask that a conditional deal
     # of this plan used stays used (the ledger holds that deal's line for this run), and the feed names the tip the
     # run reached (its last integration), not the one the plan started from.
@@ -10118,10 +10167,12 @@ def cmd_duty(args):
     (DUTY_BRANCH), where each replaces the one before. --withdraw deletes that branch.
 
     The state (a clone of the project's branch hive-state, --state) is believed for this and nothing else: whether
-    the project's run deals duties at all (its feed has the keys), this login's live duty (its role and two instants)
-    and its wait. With a live duty: DUTY and DEAL, nothing pushed; with a wait: WAIT, nothing pushed; else the ask is
-    made and pushed (ASKED). A release needs the live duty of that role, its time not up, and names that duty's
-    instant as the feed gives it. Nothing is pushed when the project's settings trust no account with the role (the
+    the project's run deals duties at all (its feed has the keys), whether it says the project is paused, this
+    login's live duty (its role and two instants) and its wait. A paused project (its own file, or its feed, as `next`
+    reads them): WAIT, nothing pushed. With a live duty (its time and the project's grace not up): DUTY and DEAL,
+    nothing pushed, or WAIT where the fork holds a release of it; with a wait: WAIT, nothing pushed; else the ask is
+    made and pushed (ASKED). A release needs the live duty of that role and names that duty's instant as the feed
+    gives it. Nothing is pushed when the project's settings trust no account with the role (the
     hive would deal no such duty), and whether they trust this one the hive says at its run: the settings name
     accounts by number, and this tool knows a login."""
     if not LOGIN.match(args.login):
@@ -10139,6 +10190,10 @@ def cmd_duty(args):
         raise HiveError("--state: a clone of the project's branch hive-state (the hive's state for it); only --withdraw goes without it")
     config, _ = hive_project(clone, args.project, args.upstream_url)
     role = args.role
+    paused_now = "WAIT: the project is paused: the hive deals nothing and judges nothing for now"
+    if config.get("paused"):  # (as `next` reads a pause: the project's own file, then its feed)
+        print(paused_now)
+        return
     if not trusted_accounts(config, role):
         raise HiveError(f"the project {config['project']} trusts no account with the role {role} in its settings: the hive deals no such "
                         "duty. Nothing was pushed")
@@ -10149,10 +10204,14 @@ def cmd_duty(args):
     if not (isinstance(feed.get("repo"), str) and feed["repo"].casefold() == config["repo"].casefold()):
         raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: nothing was pushed. Clone the "
                         f"state of this project (the branch hive-state of https://github.com/{config['repo']}) into a folder of its own, and give that folder")
+    if feed.get("paused") is True:
+        print(paused_now)
+        return
     if not (isinstance(feed.get("duties"), dict) and isinstance(feed.get("duty_wait"), dict)):
         raise HiveError("the project's hive does not deal duties yet (its run is at an older commit of the hive): nothing was pushed")
     duty, wait = my_duty(feed, login)
-    live = duty is not None and parse_iso(duty["until"]) > now()
+    # A duty is the account's until its time and the project's grace are up: the hive ends it at a run after them.
+    live = duty is not None and parse_iso(duty["until"]) + dt.timedelta(hours=config["grace_hours"]) > now()
     if live:
         # A release of this duty that the fork holds and the hive has not read yet: the duty is given back, and nothing
         # more is said of it or pushed. The fork itself is asked, at its branch for duties (fork_tip).
@@ -10173,11 +10232,11 @@ def cmd_duty(args):
         if live:
             print(f"DUTY {duty['role']} until {duty['until']}")
             print(f"DEAL {duty['at']}")
-            print("THEN: the duty is yours until then. This version of the hive reads nothing a duty produces: the duty ends when its time "
-                  "is up, or when you give it back (this same command with --release and one of its codes), and either costs you a wait "
-                  "before your next duty")
+            print(f"THEN: the duty is yours until then, and the hive waits {config['grace_hours']} hour(s) more before it ends it. This "
+                  "version of the hive reads nothing a duty produces: the duty ends when that time is up, or when you give it back (this "
+                  "same command with --release and one of its codes), and either costs you a wait before your next duty")
         else:
-            print("WAIT: your duty's time is up: the hive ends it at its next run (about an hour). Ask for no duty before then")
+            print("WAIT: your duty's time and the grace are up: the hive ends it at its next run (about an hour). Ask for no duty before then")
         return
     elif wait:
         print(f"WAIT until {wait}: the hive deals you no duty before then (a duty of yours ran out, or you gave one back)")
@@ -10194,8 +10253,10 @@ def cmd_duty(args):
         push(store, fork, commit, DUTY_BRANCH)
     if args.release:
         print(f"RELEASED {commit}")
+        # The wait Ledger.duty_wait will count: the first wait from the release's line, never doubled; a wait of an earlier
+        # duty that ran out was over when this duty was dealt, and is longer only if the project's backoff_hours grew since.
         print(f"THEN: stop here. The hive ends the duty at its next run (about an hour), then deals you no duty for {config['backoff_hours']} "
-              "hour(s)")
+              "hour(s) from then, the first wait (longer only if a wait of an earlier duty of yours ends later)")
     else:
         print(f"ASKED {commit}")
         print(f"THEN: stop here. The hive deals one duty of this role at a time, at its pace, to the least loaded account that asked: run "

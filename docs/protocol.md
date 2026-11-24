@@ -612,9 +612,10 @@ A project may also trust accounts with a **role**, by their GitHub account numbe
 account once, with its roles. `cut`, the project's cutting, is the one role there is. A file that names another
 role, an account twice, more than 32 accounts, or an account it bans by number, does not load; an account it bans by
 a login and trusts by its number is read for its duties, as a guardian is for its rulings. A project that trusts
-nobody (the default) deals no duty, and everything below is absent from its runs. **This version reads nothing a duty
-produces**: a duty ends when its time is up or when its account gives it back, and either costs that account a wait
-(below).
+nobody (the default) deals no duty: its plans and its ledger hold none, its feed carries `duties` and `duty_wait`
+empty, and the settings list and `hive.py doctor` still name `trusted.accounts` among its settings. **This version
+reads nothing a duty produces**: a duty ends by its time or by its account, and either costs that account a wait,
+but for the cases below where it costs nothing.
 
 **The ask.** A trusted account that is free asks for a **duty** of its role in its own fork, at one branch,
 `hive/duty` (`hive.py duty` makes the ask): a commit with no file and no parent, whose message says, each line alone
@@ -634,8 +635,14 @@ ever being taken for an ask for a task: one account may be a member and a truste
 
 **The deal.** At each run, after the tasks are dealt, the plan:
 
-1. ends each live duty that is over: given back by its account (below), or past its time and the project's grace
-   (`expired`), or at once and at no cost when the file no longer trusts its account with its role;
+1. ends each live duty that is over: given back by its account (below); at once and at no cost when the file no
+   longer trusts its account with its role; or, once its time and the project's grace are past, `expired`:
+   - at no cost to its account if the project was paused while the duty was live (a version of `hive/project.json`
+     with `"paused": true` on the published branch, after the commit the duty was dealt at: the account's tool told
+     it to stop), or if the run comes a day after its time and grace (`UNREAD_HOURS`: the hive did not run, or could
+     not read the account's fork, for that long);
+   - else at its account's cost if the account's fork was read whole in this run, or it has none;
+   - else not yet: its account's fork could not be read, as for a deal, and nothing is decided;
 2. deals a cut duty when none is live and either none was ever dealt, or `trusted.cut_hours` (6 by default) have
    passed since the latest one was dealt, or the project has fewer tasks left to do (open or dealt) than its cutter
    aims at (`cutter.open`), which a project that starves always has;
@@ -648,8 +655,9 @@ A duty lasts `duty_hours` (2 by default, from 1 to 24) from the moment it is wri
 `record` job writes the duties and their ends, and holds each again before it writes anything: one duty per role, of
 a role whose latest duty is over, to an account the file trusts with it that holds no duty and does not wait, at the
 project's pace, on asks the plan sets aside; and each end against the ledger as the plan read it (that duty was
-live, its time is up, or the file took the role away; a release the plan sets aside, used once). Which asker had the
-duty stays the plan's word, as a member's draw does.
+live; the file took the role away, at no cost, or its time and grace are past, and a day past them it costs
+nothing; a release the plan sets aside, used once). Which asker had the duty stays the plan's word, as a member's
+draw does, and so do that the account's fork was read and that the published branch shows a pause.
 
 **Giving a duty back.** A release is a commit at the same branch, with one of the codes of a release ("How tasks
 are dealt": `out_of_reach`, `cannot_run`):
@@ -669,8 +677,8 @@ release of another duty, of a duty that is over, or of someone else's, ends noth
 
 **What a duty costs.** A duty that ran out costs its account the wait after a deal held for nothing: `backoff_hours`,
 doubled for each duty of the account's that ran out, seven days at most. In this version no duty ends well, so
-nothing brings that doubling back down. One given back costs the first wait, each time, never doubled; one ended
-because the file took the role away costs nothing. That wait is the account's duty standing, read from the duty lines
+nothing brings that doubling back down. One given back costs the first wait, each time, never doubled; one ended at
+no cost (the role taken away, a pause, a day without a run or a read of its fork) costs nothing. That wait is the account's duty standing, read from the duty lines
 alone. **A duty never reaches a member's standing, the day's limit, the cover or the tally**: none of them reads a
 duty line, and a duty is no deal. A trusted account that is also a member is dealt tasks as anyone is.
 
@@ -826,9 +834,10 @@ The hive's files there:
   the expiry it also is.
 
   A `duty` line carries the role, its account's login, the account's number and its fork's, when the duty starts
-  and until when, and `area`, null: no part of the project is named yet. A `duty-end` line carries the role, the
-  account's number, the duty's instant (`duty`), `outcome` (`expired` or `released`) and `fault` (true when the
-  project's file took the role from the account: at no cost to it); one given back adds `because`, the release's
+  and until when, `settings` (the commit of the published branch its plan read the settings at, from which a later
+  plan reads a pause), and `area`, null: no part of the project is named yet. A `duty-end` line carries the role,
+  the account's number, the duty's instant (`duty`), `outcome` (`expired` or `released`) and `fault` (true when it
+  ended at no cost to its account: the role taken away, a pause, or a day without a run or a read); one given back adds `because`, the release's
   code, and `release`, its commit id. A duty is recorded once per role and run, its end once per duty. No reader of
   deals, verdicts or expiries reads either line.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
