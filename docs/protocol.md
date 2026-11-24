@@ -304,8 +304,8 @@ the hive runs those git commands with an empty attribute source.
 
 | Job | Holds | Runs contributors' code | Talks to forks | What it does |
 | --- | --- | --- | --- | --- |
-| `plan` | the project's token, to read | no | **yes, once** | reads the project's settings at its published branch's tip, and names that commit; reads the forks; decides the deals whose time is up, the candidates and the new deals; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
-| `record` | the project's token, to write its branch `hive-state` | no | no | checks that the plan is the one `plan` published, and that the published branch is still at the plan's commit; writes the plan's deals and the feed, **within minutes of the run's start** |
+| `plan` | the project's token, to read | no | **yes, once** | reads the project's settings at its published branch's tip, and names that commit; reads the forks; decides the deals whose time is up, the candidates and the new deals, and the duties that are over and the new duty; writes **the plan** and a bundle of the candidates' git objects (1 GiB and two million objects at most: the candidates beyond either wait for the next run, oldest deal first; one whose own commits are too many or too heavy is refused without being carried); publishes the plan's SHA-256 |
+| `record` | the project's token, to write its branch `hive-state` | no | no | checks that the plan is the one `plan` published, and that the published branch is still at the plan's commit; writes the plan's deals, its duties and the feed, **within minutes of the run's start** |
 | `judge` | the project's token, to read, given to no step that runs a candidate | **yes**, in the judge's container | no | judges the plan's candidates; writes **a table from the id of each judged commit to the judge's answer**; in a quiet run (no candidate, no task held), for a judge that can tell, judges the plan's tip itself as a candidate for at most two planned tasks « correct », for the cutter ([cutter.md](cutter.md), "The proof at the tip") |
 | `apply` | the project's token, to write its branch for the hive and `hive-state` | no | no | checks the plan, and that the published branch is still at the plan's commit; derives every commit by itself; looks each one up in the judge's table; pushes; records; in a quiet run only, writes to the state the judge's answers about the tip for the questions it finds were due, and for no other task |
 
@@ -606,6 +606,74 @@ writes none. A ruling that lost the draw has its `duplicate` line in the run tha
 where that run did not reach the commit, or could not tell the fate of its push, both wait. A ruling whose guardian the file no longer names is not applied, and at the next run it is a commit
 like any other.
 
+## Trusted accounts and their duties
+
+A project may also trust accounts with a **role**, by their GitHub account numbers (`trusted.accounts`): each
+account once, with its roles. `cut`, the project's cutting, is the one role there is. A file that names another
+role, an account twice, more than 32 accounts, or an account it bans by number, does not load; an account it bans by
+a login and trusts by its number is read for its duties, as a guardian is for its rulings. A project that trusts
+nobody (the default) deals no duty, and everything below is absent from its runs. **This version reads nothing a duty
+produces**: a duty ends when its time is up or when its account gives it back, and either costs that account a wait
+(below).
+
+**The ask.** A trusted account that is free asks for a **duty** of its role in its own fork, at one branch,
+`hive/duty` (`hive.py duty` makes the ask): a commit with no file and no parent, whose message says, each line alone
+on its line:
+
+```
+Hive-Action: duty
+Hive-Member: carol
+Hive-Role: cut
+```
+
+It counts only in the fork of an account the project trusts with that role, by that fork's owner, at the tip of
+`hive/duty`. Anywhere else, under another name, or for a role the file does not give that account, it is nothing,
+for good. Such a fork is read for its duties whatever the project asks of a member, as a guardian's is read for its
+rulings; its asks and candidates as a member keep the member rules. A branch of its own keeps an ask for a duty from
+ever being taken for an ask for a task: one account may be a member and a trusted account at once.
+
+**The deal.** At each run, after the tasks are dealt, the plan:
+
+1. ends each live duty that is over: given back by its account (below), or past its time and the project's grace
+   (`expired`), or at once and at no cost when the file no longer trusts its account with its role;
+2. deals a cut duty when none is live and either none was ever dealt, or `trusted.cut_hours` (6 by default) have
+   passed since the latest one was dealt, or the project has fewer tasks left to do (open or dealt) than its cutter
+   aims at (`cutter.open`), which a project that starves always has;
+3. deals it to one of the accounts the file trusts with the role whose ask stands, but not one that holds a live
+   duty, nor one whose duty wait (below) is not over: the least loaded first (how many duties of that role the
+   ledger dealt it in the last `trusted.window_days`, 7 by default), then a draw with the run's key, drawn after the
+   forks were read. An ask's date is the fork's word, and decides nothing. The ask is used.
+
+A duty lasts `duty_hours` (2 by default, from 1 to 24) from the moment it is written, then the project's grace. The
+`record` job writes the duties and their ends, and holds each again before it writes anything: one duty per role, of
+a role whose latest duty is over, to an account the file trusts with it that holds no duty and does not wait, at the
+project's pace, on asks the plan sets aside; and each end against the ledger as the plan read it (that duty was
+live, its time is up, or the file took the role away; a release the plan sets aside, used once). Which asker had the
+duty stays the plan's word, as a member's draw does.
+
+**Giving a duty back.** A release is a commit at the same branch, with one of the codes of a release ("How tasks
+are dealt": `out_of_reach`, `cannot_run`):
+
+```
+Hive-Action: release
+Hive-Member: carol
+Hive-Role: cut
+Hive-Deal: 2026-11-24T10:00:03Z
+Hive-Because: cannot_run
+```
+
+It ends the duty of that account, role and instant at the next run (`released`), whatever time is left, and is read
+once. A release the run reads while the duty is live counts, whenever the run comes, as a deal's release does (the
+tool gives nothing back once the duty's time is up); a duty whose role the file took away ends at no cost first. A
+release of another duty, of a duty that is over, or of someone else's, ends nothing.
+
+**What a duty costs.** A duty that ran out costs its account the wait after a deal held for nothing: `backoff_hours`,
+doubled for each duty of the account's that ran out, seven days at most. In this version no duty ends well, so
+nothing brings that doubling back down. One given back costs the first wait, each time, never doubled; one ended
+because the file took the role away costs nothing. That wait is the account's duty standing, read from the duty lines
+alone. **A duty never reaches a member's standing, the day's limit, the cover or the tally**: none of them reads a
+duty line, and a duty is no deal. A trusted account that is also a member is dealt tasks as anyone is.
+
 ## What holds over time
 
 The hive runs every hour, for ever, among accounts that may take tasks and leave them, push what fails, what never
@@ -706,8 +774,9 @@ file beside the hive's) and pushes again, a bounded number of times. Each job re
 The hive's files there:
 
 - `ledger.jsonl`: append-only, one JSON object per line: `deal`, `expired`, `verdict`, `error` (a mark, with its
-  kind), `intent` and `void` (a promise, and a promise whose push never landed), `unused`, and `ruling` (a
-  guardian's ruling that did not end in an integration: "Guardians"); each carries the key of
+  kind), `intent` and `void` (a promise, and a promise whose push never landed), `unused`, `ruling` (a
+  guardian's ruling that did not end in an integration: "Guardians"), and `duty` and `duty-end` (a trusted
+  account's duty and its end: "Trusted accounts and their duties"); each carries the key of
   its run. **It holds no text a fork wrote**: logins, the numeric ids of the account and of its fork, task ids of
   the project, commit ids, instants, reason codes, a model identifier the project lists, whole numbers under the
   hive's own keys, a file of the project as its tasks name it, the judge's figures the project lists, and the
@@ -755,6 +824,13 @@ The hive's files there:
   gave the deal back adds `released`, the release's code (`out_of_reach` or `cannot_run`), and `release`, the
   release's commit id, which anyone can find in the member's public fork: a hive at an older commit reads the line as
   the expiry it also is.
+
+  A `duty` line carries the role, its account's login, the account's number and its fork's, when the duty starts
+  and until when, and `area`, null: no part of the project is named yet. A `duty-end` line carries the role, the
+  account's number, the duty's instant (`duty`), `outcome` (`expired` or `released`) and `fault` (true when the
+  project's file took the role from the account: at no cost to it); one given back adds `because`, the release's
+  code, and `release`, its commit id. A duty is recorded once per role and run, its end once per duty. No reader of
+  deals, verdicts or expiries reads either line.
 - `feed.json`: the project's tasks with their status (`open`, `dealt`, `done`, `closed`), their tier, the number
   of judged refusals and the task's context (a probe adds `kind`, how many answers it asks and how many it has, and
   its answers are no refusals there); and, **under a hash of each login** that a worker computes for its
@@ -769,12 +845,15 @@ The hive's files there:
   that changed its login since is found there again once it is dealt a task under the new one. `releases` lists the
   codes of a release the run reads (a run at an older commit lists none, and a worker's tool then gives nothing
   back). How often a task was given back is not in the feed: a worker reads the judge's word on a task, never
-  another member's that it could not do it.
+  another member's that it could not do it. `duties` holds, under the same hash, the live duty of each account that
+  holds one (its role, since when and until when), and `duty_wait` until when an account that was dealt a duty is
+  dealt none: a run at an older commit writes neither, and the tool's `duty` command then asks for none.
 - `stats.json`: candidates judged and accepted by declared model, and, for each account with accepted work, how many were accepted (what was refused is added up for a model, not for a member). A probe's answer is counted apart, under `answered` (where there is one), and not under `judged`: accepted over judged stays the share of candidates meant to be accepted that were. The project's page counts the same, and the hive's `health` gives each kind of task its answers apart and an acceptance share that leaves them out.
 - `ignored.json`: fork by fork, the branch tips the hive does not read again (no marker, a marker for another
   member, an ask that was used, a submit that is not a candidate, a release once read, a commit shaped like a
   ruling in a fork whose owner the project does not name a guardian, under another account's name, or at another
-  branch than its task's ruling branch). A guardian's ruling at its branch is not listed there: it is read at each
+  branch than its task's ruling branch; a duty marker anywhere but at its place, an ask for a duty that was used, and
+  a duty's release once read). A guardian's ruling at its branch is not listed there: it is read at each
   run until the ledger holds its answer. Only what is still at a tip of that fork is kept: what one fork pushes
   never costs another its entries.
 - `accounts.json`: when each account that owns a fork was created, asked of GitHub once.
@@ -843,10 +922,13 @@ hour and the fork's own number, which adding forks to the list does not shift.
   one of them, with a minimum of 1 or more, and a project that lists none has goals of the kind « correct » only;
   what the project requires of every candidate, `judge.require`, stays as the project wrote it), its guardians if
   it names any (`guardians`: `accounts`, their GitHub account numbers, and `waive`, the figures they may waive,
-  each with the most a ruling may let it reach; a file without it takes no ruling, and one that names a guardian it also bans by number does not load: "Guardians"), the project's pause
+  each with the most a ruling may let it reach; a file without it takes no ruling, and one that names a guardian it also bans by number does not load: "Guardians"),
+  the accounts it trusts with a role and the pace of their duties (`trusted`: `accounts`, each an account's number
+  and its roles, `cut_hours` and `window_days`) and how long a duty lasts (`duty_hours`: "Trusted accounts and their
+  duties"), the project's pause
   (`"paused": true`), and what its cutter keeps to (`cutter`: the least a goal on a figure may ask, the most task
-  lines one cut changes, how many open tasks it aims at, the longest context of a task), which no run reads
-  ([cutter.md](cutter.md), "The gate"). A run reads this file, and the tasks, at the commit of the published branch its plan names,
+  lines one cut changes, how many open tasks it aims at, the longest context of a task), which no run reads but for
+  how many open tasks it aims at, below which a cut duty is dealt sooner ([cutter.md](cutter.md), "The gate"). A run reads this file, and the tasks, at the commit of the published branch its plan names,
   and a change acts from the run that plans after it ([hosting.md](hosting.md), "What a run reads, and when").
 
   **Every setting of that file is described, one by one, in `hive/settings.json`**: its key, its type, whether the
@@ -861,7 +943,7 @@ hour and the fork's own number, which adding forks to the list does not shift.
   times `history_bytes`, a file is read whole, git is told how many commits to count, the plan's and the judging
   jobs have their own time), and `files` times `file_bytes` is 256 MiB at most: what all of a candidate's files may
   weigh together. A file that says otherwise, that names a setting the hive does not know (at its top, or under
-  `limits`, `members`, `judge` or `cutter`: a key mistyped would leave a setting at its default), or that gives one of these
+  `limits`, `members`, `judge`, `cutter` or `trusted`: a key mistyped would leave a setting at its default), or that gives one of these
   blocks as anything but settings by name, does not load; `judge.options` are the project's plug-in's own and take
   any name, and `in_service` is a mark that `Bee-ruche/registre`'s own test read, which the hive does not read. The hive's own
   constants bound what a run does besides (the branches it lists of

@@ -5425,7 +5425,7 @@ class TestHostileData(Base):
         self.assertFalse(hive.in_task_files("lib.c.bak", ["lib.c"]))
 
 
-WORKER_COMMANDS = ("setup", "next", "start", "ready", "submit", "release", "admit")  # the commands that read the project from its own address
+WORKER_COMMANDS = ("setup", "next", "start", "ready", "submit", "release", "admit", "duty")  # the commands that read the project from its own address
 PROJECT_ADDRESS = "https://github.com/Bee-ruche/toy.git"  # the toy project's own address, as a volunteer's command reaches it
 INSTANT, COMMIT = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", r"[0-9a-f]{40}"
 WHO, WHOSE = r"[A-Za-z0-9-]{1,39}", r"--login [A-Za-z0-9-]{1,39}( --fork [A-Za-z0-9._-]{1,100})?"  # a login; the login and the fork's name
@@ -5487,6 +5487,18 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     rf"NOT-PUSHED {COMMIT}: the candidate is committed and nothing was pushed; run the same command again without --no-push to make the candidate anew and push it",
     rf"NOT-PUSHED {COMMIT}: the release is made and nothing was pushed; run the same command again without --no-push to make the release anew "
     r"and push it",
+    rf"DUTY cut until {INSTANT}",
+    r"THEN: the duty is yours until then\. This version of the hive reads nothing a duty produces: the duty ends when its time is up, or when "
+    r"you give it back \(this same command with --release and one of its codes\), and either costs you a wait before your next duty",
+    r"WAIT: your duty's time is up: the hive ends it at its next run \(about an hour\)\. Ask for no duty before then",
+    rf"WAIT until {INSTANT}: the hive deals you no duty before then \(a duty of yours ran out, or you gave one back\)",
+    r"THEN: stop here\. The hive ends the duty at its next run \(about an hour\), then deals you no duty for [0-9]+ hour\(s\)",
+    r"THEN: stop here\. The hive deals one duty of this role at a time, at its pace, to the least loaded account that asked: run this again "
+    r"after its next run to see whether it is yours\. The hive reads the ask only if the project's settings trust your account with this "
+    rf"role\. To take the ask back: hive\.py duty --project Bee-ruche/toy {WHOSE} --withdraw",
+    r"WAIT: you gave this duty back and the hive has not read it yet: its next run ends the duty",
+    rf"NOT-PUSHED {COMMIT}: the (ask|release) is made and nothing was pushed; run the same command again without --no-push to make it anew and "
+    r"push it",
 )]
 ASK = "ASK: you hold no task. If this worker runs at least every 2 hours, ask for one: hive.py ready --project Bee-ruche/toy --login Alice\n"
 # What a command stops on when the clone's origin is not the fork the tool derives from the login and the project's repository.
@@ -13116,7 +13128,8 @@ class TestTheSettingsList(unittest.TestCase):
                   "judge": read(rf'config\["judge"\]\[{name}\]', rf'config\["judge"\]\.get\({name}', rf"\bjudge\[{name}\]", rf"\bjudge\.setdefault\({name}",
                                 rf"\bsettings\[{name}\]", rf"\bsettings\.get\({name}"),
                   "guardians": read(rf'\(config\.get\("guardians"\) or \{{\}}\)\.get\({name}', rf"\braw\[{name}\]"),
-                  "cutter": read(rf'config\["cutter"\]\[{name}\]', rf"\bcutter\[{name}\]")}
+                  "cutter": read(rf'config\["cutter"\]\[{name}\]', rf"\bcutter\[{name}\]"),
+                  "trusted": read(rf'config\["trusted"\]\[{name}\]', rf"\btrusted\[{name}\]")}
         self.assertLessEqual(set(blocks), top, "the blocks of a project's file are keys of it")
         self.assertTrue(all(blocks.values()))
         found = (top - set(blocks)) | {f"{block}.{key}" for block, keys in blocks.items() for key in keys} | set(hive.REGISTRY_MARKS)
@@ -13126,6 +13139,7 @@ class TestTheSettingsList(unittest.TestCase):
         self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("members.")}, set(hive.DEFAULTS["members"]))
         self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("limits.")}, set(hive.DEFAULTS["limits"]))
         self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("cutter.")}, set(hive.DEFAULTS["cutter"]))
+        self.assertEqual({key.partition(".")[2] for key in self.settings if key.startswith("trusted.")}, set(hive.DEFAULTS["trusted"]))
         # The two keys of « guardians » are all it takes: a third does not load.
         self.assertTrue(self.loads({**self.MINIMAL, **self.GUARDED}))
         self.assertFalse(self.loads({**self.MINIMAL, **self.FIGURE, "guardians": {**self.GUARDED["guardians"], "minimum": 1}}))
@@ -13225,10 +13239,14 @@ class TestTheSettingsList(unittest.TestCase):
         history = self.settings["judge.history"]["most_entries"]
         self.assertEqual([self.loads(self.laid(base, "judge.history", [f"{number:040x}" for number in range(entries)])) for entries in (history, history + 1)],
                          [True, False])
-        self.assertEqual([key for key, entry in self.settings.items() if "most_entries" in entry], ["judge.history"])
+        trusted = self.settings["trusted.accounts"]["most_entries"]
+        self.assertEqual((trusted, [self.loads(self.laid(base, "trusted.accounts", [{"account": 100 + number, "roles": ["cut"]} for number in range(entries)]))
+                                    for entries in (trusted, trusted + 1)]), (hive.TRUSTED_MOST, [True, False]))
+        self.assertEqual([key for key, entry in self.settings.items() if "most_entries" in entry], ["trusted.accounts", "judge.history"])
         # The bounds are the tool's own: its constants and its table of what each limit may be.
         self.assertEqual({key: entry["most"] for key, entry in self.settings.items() if "most" in entry and entry["section"] != "limits"},
                          {"deal_hours": hive.BACKOFF_MAX_HOURS, "grace_hours": hive.BACKOFF_MAX_HOURS, "backoff_hours": hive.BACKOFF_MAX_HOURS,
+                          "duty_hours": hive.DUTY_HOURS_MOST, "trusted.cut_hours": hive.CUT_HOURS_MOST, "trusted.window_days": hive.WINDOW_DAYS_MOST,
                           "members.active_days": hive.ACTIVE_DAYS_MAX, "members.min_account_age_days": hive.ACCOUNT_AGE_MOST,
                           "judge.repetitions": hive.REPETITIONS_MOST, "judge.timeout_seconds": hive.JUDGEMENT_SECONDS_MOST,
                           **{f"cutter.{key}": most for key, (_, most) in hive.CUTTER_BOUNDS.items()}})
@@ -13334,7 +13352,7 @@ class TestTheSettingsList(unittest.TestCase):
                            ({"members": {"deal_per_day": 5}}, r"members\.deal_per_day"), ({"members": {"per_guardians": 5}}, r"members\.per_guardians")):
             with self.subTest(file=file), self.assertRaisesRegex(hive.HiveError, rf"toy\.json: {said}: not a setting the hive knows"):
                 self.load({**self.MINIMAL, **file})
-        for block in ("limits", "members", "judge"):
+        for block in ("limits", "members", "judge", "trusted"):
             for wrong in ([1], "x", 5, None, True):
                 with self.subTest(block, wrong=wrong), self.assertRaisesRegex(hive.HiveError, rf"toy\.json: {block}: its settings, by name\Z"):
                     self.load({**self.MINIMAL, block: wrong})
@@ -13430,7 +13448,7 @@ class TestTheWorkersGuide(unittest.TestCase):
         self.assertIn(listed, guide, "the guide gives the tool's list of lines as the tool's own documentation does")
         keywords = {line.split()[0].rstrip(":") for line in listed.split("\n") if not line.startswith(" ")}
         self.assertEqual(keywords, {"PROJECT", "LOGIN", "UPSTREAM", "NOTE", "ASK", "ASK-UNANSWERED", "WAIT", "TASK", "DEAL", "UNTIL", "===",
-                                    "|", "CHECK", "SET-ASIDE", "REMOVED", "STARTED", "THEN", "ASKED", "WITHDRAWN", "RELEASED", "REFUSED",
+                                    "|", "CHECK", "SET-ASIDE", "REMOVED", "STARTED", "THEN", "ASKED", "WITHDRAWN", "RELEASED", "DUTY", "REFUSED",
                                     "PUSHED", "NOT-PUSHED"})
         for line in WORKER_LINES:
             self.assertIn(re.match(r"(\\\||===|[A-Z-]+)", line.pattern).group(1).replace("\\", ""), keywords, line.pattern)
@@ -16750,6 +16768,9 @@ class TestTheDoctor(Base):
         self.assertIn("grace_hours", defaults)
         self.assertNotIn("deal_hours", defaults, "a setting with recommended values has a line of its own")
         self.assertNotIn("members.per_guardian", defaults, "a bound per guardian is refused where no guardian is named")
+        for duty in ("duty_hours", "trusted.cut_hours", "trusted.window_days"):
+            self.assertNotIn(duty, defaults, "the length and the pace of duties do nothing where the project trusts nobody")
+        self.assertIn("trusted.accounts", defaults)
         self.assertTrue([line for line in decided if line.startswith("defaults (continued): ")], "the names come after the sentence")
         self.assertTrue(decided[-1].startswith("measures: "))
         self.w.set_config({"protected": ["tests/**", "bee/**"], "deal_hours": 4, "cutter": {"floors": {"gain": 0.01}}})
@@ -17118,6 +17139,568 @@ class TestTheMeasure(Base):
             hive.judge_trees(str(self.w.upstream), mock.Mock(side_effect=RuntimeError), tempfile.mkdtemp(dir=work), tip,
                              hive.tree_of(str(self.w.upstream), tip), {}, tip)
         self.assertEqual(os.listdir(work), [], "removed, even when the judge throws")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Trusted accounts and their duties (hive.trusted_of, hive.read_duty, the plan's step 5, hive.check_duties, hive duty)
+
+TRUSTED = {"accounts": [{"account": 301, "roles": ["cut"]}, {"account": 302, "roles": ["cut"]}], "cut_hours": 6, "window_days": 7}
+
+
+def duty_ask(fork, role="cut", member=None, branch=hive.DUTY_BRANCH, more=()):
+    """An ask for a duty, as « hive duty » makes one: a commit that holds no file and has no parent, pushed over the
+    fork's branch for duties. Returns its commit. `more`: further lines of its message, whatever they say."""
+    fork.asked += 1
+    lines = [f"Hive duty {fork.asked}", "", "Hive-Action: duty", f"Hive-Member: {member or fork.login}", f"Hive-Role: {role}", *more]
+    tree = sh("git", "mktree", cwd=fork.work, stdin="").stdout.strip()
+    commit = sh("git", "commit-tree", tree, "-m", "\n".join(lines), cwd=fork.work).stdout.strip()
+    sh("git", "push", "--quiet", "--force", "origin", f"{commit}:refs/heads/{branch}", cwd=fork.work)
+    return commit
+
+
+def duty_release(fork, deal, because="cannot_run", role="cut", member=None, branch=hive.DUTY_BRANCH):
+    """A duty given back, as « hive duty --release » makes it, pushed over the fork's branch for duties."""
+    fork.asked += 1
+    lines = [f"Hive duty release {fork.asked}", "", "Hive-Action: release", f"Hive-Member: {member or fork.login}", f"Hive-Role: {role}",
+             f"Hive-Deal: {deal}", f"Hive-Because: {because}"]
+    tree = sh("git", "mktree", cwd=fork.work, stdin="").stdout.strip()
+    commit = sh("git", "commit-tree", tree, "-m", "\n".join(lines), cwd=fork.work).stdout.strip()
+    sh("git", "push", "--quiet", "--force", "origin", f"{commit}:refs/heads/{branch}", cwd=fork.work)
+    return commit
+
+
+class TestTheTrustedAccountsSettings(unittest.TestCase):
+    """« trusted »: the accounts a project's file trusts with a role, by their numbers, each once, with roles the hive
+    knows; the pace of their duties; and duty_hours. Anything else and the file does not load."""
+    MINIMAL = TestTheSettingsList.MINIMAL
+    setUp, load, loads = TestTheSettingsList.setUp, TestTheSettingsList.load, TestTheSettingsList.loads
+
+    def test_the_trusted_accounts_are_numbers_each_once_with_roles_the_hive_knows(self):
+        good = {"accounts": [{"account": 301, "roles": ["cut"]}, {"account": 302, "roles": ["cut"]}], "cut_hours": 6, "window_days": 7}
+        self.assertEqual(self.load({**self.MINIMAL, "trusted": good})["trusted"], good)
+        self.assertEqual(self.load(self.MINIMAL)["trusted"], {"accounts": [], "cut_hours": 6, "window_days": 7}, "nobody, by default")
+        self.assertEqual(self.load({**self.MINIMAL, "trusted": {"cut_hours": 12}})["trusted"], {"accounts": [], "cut_hours": 12, "window_days": 7})
+        shape = r"trusted\.accounts: a list of 32 entries at most, each « account » \(a GitHub account number\) and « roles » \(what the project trusts it with\), and nothing else\Z"
+        number = r"trusted\.accounts: each account is a GitHub account number \(a whole number, never a login\), each once\Z"
+        roles = r"trusted\.accounts: the roles of account 301: one at least, each once, each a role the hive knows \(cut\)\Z"
+        for accounts, said in (("301", shape), ([301], shape), ([{"account": 301}], shape), ([{"account": 301, "roles": ["cut"], "area": None}], shape),
+                               ([{"account": 301 + n, "roles": ["cut"]} for n in range(33)], shape), (None, shape),
+                               ([{"account": 0, "roles": ["cut"]}], number), ([{"account": "301", "roles": ["cut"]}], number),
+                               ([{"account": True, "roles": ["cut"]}], number), ([{"account": 3.5, "roles": ["cut"]}], number),
+                               ([{"account": 301, "roles": ["cut"]}, {"account": 301, "roles": ["cut"]}], number),
+                               ([{"account": 301, "roles": []}], roles), ([{"account": 301, "roles": ["review"]}], roles),
+                               ([{"account": 301, "roles": ["cut", "cut"]}], roles), ([{"account": 301, "roles": "cut"}], roles),
+                               ([{"account": 301, "roles": ["Cut"]}], roles)):
+            with self.subTest(accounts=accounts), self.assertRaisesRegex(hive.HiveError, rf"toy\.json: {said}"):
+                self.load({**self.MINIMAL, "trusted": {"accounts": accounts}})
+        for key, wrong, most in (("cut_hours", 0, 168), ("cut_hours", 169, 168), ("cut_hours", 1.5, 168), ("cut_hours", "6", 168), ("cut_hours", None, 168),
+                                 ("window_days", 0, 365), ("window_days", 366, 365), ("window_days", True, 365)):
+            with self.subTest(key, wrong=wrong), self.assertRaisesRegex(hive.HiveError, rf"toy\.json: trusted\.{key}: a whole number, from 1 to {most}\Z"):
+                self.load({**self.MINIMAL, "trusted": {key: wrong}})
+        for wrong in (0, 25, "2", 1.5, None):
+            with self.subTest("duty_hours", wrong=wrong), self.assertRaisesRegex(hive.HiveError, r"toy\.json: duty_hours: a whole number of hours, from 1 to 24\Z"):
+                self.load({**self.MINIMAL, "duty_hours": wrong})
+        self.assertEqual([self.load({**self.MINIMAL, "duty_hours": hours})["duty_hours"] for hours in (1, 24)], [1, 24])
+        with self.assertRaisesRegex(hive.HiveError, r"toy\.json: trusted\.cuthours: not a setting the hive knows"):
+            self.load({**self.MINIMAL, "trusted": {"cuthours": 6}})
+
+    def test_an_account_the_file_bans_is_never_trusted_and_a_guardian_may_be(self):
+        trusted = {"accounts": [{"account": 7, "roles": ["cut"]}]}
+        with self.assertRaisesRegex(hive.HiveError, r"trusted\.accounts: account 7 is banned \(members\.banned\): a trusted account is never one\Z"):
+            self.load({**self.MINIMAL, "trusted": trusted, "members": {"banned": [8, 7]}})
+        self.assertTrue(self.loads({**self.MINIMAL, "trusted": trusted, "members": {"banned": ["gina", 8]}}), "a login says nothing of a number")
+        self.assertTrue(self.loads({**self.MINIMAL, **TestTheSettingsList.GUARDED, "trusted": trusted}), "a guardian may be trusted with a role too")
+
+    def test_the_loaded_block_is_the_files_own_and_never_the_defaults(self):
+        config = self.load({**self.MINIMAL, "trusted": {"accounts": [{"account": 7, "roles": ["cut"]}]}})
+        config["trusted"]["accounts"][0]["roles"].append("x")
+        config = self.load(self.MINIMAL)
+        config["trusted"]["accounts"].append({"account": 9, "roles": ["cut"]})
+        self.assertEqual((hive.DEFAULTS["trusted"]["accounts"], self.load(self.MINIMAL)["trusted"]["accounts"]), ([], []))
+        self.assertEqual((hive.trusted_accounts(config), hive.trusted_accounts(config, "cut"), hive.trusted_accounts(config, "review"),
+                          hive.trusted_roles(config), hive.trusted_accounts({})), ({9}, {9}, set(), {9: {"cut"}}, set()))
+
+
+class TestTheDutyMarker(unittest.TestCase):
+    """read_duty: an ask for a duty of a role, or the release of one, and nothing else; never a member's marker or a
+    guardian's ruling, and none of those is a duty marker."""
+    ASK = "Hive duty\n\nHive-Action: duty\nHive-Member: carol\nHive-Role: cut\n"
+    GIVE = f"Hive duty release\n\nHive-Action: release\nHive-Member: carol\nHive-Role: cut\nHive-Deal: {NOW}\nHive-Because: cannot_run\n"
+
+    def test_a_duty_marker_is_an_ask_or_a_release_and_nothing_else(self):
+        self.assertEqual(hive.read_duty(self.ASK), {"action": "duty", "member": "carol", "role": "cut", "deal": None, "because": None})
+        self.assertEqual(hive.read_duty(self.GIVE.replace("\n", "\r\n")), {"action": "release", "member": "carol", "role": "cut", "deal": NOW,
+                                                                         "because": "cannot_run"})
+        for message in (self.ASK, self.GIVE):
+            self.assertEqual((hive.read_marker(message), hive.read_ruling(message)), (None, None), "no member's marker, no ruling")
+        for wrong in (self.ASK.replace("cut", "review"), self.ASK + "Hive-Role: cut\n", self.ASK + f"Hive-Deal: {NOW}\n", self.ASK + "Hive-Because: cannot_run\n",
+                      self.ASK + "Hive-Task: toy-0001\n", self.ASK + "Hive-Tier: 1\n", self.ASK + "Hive-Model: m\n", self.ASK + "Hive-Prefer: lib.c\n",
+                      self.ASK + f"Hive-Commit: {'a' * 40}\n", self.ASK.replace("carol", "-carol"), self.ASK.replace("Hive-Member: carol\n", ""),
+                      self.ASK.replace("Hive-Role: cut\n", ""), self.GIVE.replace("cannot_run", "bored"), self.GIVE.replace(NOW, "yesterday"),
+                      self.GIVE.replace(f"Hive-Deal: {NOW}\n", ""), self.GIVE.replace("Hive-Because: cannot_run\n", ""),
+                      self.GIVE.replace("Hive-Action: release", "Hive-Action: submit"), self.GIVE.replace("Hive-Action: release", "Hive-Action: admit"),
+                      "Hive-Action: duty\nHive-Member: carol\n", " Hive-Action: duty\nHive-Member: carol\nHive-Role: cut\n"):
+            with self.subTest(wrong=wrong):
+                self.assertIsNone(hive.read_duty(wrong))
+        for member in ("x\n\nHive-Action: ready\nHive-Member: carol\n", f"x\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: {NOW}\n"
+                       "Hive-Member: carol\nHive-Because: cannot_run\nHive-Role: cut\n", f"x\n\nHive-Action: admit\nHive-Member: carol\nHive-Task: toy-0001\n"
+                       f"Hive-Commit: {'a' * 40}\nHive-Waive: suspects 1\nHive-Role: cut\n"):
+            self.assertIsNone(hive.read_duty(member), "a member's or a guardian's marker is no duty marker, whatever it adds")
+
+
+class TestTheDutiesInTheLedger(unittest.TestCase):
+    """The ledger's duties, on lines written by hand: one live duty per role, once per role and run; one end per duty;
+    a wait of their own; and nothing a member's standing, the deals or the tally read."""
+    CONFIG = {"backoff_hours": 2, "members": {"deals_per_day": 5, "active_days": 30, "banned": [], "only": None}}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    @staticmethod
+    def duty(member, at, run=None, hours=2):
+        return {"type": "duty", "at": at, "until": hive.iso(hive.parse_iso(at) + hive.dt.timedelta(hours=hours)), "run": run or f"r{at}",
+                "role": "cut", "member": f"m{member}", "member_id": member, "repo_id": member + 1000, "area": None}
+
+    @staticmethod
+    def end(member, duty, at, outcome="expired", fault=False, run=None):
+        return {"type": "duty-end", "at": at, "run": run or f"e{at}", "role": "cut", "member_id": member, "duty": duty, "outcome": outcome,
+                "fault": fault}
+
+    def test_a_duty_and_its_end_are_recorded_once_and_read_apart_from_everything_a_member_is(self):
+        ledger = hive.Ledger(self.tmp.name)
+        ledger.append([self.duty(301, "2026-11-12T08:00:00Z", run="a" * 32), self.duty(302, "2026-11-12T08:00:05Z", run="a" * 32)])
+        self.assertEqual([e["member_id"] for e in ledger.events], [301], "one duty of a role per run")
+        self.assertEqual(ledger.duties()["cut"]["state"], "live")
+        ledger.append([self.end(301, "2026-11-12T08:00:00Z", "2026-11-12T11:00:00Z"),
+                       self.end(301, "2026-11-12T08:00:00Z", "2026-11-12T11:30:00Z", run="b" * 32)])
+        self.assertEqual(len(ledger.events), 2, "one end per duty, whatever the run")
+        self.assertEqual(ledger.duties()["cut"]["state"], "closed")
+        live = self.duty(302, "2026-11-12T11:50:00Z")
+        ledger.append([live, self.end(301, live["at"], "2026-11-12T11:55:00Z"), self.end(302, "2026-11-12T11:00:00Z", "2026-11-12T11:56:00Z")])
+        self.assertEqual({key: ledger.duties()["cut"][key] for key in ("member_id", "at", "state")}, {"member_id": 302, "at": live["at"], "state": "live"},
+                         "an end of another account's duty, or of another duty, closes nothing")
+        instant = hive.parse_iso(NOW)
+        # Nothing of it is a member's: no deal, no standing, no place, no day's deal, no tally line, no statistic.
+        self.assertEqual((ledger.deals(), ledger.done(), ledger.accepted_members(), hive.active_members(ledger, instant, self.CONFIG)), ({}, set(), set(), set()))
+        for member in (301, 302):
+            self.assertEqual((ledger.standing(member, instant, self.CONFIG), ledger.held_in_vain(member), ledger.last_deal_accepted(member)),
+                             ((1, None, 0), set(), False))
+        self.assertEqual([hive.tally_line(e) for e in ledger.events], [None] * len(ledger.events))
+        self.assertEqual(hive.build_stats(ledger)["members"], {})
+
+    def test_a_duty_that_runs_out_costs_a_wait_that_doubles_one_given_back_the_first_and_one_at_the_hives_fault_nothing(self):
+        def wait(*ends):
+            ledger = hive.Ledger(self.tmp.name)
+            ledger.events = list(ends)
+            return ledger.duty_wait(301, hive.parse_iso(NOW), self.CONFIG)
+        out = [self.end(301, f"2026-11-12T0{n}:00:00Z", "2026-11-12T11:00:00Z") for n in range(9)]
+        self.assertEqual(wait(), None)
+        self.assertEqual([wait(*out[:n]) for n in (1, 2, 3)], ["2026-11-12T13:00:00Z", "2026-11-12T15:00:00Z", "2026-11-12T19:00:00Z"])
+        self.assertEqual(wait(*out), "2026-11-19T11:00:00Z", "doubled up to seven days, no more")
+        given = [self.end(301, f"2026-11-12T0{n}:00:00Z", "2026-11-12T11:30:00Z", outcome="released") for n in range(3)]
+        self.assertEqual(wait(*given), "2026-11-12T13:30:00Z", "the first wait, never doubled")
+        self.assertEqual(wait(out[0], out[1], given[2]), "2026-11-12T15:00:00Z", "a release clears nothing: the longer wait holds")
+        self.assertEqual(wait(*(dict(e, fault=True) for e in out)), None, "an end at the hive's fault costs nothing")
+        self.assertEqual(wait(dict(out[0], member_id=302), {**self.duty(301, "2026-11-12T10:00:00Z")}), None, "another's end, and a duty itself, cost nothing")
+        self.assertEqual(wait(dict(out[0], at="2026-11-12T09:00:00Z")), None, "a wait that is over")
+
+    def test_the_load_counts_an_accounts_duties_of_the_role_from_an_instant_on(self):
+        ledger = hive.Ledger(self.tmp.name)
+        ledger.events = [self.duty(301, "2026-11-04T12:00:00Z"), self.duty(301, "2026-11-06T12:00:00Z"), self.duty(301, "2026-11-12T08:00:00Z"),
+                         self.duty(302, "2026-11-12T09:00:00Z"), dict(self.duty(301, "2026-11-12T10:00:00Z"), role="review"),
+                         {"type": "deal", "member_id": 301, "at": "2026-11-12T10:00:00Z", "task": "toy-0001", "role": "cut"}]
+        self.assertEqual([ledger.duty_load(301, "cut", since) for since in ("2026-11-05T12:00:00Z", "2026-11-04T12:00:00Z", NOW)], [2, 3, 0])
+        self.assertEqual(ledger.duty_load(302, "cut", "2026-11-05T12:00:00Z"), 1)
+
+
+class TestDuties(Base):
+    """A project trusts accounts with a role (« trusted »). Such an account asks for a duty at one branch of its own
+    fork; the plan deals one cut duty at a time, at the project's pace, to the least loaded account that asked, then
+    by a draw; the duty ends when its time is up, when its account gives it back, or at once and at no cost when the
+    project takes the role from it. A duty is no deal: no member's standing, day's limit or place reads it."""
+    config = {"trusted": TRUSTED}
+
+    def setUp(self):
+        super().setUp()
+        self.carol, self.dave = self.w.fork("carol", 301), self.w.fork("dave", 302)
+
+    def lines(self, kind):
+        return [e for e in self.w.load()[2].events if e["type"] == kind]
+
+    def ignored(self, fork):
+        return hive.read_ignored(self.w.state).get(str(fork.id + 1000), [])
+
+    def held(self, fork, at, hours=2, role="cut"):
+        """A duty line, as an earlier run would have written it: `fork` holds a duty of `role` from `at`, for `hours`."""
+        hive.Ledger(self.w.state).append([{"type": "duty", "at": at, "until": hive.iso(hive.parse_iso(at) + hive.dt.timedelta(hours=hours)),
+                                           "run": f"test-duty-{at}", "role": role, "member": fork.login, "member_id": fork.id,
+                                           "repo_id": fork.id + 1000, "area": None}])
+        return at
+
+    def ended(self, fork, duty, at, outcome="released", fault=False):
+        hive.Ledger(self.w.state).append([{"type": "duty-end", "at": at, "run": f"test-end-{at}", "role": "cut", "member_id": fork.id, "duty": duty,
+                                           "outcome": outcome, "fault": fault}])
+
+    def wait_of(self, fork):
+        config, _, ledger = self.w.load()
+        return ledger.duty_wait(fork.id, hive.now(), config)
+
+    def test_a_trusted_account_that_asks_is_dealt_the_cut_duty_its_ask_used_and_the_feed_says_so(self):
+        asked = duty_ask(self.carol)
+        self.assertEqual(self.w.run(), [])
+        line, = self.lines("duty")
+        self.assertEqual(line, {"type": "duty", "at": NOW, "until": "2026-11-12T14:00:00Z", "run": self.w.made["key"], "role": "cut", "member": "carol",
+                                "member_id": 301, "repo_id": 1301, "area": None})
+        self.assertEqual(self.w.made["duties"], [{"role": "cut", "member": "carol", "member_id": 301, "repo_id": 1301, "asks": [asked]}])
+        self.assertEqual((hive.duties_said(self.w.made), hive.duties_said({"duties": [], "duty_ends": []})), (", 1 duty(ies) dealt, 0 ended", ""),
+                         "the steps' logs say the duties, and a plan without any reads as before")
+        self.assertIn(asked, self.ignored(self.carol), "an ask is used once")
+        feed, mark = self.w.feed_file(), hive.member_mark("carol")
+        self.assertEqual((feed["duties"], feed["duty_wait"], feed["deals"], feed["wait"]),
+                         ({mark: {"role": "cut", "at": NOW, "until": "2026-11-12T14:00:00Z"}}, {}, {}, {}))
+        config, _, ledger = self.w.load()
+        self.assertEqual((self.w.dealt_by_runs(), ledger.standing(301, hive.now(), config), hive.active_members(ledger, hive.now(), config)),
+                         ([], (1, None, 0), set()), "a duty is no deal, no day's deal and no place")
+        duty_ask(self.dave)
+        self.w.run()
+        self.assertEqual((len(self.lines("duty")), "duties" in self.w.made), (1, False), "one cut duty at a time: dave's ask waits")
+        self.assertEqual(self.ignored(self.dave), [], "and is read again at the next run")
+
+    def test_a_duty_marker_counts_only_in_a_trusted_accounts_own_fork_by_its_owner_at_the_duty_branch(self):
+        alices = duty_ask(self.alice)  # an account the project does not trust
+        elsewhere = [duty_ask(self.carol, branch="hive/ready"), duty_ask(self.carol, branch="hive/duty-two")]  # at another branch
+        named = duty_ask(self.dave, member="carol")  # in carol's name, in dave's fork
+        carols = duty_ask(self.carol, branch="kept-back")  # carol's own ask...
+        erin = self.w.fork("erin", 303)
+        erin.take(self.carol, carols, hive.DUTY_BRANCH)  # ... pushed to erin's fork, where it is nothing
+        sh("git", "push", "--quiet", "origin", "--delete", "kept-back", cwd=self.carol.work)
+        self.assertEqual(self.w.run(), [])
+        self.assertEqual(self.lines("duty"), [])
+        self.assertEqual((alices in self.ignored(self.alice), carols in self.ignored(erin), named in self.ignored(self.dave),
+                          set(elsewhere) <= set(self.ignored(self.carol))), (True, True, True, True), "each is nothing, for good")
+        with mock.patch.object(hive, "ROLES", ("cut", "review")):  # a role the file does not give that account
+            self.w.set_config({"trusted": {"accounts": [{"account": 301, "roles": ["review"]}, {"account": 302, "roles": ["cut"]}]}})
+            cut = duty_ask(self.carol)
+            self.w.run()
+            self.assertEqual((self.lines("duty"), cut in self.ignored(self.carol)), ([], True))
+
+    def test_a_trusted_account_is_read_for_its_duties_whatever_the_project_asks_of_a_member(self):
+        self.w.set_config({"trusted": TRUSTED, "members": {"only": [101]}})  # open by invitation, and carol is not invited
+        duty_ask(self.carol)
+        task_ask = self.carol.ready()
+        self.w.run()
+        self.assertEqual(([e["member"] for e in self.lines("duty")], self.w.dealt_by_runs()), (["carol"], []),
+                         "her duty is dealt, and her ask for a task is nothing: she is no member")
+        self.assertNotIn(task_ask, self.ignored(self.carol), "and is not remembered: it is read on the day the project reads her fork for a member")
+
+    def test_a_duty_is_dealt_to_the_least_loaded_account_that_asked_then_by_the_draw(self):
+        real = hive.draw
+
+        def favours(member):  # a draw that puts `member` first among the askers for a duty, and is the real one otherwise
+            return lambda key, *parts: ("0" if parts[-1] == member else "f") if parts[:2] == ("duty", "cut") else real(key, *parts)
+        old = self.held(self.carol, "2026-11-10T12:00:00Z")  # two days ago, within the window: carol's load is one
+        self.ended(self.carol, old, "2026-11-10T12:30:00Z")
+        self.ended(self.carol, self.held(self.carol, "2026-11-01T12:00:00Z"), "2026-11-01T12:30:00Z")  # (eleven days ago: out of the window)
+        duty_ask(self.carol), duty_ask(self.dave)
+        with mock.patch.object(hive, "draw", side_effect=favours(301)):
+            self.w.run()
+        dealt = self.lines("duty")[-1]
+        self.assertEqual(dealt["member"], "dave", "the least loaded first, whatever the draw says")
+        self.ended(self.dave, dealt["at"], NOW, outcome="expired", fault=True)  # (ended at no cost: no wait for dave; one duty each now)
+        duty_ask(self.dave)  # carol's ask stands: it was not used
+        with mock.patch.object(hive, "draw", side_effect=favours(302)), mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:10:00Z"}):
+            self.w.run()  # (each run at an instant of its own, as runs are: a duty's end names its duty by account and instant)
+        self.assertEqual(self.lines("duty")[-1]["member"], "dave", "one duty each in the window: the draw")
+        config, _, ledger = self.w.load()
+        since = hive.iso(hive.now() - hive.dt.timedelta(days=config["trusted"]["window_days"]))
+        self.assertEqual((ledger.duty_load(301, "cut", since), ledger.duty_load(302, "cut", since)), (1, 2))
+        self.ended(self.dave, self.lines("duty")[-1]["at"], "2026-11-12T12:10:00Z", outcome="expired", fault=True)
+        duty_ask(self.dave)
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:20:00Z"}):
+            self.w.run()  # the real draw, with the run's own key
+        self.assertEqual(self.lines("duty")[-1]["member"], "carol", "one duty against two")
+
+    def test_an_account_that_holds_a_duty_or_waits_after_one_is_passed_over(self):
+        self.ended(self.carol, self.held(self.carol, "2026-11-12T11:00:00Z"), "2026-11-12T11:30:00Z")  # given back half an hour ago: a wait
+        duty_ask(self.carol)
+        self.w.run()
+        self.assertEqual(len(self.lines("duty")), 1, "nobody else asked, and carol waits")
+        duty_ask(self.dave)
+        self.w.run()
+        self.assertEqual(self.lines("duty")[-1]["member"], "dave")
+
+    def test_a_duty_that_runs_out_costs_its_account_a_wait_of_its_own_and_nothing_as_a_member(self):
+        first = self.held(self.carol, "2026-11-12T08:00:00Z")  # until ten, and the hour's grace: over at eleven
+        self.carol.ready()  # carol asks for a task as a member too
+        self.w.run()
+        end, = self.lines("duty-end")
+        self.assertEqual(end, {"type": "duty-end", "at": NOW, "run": self.w.made["key"], "role": "cut", "member_id": 301, "duty": first,
+                               "outcome": "expired", "fault": False})
+        self.assertEqual(self.w.made["duty_ends"], [{"role": "cut", "member_id": 301, "duty": first, "outcome": "expired", "fault": False}])
+        self.assertEqual(self.wait_of(self.carol), "2026-11-12T14:00:00Z")
+        (task, member), = self.w.dealt_by_runs()
+        config, _, ledger = self.w.load()
+        self.assertEqual((member, ledger.standing(301, hive.now(), config), ledger.held_in_vain(301)), ("carol", (1, None, 1), set()),
+                         "as a member she is dealt as anyone, and nothing of the duty counts against her")
+        feed, mark = self.w.feed_file(), hive.member_mark("carol")
+        self.assertEqual((feed["duty_wait"], mark in feed["wait"], feed["deals"][mark]["task"], feed["duties"]),
+                         ({mark: "2026-11-12T14:00:00Z"}, False, task, {}))
+        self.held(self.carol, "2026-11-12T08:30:00Z")  # a second one, run out too
+        self.w.run()
+        self.assertEqual((len(self.lines("duty-end")), self.wait_of(self.carol)), (2, "2026-11-12T16:00:00Z"), "the wait doubles")
+
+    def test_a_duty_runs_out_only_once_its_time_and_the_grace_are_past(self):
+        duty = self.held(self.dave, "2026-11-12T09:30:00Z")  # until half past eleven, and the hour's grace: half past twelve
+        self.w.run()
+        self.assertEqual((self.lines("duty-end"), self.w.load()[2].duties()["cut"]["state"]), ([], "live"))
+        with self.assertRaisesRegex(hive.HiveError, "a duty ran out whose time is not up"):
+            self.w.record(duty_ends=[{"role": "cut", "member_id": 302, "duty": duty, "outcome": "expired", "fault": False}])
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:30:01Z"}):
+            self.w.run()
+        self.assertEqual([(e["member_id"], e["outcome"]) for e in self.lines("duty-end")], [(302, "expired")])
+
+    def test_the_tasks_left_are_those_open_or_dealt_and_not_the_closed_ones(self):
+        self.w.set_config({"trusted": TRUSTED, "cutter": {"open": 5}})  # five tasks, one of them closed: four left, fewer than five
+        self.ended(self.dave, self.held(self.dave, "2026-11-12T11:00:00Z"), "2026-11-12T11:10:00Z", outcome="expired", fault=True)
+        duty_ask(self.carol)
+        self.w.run()
+        self.assertEqual(self.lines("duty")[-1]["member"], "carol", "short of tasks: dealt within the six hours")
+
+    def test_a_duty_never_counts_in_the_cover_and_the_cover_never_holds_a_duty_back(self):
+        self.w.set_config({"judge": GUARDED, "guardians": GUARDIANS, "members": {"per_guardian": 1}, "trusted": TRUSTED})  # one place
+        self.w.deal(self.alice, "toy-0001")  # alice holds it
+        duty_ask(self.carol)
+        self.carol.ready()
+        self.w.run(judge_that_flags)
+        config, _, ledger = self.w.load()
+        self.assertEqual(([e["member"] for e in self.lines("duty")], self.w.dealt_by_runs(), hive.active_members(ledger, hive.now(), config)),
+                         (["carol"], [], {101}), "carol's duty is dealt, her task is not (a new member beyond the cover), and she holds no place")
+
+    def test_a_duty_given_back_ends_at_once_and_costs_the_first_wait_never_doubled(self):
+        duty = self.held(self.carol, "2026-11-12T11:30:00Z")  # live until half past one
+        other = duty_release(self.carol, "2026-11-12T11:00:00Z")  # of another instant
+        foreign = duty_release(self.dave, duty, member="carol")  # in carol's name, in dave's fork
+        self.w.run()
+        self.assertEqual(self.lines("duty-end"), [])
+        self.assertEqual((other in self.ignored(self.carol), foreign in self.ignored(self.dave)), (True, True), "each read once, and nothing")
+        given = duty_release(self.carol, duty, "out_of_reach")
+        duty_ask(self.dave)
+        self.w.run()
+        end, = self.lines("duty-end")
+        self.assertEqual(end, {"type": "duty-end", "at": NOW, "run": self.w.made["key"], "role": "cut", "member_id": 301, "duty": duty,
+                               "outcome": "released", "fault": False, "because": "out_of_reach", "release": given})
+        self.assertEqual((self.wait_of(self.carol), given in self.ignored(self.carol)), ("2026-11-12T14:00:00Z", True))
+        self.assertEqual(self.lines("duty")[-1]["member"], "dave", "the role is free in the same run")
+        self.w.run()
+        self.assertEqual(len(self.lines("duty-end")), 1, "a release is read once")
+        self.ended(self.carol, self.held(self.carol, "2026-11-12T11:40:00Z"), NOW)  # a second duty given back, now
+        self.assertEqual(self.wait_of(self.carol), "2026-11-12T14:00:00Z", "the first wait again, never doubled")
+
+    def test_a_duty_whose_account_the_project_no_longer_trusts_with_its_role_ends_at_once_at_no_cost(self):
+        duty = self.held(self.carol, "2026-11-12T11:30:00Z")
+        self.w.set_config({"trusted": {**TRUSTED, "accounts": [{"account": 302, "roles": ["cut"]}]}})
+        duty_ask(self.dave)
+        made = self.w.plan()
+        with self.assertRaisesRegex(hive.HiveError, "at the hive's fault where the project's file still trusts its account with its role, or the "
+                                                    "other way round"):
+            self.w.record(duty_ends=[{**made["duty_ends"][0], "fault": False}])
+        self.w.record()
+        end, = self.lines("duty-end")
+        self.assertEqual({key: end[key] for key in ("member_id", "duty", "outcome", "fault")}, {"member_id": 301, "duty": duty, "outcome": "expired", "fault": True})
+        self.assertEqual((self.wait_of(self.carol), self.lines("duty")[-1]["member"]), (None, "dave"))
+        self.assertEqual(self.w.feed_file()["duty_wait"], {}, "no wait, for anybody")
+
+    def test_a_release_read_while_the_duty_is_live_counts_whenever_the_run_comes_and_a_role_taken_away_comes_first(self):
+        late = self.held(self.carol, "2026-11-12T08:00:00Z")  # its time and grace past at eleven
+        duty_release(self.carol, late)  # pushed once they were past, and read at the next run
+        self.w.run()
+        end, = self.lines("duty-end")
+        self.assertEqual((end["outcome"], end["fault"], self.wait_of(self.carol)), ("released", False, "2026-11-12T14:00:00Z"),
+                         "a release the run reads while the duty is live counts, as a deal's does: the first wait")
+        lost = self.held(self.dave, "2026-11-12T11:30:00Z")
+        given = duty_release(self.dave, lost)
+        self.w.set_config({"trusted": {**TRUSTED, "accounts": [{"account": 301, "roles": ["cut"]}]}})
+        self.w.run()
+        self.assertEqual([(e["member_id"], e["outcome"], e["fault"]) for e in self.lines("duty-end")][-1], (302, "expired", True),
+                         "the role taken away ends the duty first, at no cost")
+        self.assertEqual((given in self.ignored(self.dave), self.wait_of(self.dave)), (True, None))
+
+    def test_a_cut_duty_waits_cut_hours_after_the_latest_unless_the_project_is_short_of_tasks(self):
+        config = self.w.load()[0]
+        instant, closed = hive.now(), {"at": "2026-11-12T11:00:00Z", "state": "closed"}
+
+        def due(latest, left, aim):
+            return hive.duty_due("cut", latest, instant, {**config, "cutter": {**config["cutter"], "open": aim}}, left)
+        self.assertEqual([due(None, 4, 1), due({**closed, "state": "live"}, 0, 10), due(closed, 4, 1), due({**closed, "at": "2026-11-12T06:00:00Z"}, 4, 1),
+                          due({**closed, "at": "2026-11-12T06:00:01Z"}, 4, 1), due(closed, 0, 1), due(closed, 4, 5), due(closed, 4, 4)],
+                         [True, False, False, True, False, True, True, False])
+        self.w.set_config({"trusted": TRUSTED, "cutter": {"open": 1}})  # four tasks left: not short
+        self.ended(self.dave, self.held(self.dave, "2026-11-12T06:00:01Z"), "2026-11-12T06:30:00Z", outcome="expired", fault=True)
+        duty_ask(self.carol)
+        self.w.run()
+        self.assertEqual(len(self.lines("duty")), 1, "six hours have not passed since the latest")
+        with mock.patch.dict(os.environ, {"HIVE_NOW": "2026-11-12T12:00:01Z"}):
+            self.w.run()
+        self.assertEqual(self.lines("duty")[-1]["member"], "carol")
+
+    def test_the_step_that_writes_holds_the_plans_duties_and_their_ends_again(self):
+        asked = duty_ask(self.carol)
+        made = self.w.plan()
+        good = made["duties"]
+        for changes, said in ((dict(duties=[{**good[0], "member_id": 101, "member": "alice"}]), "does not trust with its role"),
+                              (dict(duties=good + [{**good[0], "member_id": 302, "member": "dave", "repo_id": 1302}]), "two duties of one role"),
+                              (dict(duties=[{**good[0], "asks": ["a" * 40]}]), "on asks it does not set aside"),
+                              (dict(duties=[{**good[0], "area": None}]), "the plan is unreadable"),
+                              (dict(duties=[{**good[0], "role": "review"}]), "the plan is unreadable"),
+                              (dict(duties=[{**good[0], "asks": []}]), "the plan is unreadable"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": NOW, "outcome": "expired", "fault": False}]),
+                               "a duty is over that the ledger does not hold as live")):
+            with self.subTest(said), self.assertRaisesRegex(hive.HiveError, said):
+                self.w.record(**changes)
+        self.assertEqual(self.lines("duty"), [], "nothing of it is written")
+        self.w.record()
+        self.assertEqual([e["member"] for e in self.lines("duty")], ["carol"])
+        self.assertIn(asked, self.ignored(self.carol))
+        # A duty while another is live; one sooner than the pace; one to an account that waits.
+        daves = duty_ask(self.dave)
+        made = self.w.plan()
+        self.assertNotIn("duties", made, "carol's duty is live")
+        dave = {"role": "cut", "member": "dave", "member_id": 302, "repo_id": 1302, "asks": [daves]}
+        spent = {**made["ignored"], "1302": [*made["ignored"].get("1302", []), daves]}
+        with self.assertRaisesRegex(hive.HiveError, "a role whose duty is live, or sooner than the project's pace"):
+            self.w.record(duties=[dave], ignored=spent)
+        with self.assertRaisesRegex(hive.HiveError, "to an account that holds one, or that waits after one"):
+            self.w.record(duties=[{**dave, "member": "carol", "member_id": 301, "repo_id": 1301}], ignored=spent)
+        carols = self.lines("duty")[-1]["at"]
+        for other in ({"duty": "2026-11-12T11:00:00Z"}, {"member_id": 302}):  # another instant, another account
+            with self.subTest(other=other), self.assertRaisesRegex(hive.HiveError, "a duty is over that the ledger does not hold as live"):
+                self.w.record(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "expired", "fault": False, **other}])
+        for changes, said in ((dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "expired", "fault": False}]), "whose time is not up"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "expired", "fault": True}]), "at the hive's fault"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "released", "fault": False, "because": "cannot_run",
+                                                "release": "b" * 40}]), "by a release it does not set aside"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "released", "fault": True, "because": "cannot_run",
+                                                "release": "b" * 40}]), "the plan is unreadable"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "expired", "fault": False, "because": "cannot_run",
+                                                "release": "b" * 40}]), "the plan is unreadable"),
+                              (dict(duty_ends=[{"role": "cut", "member_id": 301, "duty": carols, "outcome": "cut", "fault": False}]), "the plan is unreadable")):
+            with self.subTest(said), self.assertRaisesRegex(hive.HiveError, said):
+                self.w.record(**changes)
+        released = {"role": "cut", "member_id": 301, "duty": carols, "outcome": "released", "fault": False, "because": "cannot_run", "release": "b" * 40}
+        twice = {**made["ignored"], "1301": [*made["ignored"].get("1301", []), "b" * 40]}
+        with self.assertRaisesRegex(hive.HiveError, "ends one duty twice, or two by one release"):
+            self.w.record(duty_ends=[released, released], ignored=twice)
+        self.w.record(duty_ends=[released], ignored=twice)  # held, it is written: the role is free
+        self.assertEqual([(e["outcome"], e["release"]) for e in self.lines("duty-end")], [("released", "b" * 40)])
+        self.w.set_config({"trusted": TRUSTED, "cutter": {"open": 1}})  # not short of tasks: the next cut duty six hours after carol's
+        made = self.w.plan()
+        self.assertNotIn("duties", made)
+        with self.assertRaisesRegex(hive.HiveError, "a role whose duty is live, or sooner than the project's pace"):
+            self.w.record(duties=[dave], ignored=spent)
+        self.w.set_config({"trusted": TRUSTED})
+        made = self.w.plan()
+        self.assertEqual([duty["member"] for duty in made["duties"]], ["dave"], "short of tasks: dealt at once, and carol waits")
+        with self.assertRaisesRegex(hive.HiveError, "to an account that holds one, or that waits after one"):
+            self.w.record(duties=[{**dave, "member": "carol", "member_id": 301, "repo_id": 1301}], ignored=spent)
+
+
+class TestTheDutyCommand(Volunteer):
+    """« hive duty »: a trusted account asks for a duty (a commit of the tool's own, pushed to its fork's branch for
+    duties), sees the duty it holds and its wait in the feed, gives the duty back, or takes its ask back."""
+    config = {"trusted": {"accounts": [{"account": 101, "roles": ["cut"]}]}}
+
+    def duty(self, *more, **options):
+        return self.run_cli("duty", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "alice", *more, **options)
+
+    def message(self, commit):
+        raw = sh("git", "cat-file", "commit", commit, cwd=self.alice.bare).stdout
+        self.assertNotIn("\nparent ", raw)
+        self.assertIn(f"tree {hive.EMPTY_TREE}\n", raw)
+        return raw.partition("\n\n")[2]
+
+    def test_duty_asks_says_the_duty_held_and_gives_it_back_each_by_a_commit_of_its_own(self):
+        self.w.run()  # (a feed, which says that the run deals duties)
+        code, text = self.duty("--no-push")
+        self.assertEqual((code, self.fork_branch(hive.DUTY_BRANCH)), (0, None), self.err)
+        made = text.split()[1].rstrip(":")
+        self.assertEqual(self.spoken(text), [f"NOT-PUSHED {made}: the ask is made and nothing was pushed; run the same command again without --no-push "
+                                             "to make it anew and push it"])
+        code, text = self.duty()
+        asked = self.fork_branch(hive.DUTY_BRANCH)
+        self.assertEqual((code, self.spoken(text)), (0, [f"ASKED {asked}", "THEN: stop here. The hive deals one duty of this role at a time, at its "
+                                                         "pace, to the least loaded account that asked: run this again after its next run to see "
+                                                         "whether it is yours. The hive reads the ask only if the project's settings trust your "
+                                                         "account with this role. To take the ask back: hive.py duty --project Bee-ruche/toy "
+                                                         "--login alice --withdraw"]), self.err)
+        self.assertEqual(self.message(asked), f"Hive duty: cut ({NOW})\n\nHive-Action: duty\nHive-Member: alice\nHive-Role: cut\n",
+                         "the role and the login: nothing else")
+        self.w.run()
+        code, text = self.duty()
+        self.assertEqual((code, self.spoken(text)), (0, ["DUTY cut until 2026-11-12T14:00:00Z", f"DEAL {NOW}",
+                                                         "THEN: the duty is yours until then. This version of the hive reads nothing a duty "
+                                                         "produces: the duty ends when its time is up, or when you give it back (this same command "
+                                                         "with --release and one of its codes), and either costs you a wait before your next duty"]))
+        self.assertEqual(self.fork_branch(hive.DUTY_BRANCH), asked, "nothing pushed")
+        code, text = self.duty("--release", "cannot_run")
+        given = self.fork_branch(hive.DUTY_BRANCH)
+        self.assertEqual((code, self.spoken(text)), (0, [f"RELEASED {given}", "THEN: stop here. The hive ends the duty at its next run (about an "
+                                                         "hour), then deals you no duty for 2 hour(s)"]), self.err)
+        self.assertEqual(self.message(given), f"Hive duty release: cut ({NOW})\n\nHive-Action: release\nHive-Member: alice\nHive-Role: cut\n"
+                                              f"Hive-Deal: {NOW}\nHive-Because: cannot_run\n")
+        given_back = "WAIT: you gave this duty back and the hive has not read it yet: its next run ends the duty\n"
+        self.assertEqual((self.duty(), self.duty("--release", "out_of_reach")), ((0, given_back), (0, given_back)),
+                         "given back: the duty is no longer said to be yours, and nothing more is pushed")
+        self.assertEqual(self.fork_branch(hive.DUTY_BRANCH), given)
+        self.w.run()
+        self.assertEqual([(e["outcome"], e.get("because"), e.get("release")) for e in self.w.load()[2].events if e["type"] == "duty-end"],
+                         [("released", "cannot_run", given)])
+        self.assertEqual(self.duty(), (0, "WAIT until 2026-11-12T14:00:00Z: the hive deals you no duty before then (a duty of yours ran out, or you "
+                                          "gave one back)\n"))
+        self.one_line(self.duty("--release", "cannot_run"), "the hive's feed shows no duty of yours of the role cut whose time is not up: nothing "
+                                                            "was pushed (a duty that is over, or someone else's, has nothing to give back)")
+        self.assertEqual(self.run_cli("duty", "--project", "Bee-ruche/toy", "--login", "alice", "--withdraw"), (0, "WITHDRAWN\n"), self.err)
+        self.assertIsNone(self.fork_branch(hive.DUTY_BRANCH))
+
+    def test_duty_asks_for_nothing_where_the_project_or_its_run_deals_no_duty(self):
+        self.w.run()
+        feed, mark = self.w.feed_file(), hive.member_mark("alice")
+        for content, more, said in (({key: value for key, value in feed.items() if key != "duties"}, (), "the project's hive does not deal duties yet "
+                                     "(its run is at an older commit of the hive): nothing was pushed"),
+                                    ({**feed, "duty_wait": []}, (), "the project's hive does not deal duties yet"),
+                                    ({**feed, "repo": "Bee-ruche/other"}, (), "the folder given to --state holds another project's state"),
+                                    ({**feed, "protocol": 2}, (), "the hive's feed is missing, or is not one this tool reads"),
+                                    (feed, ("--release", "cannot_run"), "the hive's feed shows no duty of yours of the role cut whose time is not up"),
+                                    (feed, ("--release", "bored"), "argument --release: invalid choice"),
+                                    (feed, ("--role", "review"), "argument --role: invalid choice"),
+                                    (feed, ("--withdraw", "--no-push"), "--withdraw takes the ask back, and is a push: it goes with neither --no-push nor "
+                                     "--release"),
+                                    ({**feed, "duties": {mark: {"role": "cut", "at": NOW, "until": "2026-11-12T14:00:00Z"}}}, ("--role", "cut", "--release",
+                                     "cannot_run", "--withdraw"), "--withdraw takes the ask back")):
+            (self.w.state / "feed.json").write_text(json.dumps(content))
+            with self.subTest(said=said[:60], more=more):
+                self.one_line(self.duty(*more), said, begins=True)
+                self.assertIsNone(self.fork_branch(hive.DUTY_BRANCH), "nothing was pushed")
+        (self.w.state / "feed.json").write_text(json.dumps(feed))
+        self.one_line(self.run_cli("duty", "--project", "Bee-ruche/toy", "--login", "alice"),
+                      "--state: a clone of the project's branch hive-state (the hive's state for it); only --withdraw goes without it")
+        self.w.set_config({})
+        self.one_line(self.duty(), "the project toy trusts no account with the role cut in its settings: the hive deals no such duty. Nothing was pushed")
+        self.w.set_config(self.config)
+        (self.w.state / "feed.json").write_text(json.dumps({**feed, "duties": {mark: {"role": "cut", "at": "2026-11-12T09:00:00Z", "until": "2026-11-12T11:00:00Z"}}}))
+        self.assertEqual(self.duty(), (0, "WAIT: your duty's time is up: the hive ends it at its next run (about an hour). Ask for no duty before then\n"))
+        self.one_line(self.duty("--release", "out_of_reach"), "the hive's feed shows no duty of yours of the role cut whose time is not up", begins=True)
+        self.assertIsNone(self.fork_branch(hive.DUTY_BRANCH))
+        for odd in ({"role": "review", "at": NOW, "until": "2026-11-12T14:00:00Z"}, {"role": "cut", "at": "now", "until": "2026-11-12T14:00:00Z"}, "cut"):
+            (self.w.state / "feed.json").write_text(json.dumps({**feed, "duties": {mark: odd}}))
+            with self.subTest(odd=odd):
+                code, text = self.duty("--no-push")
+                self.assertTrue(code == 0 and text.startswith("NOT-PUSHED "), "a duty in a shape the hive never writes is none: the tool asks")
+        (self.w.state / "feed.json").write_text(json.dumps({**feed, "duty_wait": {mark: "2026-11-12T11:59:59Z"}}))
+        self.assertTrue(self.duty("--no-push")[1].startswith("NOT-PUSHED "), "a wait that is over keeps nobody waiting")
+        duty_release(self.alice, "2026-11-12T11:00:00Z")  # the fork holds a release of another duty: this one is still held
+        (self.w.state / "feed.json").write_text(json.dumps({**feed, "duties": {mark: {"role": "cut", "at": NOW, "until": "2026-11-12T14:00:00Z"}}}))
+        self.assertTrue(self.duty()[1].startswith("DUTY cut until 2026-11-12T14:00:00Z\n"), self.err)
 
 
 if __name__ == "__main__":

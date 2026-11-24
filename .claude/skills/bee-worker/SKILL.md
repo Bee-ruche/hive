@@ -101,6 +101,7 @@ THEN: <sentence>                next, start, ready, submit, release: what to do 
 ASKED <commit>                  ready: the ask is pushed to the fork
 WITHDRAWN                       ready --withdraw: the ask is taken back
 RELEASED <commit>               release: the deal is given back (pushed to the fork); the hive's next run ends it
+DUTY <role> until <instant>     duty: the hive dealt you a duty of that role, yours until then; DEAL gives its instant
 REFUSED (<reason>): <sentence> <details as JSON>
                                 submit: a structural rule is broken: nothing was committed or pushed (the details
                                 are numbers, and paths that the project's own commit holds)

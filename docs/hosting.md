@@ -310,7 +310,9 @@ What carries it:
    when `record` or `judge` failed.
 
 A project's guardians ([protocol.md](protocol.md), "Guardians") change nothing in this table, and bring no key: who
-is one is a line of the project's settings, which changes as any line of them does.
+is one is a line of the project's settings, which changes as any line of them does. So do its trusted accounts and
+their duties ([protocol.md](protocol.md), "Trusted accounts and their duties"): a trusted account pushes to its own
+fork alone, and `record` writes its duties to `hive-state` with the token it already has.
 
 ## What a run reads, and when
 

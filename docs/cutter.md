@@ -511,7 +511,8 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
 2. The tally (`hive.py tally`) and a section of the project's page for the tasks that need attention. **Done.**
 3. The fields `parent`, `needs` and `kind`, checked wherever a run reads the tasks; the gate (`hive.py cut-check`);
    and the cutter's settings in the project's file (`cutter`: `floors`, `changes`, `open`, `context_chars`),
-   described in `hive/settings.json` with their bounds, and read by no run. **Done.** The page's tree of cuts: **done**
+   described in `hive/settings.json` with their bounds, and read by no run but for `open`, which paces the cut duty of a
+   trusted account ([protocol.md](protocol.md), "Trusted accounts and their duties"). **Done.** The page's tree of cuts: **done**
    (21 November 2026).
 4. The deterministic cutter (`hive.py cut`), the outline (`hive.py outline`), the AI cutter's guide
    (`.claude/skills/bee-cutter/`): **done**. A trial of two or three cycles on miniz and cjson: under way (as of
