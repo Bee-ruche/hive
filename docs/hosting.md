@@ -8,7 +8,8 @@ a project holds its own settings, tasks, trusted accounts and state, and runs th
 until then, with the setup that registry's
 [hive-workflow.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/hive-workflow.md) describes (two GitHub Apps,
 two environments, a state repository of its own): what follows replaces it, and a project moves to it by holding the
-files below. What could not be tried is listed at the end.*
+files below. What could not be tried is listed at the end. The whole path, from the first question to the first run,
+is in [architect.md](architect.md), with a guide for the architect's own AI.*
 
 ## Checking a project
 

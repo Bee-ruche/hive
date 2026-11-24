@@ -31,7 +31,8 @@ project's own repository.
 - `examples/project/`: what a project holds for the hive (its settings, its tasks, the workflow that calls the run),
   as the first test project, miniz, holds them; `examples/reference-project/`: the second test project's settings
   and tasks, whose judge is of the second kind.
-- `.claude/skills/bee-worker/`: the volunteer worker's guide.
+- `.claude/skills/bee-worker/`: the volunteer worker's guide; `.claude/skills/bee-cutter/`: the project cutter's;
+  `.claude/skills/bee-architect/`: the guide an architect's own AI follows to put a project in the hive.
 - `docs/`: the protocol's text.
 
 ## Where things stand
@@ -42,3 +43,5 @@ calls `run.yml` at a commit of this repository's main. The hive is not open to t
 
 Read [docs/protocol.md](docs/protocol.md) first; [docs/join.md](docs/join.md) says what taking part asks of a
 volunteer, and [docs/hosting.md](docs/hosting.md) what hosting the hive asks of a project.
+[docs/architect.md](docs/architect.md) is the path for a project's lead, from « I have a project » to « my hive
+runs ».
