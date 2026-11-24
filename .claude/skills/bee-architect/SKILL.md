@@ -96,7 +96,8 @@ the charter's first section.
 **When nothing a machine can check exists**, say it plainly: « The hive cannot take this project as it is: its
 judge would have to be a person, and the hive has none. » Then say what can be done: take a part a machine can
 check (a library under the application, a format, one figure); have the architect write the tests first, which the
-hive's tasks then make pass ("3. An open goal"); or use another way than the hive. Write no settings for a project
+hive's tasks then make pass: tests the tip fails are the `reference` kind's route ("3. An open goal"); or use another
+way than the hive. Write no settings for a project
 whose second question has no answer.
 
 ## 2. Choosing a judge
@@ -119,7 +120,7 @@ What to weigh:
 - **Every kind mounts memory file systems** for its containers (`container.mount_point`): as root, or through
   `sudo` for `mount` and `umount` without a password, as a hosted runner has. The relay judge's gate builds on
   x86-64 alone, and the common judge's instruction analysis reads x86-64 alone (elsewhere it flags `architecture`).
-  GitHub's hosted runners are x86-64.
+  GitHub's default hosted runners are x86-64.
 - **A measured figure** (a time) carries noise, and a step below it proves nothing; **an exact figure** (bytes, a
   count) is certain at any step. `hive measure` tells which ("5. Measuring").
 - **A goal « correct » under `common`** cannot be shown to fail at the tip: the judge compares a candidate with the
@@ -164,10 +165,12 @@ the cutter turns a guess into a probe from there (`.claude/skills/bee-cutter/`, 
   a probe as a `work` task, and the cutter's guide waits for the architect to say so.
 - **The free task** is a probe at the floor whose idea is its worker's: « lower the figure by one change of your
   own choosing, in these files ». It finds directions nobody had on the map. Its context names what was measured
-  already, so that the try goes elsewhere; it names a whole folder, so it is dealt while no other task on those
-  files is held; one at a time. It is no mechanism of the hive: it is a practice the architect writes in the charter
-  and the cutter applies (a pilot's charter, squeezeBee's, holds one since 23 November 2026), and every rule of the
-  cutter's guide still holds over it, the probe's own rules included.
+  already, so that the try goes elsewhere. Its `files` may be a folder ending in `/`: the gate takes a folder that
+  holds files of the tip, none protected, where the cutter's guide speaks of files, so the charter tells the cutter
+  to name that folder. Such a task is dealt only while no task on a file under it is held, and none of those while
+  it is. It is no mechanism of the hive: it is a practice the architect writes in the charter and the cutter applies,
+  and every rule of the cutter's guide still holds over it, the probe's own rules included. One pilot's charter has
+  held one since 23 November 2026 (`hive/charter.md` of https://github.com/Bee-ruche/squeezeBee).
 
 ## 4. Writing the files
 
@@ -255,12 +258,13 @@ what it costs:
 - **The step** (`cutter.floors`, for each gain a goal may name). Too low, and tasks ask gains within the noise, or
   too small to be worth a judgement; too high, and the work runs out. For a measured figure, `measure` proposes
   twice the largest gain it saw between the tip and itself. For an exact figure the floor is a choice: the size of
-  step the architect finds worth a task, at this total. What a pilot project showed (23 November 2026): its first
-  floor, guessed at 0.25 %, was lowered to 0.1 % once probes had measured ideas between a loss of 0.64 % and a gain
-  of 0.14 %.
+  step the architect finds worth a task, at this total. One pilot's experience (squeezeBee, whose
+  `hive/charter.md` at https://github.com/Bee-ruche/squeezeBee says it): its floor was 0.25 % until 23 November
+  2026, then 0.1 %, once its first probes had measured ideas between a loss of 0.64 % and a gain of 0.14 %.
 - **The bounds** (for `relay`, each phase's processor time and the memory, in its manifest). Leave room for the
-  program to grow, not only for the tip as it is: a pilot project's time bound, set by hand, was reached in two days
-  (November 2026).
+  program to grow, not only for the tip as it is. The same pilot's charter: its first tip took under a second a
+  phase; its tip of 23 November 2026 took 54 seconds to encode, the whole margin its bound of 90 seconds then left,
+  and the bound was raised to 150.
   `--factor` (2 unless said) is that room, and a hosted runner may be slower than this machine. Say when to measure
   again: when the tip has moved far, or refusals show a phase near its bound.
 - **The time of a judgement** (`judge.timeout_seconds`): no less than what `measure` proposes; the run gives each
@@ -290,8 +294,10 @@ with the architect's account and publishes the tasks on `<published>` (`.claude/
 - **with the architect's account in the rule's bypass list**, it pushes its cut directly; the gate, the bound on each
   cycle and one commit to go back are what hold if it errs. That account can then change anything on `<published>`,
   the pin included, without a review: whoever holds the cutter's session holds that right;
-- **without it**, the charter says that a person reads each cut before it lands, and the cutter opens one pull
-  request per cut, which a maintainer merges.
+- **without it**, the charter says that a person reads each cut before it lands, and the cutter pushes its cut to a
+  branch `cutter/<the date>` and opens one pull request per cut, which a maintainer merges. The architect's account
+  must then be allowed to create those branches under the rule "Restrict creations" (in its bypass list, or the
+  branches `cutter/*` left out of that rule).
 
 Write the choice down for the architect, with what each way lets the cutter's account do.
 

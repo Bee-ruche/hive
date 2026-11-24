@@ -33,7 +33,8 @@ Three questions first:
    run reads it with no account.
 
 If nothing a machine can check exists, the hive cannot take the project as it is: its judge would have to be a
-person. Take a part a machine can check, or write the tests first.
+person. Take a part a machine can check, or write the tests first: tests the project fails today are the
+`reference` kind's route (section 3).
 
 ## 2. A judge
 
@@ -45,7 +46,7 @@ person. Take a part a machine can check, or write the tests first.
 
 A reference given as a published program needs its units built as WebAssembly, or a candidate could call the
 original. Every kind mounts memory file systems for its containers, as root or through `sudo` without a password
-(as GitHub's hosted runners allow), and the relay judge's gate and the common judge's instruction analysis are for
+(as GitHub's default hosted runners allow), and the relay judge's gate and the common judge's instruction analysis are for
 x86-64. When none of the three fits (a tolerance, a score, a proof assistant, the network, particular hardware), the
 project needs a new kind of judge: that is the hive's own code, built on its founder's decision. Your AI can write the
 proposal with you.
@@ -79,8 +80,10 @@ for you to decide (`DECIDE`).
 [hosting.md](hosting.md), "Measuring a project": `hive.py measure` judges your project's tip with its own judge, a few
 times, on your machine (Linux, Docker, and root or `sudo` without a password), and proposes the step, the judge's
 bounds and the time of a judgement from what it measured. You run it, and decide each number. Leave room for the
-program to grow: in a pilot project (November 2026), a time bound set by hand was reached in two days, and a first
-step, guessed, was lowered once probes had measured what ideas gave.
+program to grow. One pilot's experience, as its charter says it (`hive/charter.md` of
+[Bee-ruche/squeezeBee](https://github.com/Bee-ruche/squeezeBee)): its tip took 54 seconds to encode by 23 November
+2026, the whole margin of its 90-second bound, which was raised to 150; and its floor went from 0.25 % to 0.1 % once
+probes had measured what ideas gave.
 
 ## 6. The repository's settings
 
@@ -88,7 +91,8 @@ step, guessed, was lowered once probes had measured what ideas gave.
 that keep the run's token to the two branches the hive writes. Your AI prepares the list for your repository; you
 apply it on GitHub. One choice goes with the rule that asks a review on your published branch: your cutter runs with
 your account, so either your account is in that rule's bypass list and the cutter publishes directly (and that
-account can change anything there), or your charter asks the cutter to open a pull request for each cut.
+account can change anything there), or your charter asks the cutter to open a pull request for each cut, from a
+branch `cutter/<the date>` your account must then be allowed to create.
 
 ## 7. The first run
 
