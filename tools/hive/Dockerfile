@@ -14,5 +14,5 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources \
  && apt-get -o Acquire::Check-Valid-Until=false update -q \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends git python3 ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /work /hive/protocol /hive/state /hive/outbox /hive/handover /hive/home /probed
+ && mkdir -p /work /hive/protocol/tools/hive /hive/state /hive/outbox /hive/handover /hive/home /probed
 USER 65534:65534

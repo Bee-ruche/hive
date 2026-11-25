@@ -63,6 +63,29 @@ mkdir -p "$CLONE" "$HOME/.hive/state/Bee-ruche/toy"
 git -C "$CLONE" init -q
 git -C "$HOME/.hive/state/Bee-ruche/toy" init -q
 SLOT="$HOME/.hive/outbox/Bee-ruche/toy"
+echo alice > "$HOME/.hive/login"
+mkdir -p "$T/gitbin"
+cat > "$T/gitbin/git" <<GIT
+#!/usr/bin/env bash
+# The tests' git: what this machine's git is asked, logged, then git itself.
+printf '%s\n' "\$*" >> "$T/git.log"
+exec $(command -v git) "\$@"
+GIT
+chmod +x "$T/gitbin/git"
+# The system and the account as the case says (STUB_UNAME, STUB_ID), and cygpath as Git Bash's, for the Windows branch.
+cat > "$T/bin/uname" <<STUBS
+#!/usr/bin/env bash
+if [ -n "\${STUB_UNAME:-}" ] && [ "\$*" = "-s" ]; then echo "\$STUB_UNAME"; else exec $(command -v uname) "\$@"; fi
+STUBS
+cat > "$T/bin/id" <<STUBS
+#!/usr/bin/env bash
+if [ -n "\${STUB_ID:-}" ] && [ "\$*" = "-u" ]; then echo "\$STUB_ID"; else exec $(command -v id) "\$@"; fi
+STUBS
+cat > "$T/bin/cygpath" <<'STUBS'
+#!/usr/bin/env bash
+[ "$1" = -m ] && printf '%s' "$2"
+STUBS
+chmod +x "$T/bin/uname" "$T/bin/id" "$T/bin/cygpath"
 
 cat > "$T/bin/docker" <<'STUB'
 #!/usr/bin/env bash
@@ -86,6 +109,7 @@ case "${1:-}" in
       *) exit 0 ;;
     esac ;;
   rm) exit 0 ;;
+  exec) [ -z "${STUB_GATE_DOWN:-}" ]; exit $? ;;
   port) printf '%s' "${STUB_PORT:-}"; exit 0 ;;
   inspect) case "$*" in *Aliases*) echo "${STUB_ALIASES:-}" ;; esac; exit 0 ;;
   run) shift ;;
@@ -121,7 +145,11 @@ case "$role" in
     branch=$(sed -n 's/^branch //p' "$folder/handover.txt")
     txt=$(sha256sum "$folder/handover.txt" | cut -d' ' -f1)
     if grep -qx 'action withdraw' "$folder/handover.txt"; then echo "CHECKED delete $branch $txt"
-    else echo "CHECKED $(sed -n 's/^commit //p' "$folder/handover.txt") $txt $(sha256sum "$folder/handover.bundle" | cut -d' ' -f1)"; fi ;;
+    else echo "CHECKED $(sed -n 's/^commit //p' "$folder/handover.txt") $txt $(sha256sum "$folder/handover.bundle" | cut -d' ' -f1)"; fi
+    # (A process of the same user's that changes the copy once it is checked: the stub sees the copy at its host place.)
+    [ -z "${STUB_CHECK_SWAP:-}" ] || cp "$STUB_CHECK_SWAP" "$folder/handover.bundle"
+    [ -z "${STUB_CHECK_SWAP_TXT:-}" ] || echo "task x" >> "$folder/handover.txt"
+    exit 0 ;;
   sandbox)
     work=$(source_of /work)
     [ -z "${STUB_SANDBOX_MAKES:-}" ] || mkdir -p "$work/$STUB_SANDBOX_MAKES"
@@ -131,7 +159,7 @@ esac
 STUB
 chmod +x "$T/bin/docker"
 export STUB_DIR="$T/stub"
-BASE_PATH="$T/bin:/usr/local/bin:/usr/bin:/bin"
+BASE_PATH="$T/gitbin:$T/bin:/usr/local/bin:/usr/bin:/bin"
 
 # ---------------------------------------------------------------------------------------------------------------
 # Hand-overs, made as the tool makes them.
@@ -254,7 +282,9 @@ launch hive next --project Bee-ruche/toy --login "al ice"
 check "refused: a login of another form" eval 'refused 2 "--login:" && nothing_ran'
 launch hive next --project Bee-ruche/toy --login alice --fork ..
 check "refused: a fork named .." eval 'refused 2 "--fork:" && nothing_ran'
+echo bee-ruche > "$HOME/.hive/login"
 launch hive next --project Bee-ruche/toy --login bee-ruche
+echo alice > "$HOME/.hive/login"
 check "refused: the project's own repository as the fork" eval 'refused 2 "the fork named is the project" && nothing_ran'
 launch hive submit --project Bee-ruche/toy --login alice --task Toy-1 --deal x
 check "refused: a task of another form" eval 'refused 2 "--task:" && nothing_ran'
@@ -313,12 +343,12 @@ STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/
 check "next: its lines passed through, its exit code kept" eval '[ "$CODE" -eq 0 ] && [ "$OUT" = "WAIT until later" ]'
 check "next: the tool's command line" grep -qx "python3 -I /hive/protocol/tools/hive/hive.py next --project Bee-ruche/toy --login alice --fork toy --needs-accepted abc --state /hive/state --needs-home /hive/home --needs-shown $HOME/.hive/needs/bee-ruche/toy" "$STUB_DIR/args.tool"
 check "next: the clone, the protocol read-only, the state read-only, the needs' folder below the launcher's home" eval \
-  'grep -qx "type=bind,source=$CLONE,target=/work" "$STUB_DIR/mounts.tool" && grep -qx "type=bind,source=$PROTOCOL,target=/hive/protocol,readonly" "$STUB_DIR/mounts.tool" \
+  'grep -qx "type=bind,source=$CLONE,target=/work" "$STUB_DIR/mounts.tool" && grep -qx "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" "$STUB_DIR/mounts.tool" \
    && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state,readonly" "$STUB_DIR/mounts.tool" \
    && grep -qx "type=bind,source=$HOME/.hive/needs/bee-ruche/toy,target=/hive/home/.hive/needs/bee-ruche/toy" "$STUB_DIR/mounts.tool" \
    && [ "$(wc -l < "$STUB_DIR/mounts.tool")" -eq 4 ]'
 check "next: the tool runs as the clone's owner, on the network with no route out, with no credential" \
-  grep -q "^run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=tool --user 1000:1000 .* -e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e https_proxy=http://hive-egress:3128 -w /work " "$STUB_DIR/calls"
+  grep -q "^run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=tool --user 1000:1000 .* -e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e https_proxy=http://hive-egress-[0-9]*-[0-9]*:3128 -w /work " "$STUB_DIR/calls"
 STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d
 check "submit: a refusal's line and exit code passed through, the slot emptied" eval '[ "$CODE" -eq 1 ] && [ "$OUT" = "REFUSED (x): y" ] && untouched'
 check "submit: the slot mounted, --hand-over given, no state, no needs" eval \
@@ -537,7 +567,7 @@ check "sandbox: no network, never root, the clone, its guarded names read-only, 
 rm -rf "$CLONE"/.claude.created-in-sandbox.*
 ln -s /etc "$CLONE/.cursor"
 launch "${SANDBOX[@]}"
-check "refused: a guarded name that is a link" eval 'refused 2 "the clone'"'"'s .cursor is a link" && ! ran sandbox'
+check "refused: a guarded name that is a link" eval 'refused 2 "the clone'"'"'s .cursor" && ! ran sandbox'
 rm "$CLONE/.cursor"
 
 launch check --project Bee-ruche/toy --login alice
@@ -553,6 +583,138 @@ check "clone: made by the tool's container, from the fork's address" eval '[ "$C
 rm -rf "$CLONE" && mv "$T/clone-aside" "$CLONE"
 launch refresh --project Bee-ruche/toy
 check "refresh: the state, read-write for this command alone" eval '[ "$CODE" -eq 0 ] && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state" "$STUB_DIR/mounts.refresh"'
+
+# ---------------------------------------------------------------------------------------------------------------
+# The second review: the login, the environment, the PATH, the lock, links, the gate, the order of the checks.
+
+reset_world
+mv "$HOME/.hive/login" "$T/login-aside"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: no login recorded" eval 'refused 2 "no login is recorded on this machine" && nothing_ran'
+launch login Alice
+check "login: recorded once" eval '[ "$CODE" -eq 0 ] && [ "$OUT" = "LOCAL login Alice" ] && [ "$(cat "$HOME/.hive/login")" = Alice ]'
+launch login bob
+check "refused: login replacing the one recorded" eval 'refused 2 "this machine works for Alice already" && [ "$(cat "$HOME/.hive/login")" = Alice ]'
+launch login "al ice"
+check "refused: login of another form" eval 'refused 2 "local.sh login takes one word"'
+mv "$T/login-aside" "$HOME/.hive/login"
+launch hive next --project Bee-ruche/toy --login bob
+check "refused: a login that is not the one recorded" eval 'refused 2 "--login is not the login the user recorded" && nothing_ran'
+launch clone --project Bee-ruche/toy --login bob
+check "refused: clone for a login that is not the one recorded" eval 'refused 2 "--login is not the login the user recorded" && nothing_ran'
+
+DOCKER_HOST=tcp://example.com:2375 launch hive next --project Bee-ruche/toy --login alice
+check "refused: a DOCKER_HOST of another machine" eval 'refused 2 "DOCKER_HOST names a daemon" && nothing_ran'
+DOCKER_CONTEXT=remote launch hive next --project Bee-ruche/toy --login alice
+check "refused: a DOCKER_CONTEXT" eval 'refused 2 "DOCKER_CONTEXT is set" && nothing_ran'
+DOCKER_CONFIG=/tmp launch hive next --project Bee-ruche/toy --login alice
+check "refused: a DOCKER_CONFIG" eval 'refused 2 "DOCKER_CONFIG is set" && nothing_ran'
+reset_world
+DOCKER_HOST=unix:///run/user/1000/docker.sock GIT_DIR=/nowhere GIT_WORK_TREE=/nowhere STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" launch "${READY[@]}"
+check "a local DOCKER_HOST taken, git's variables set aside" eval '[ "$CODE" -eq 0 ] && [ "$(fork_ref hive/ready)" = "$ASK" ]'
+
+ln -s "$CLONE/src" "$T/into-clone"
+CASE_PATH="$T/into-clone:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
+check "refused: a folder of the clone in the PATH, reached through a link" eval 'refused 2 "the PATH holds a folder of the clone" && nothing_ran'
+mkdir -p "$HOME/.hive/work/alice/beside"
+CASE_PATH="$HOME/.hive/work/alice/beside/../toy/src:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
+check "refused: a folder of the clone in the PATH, reached through .." eval 'refused 2 "the PATH holds a folder of the clone" && nothing_ran'
+rmdir "$HOME/.hive/work/alice/beside"
+CASE_PATH="/usr/bin::$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
+check "refused: an empty entry in the PATH" eval 'refused 2 "the PATH holds a relative entry" && nothing_ran'
+
+mkdir -p "$HOME/.hive/locks/Bee-ruche/toy" && echo $$ > "$HOME/.hive/locks/Bee-ruche/toy/pid"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: another run going on the project" eval 'refused 2 "another run of local.sh is going on this project" && nothing_ran && [ -d "$HOME/.hive/locks/Bee-ruche/toy" ]'
+echo 999999 > "$HOME/.hive/locks/Bee-ruche/toy/pid"
+STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice
+check "a lock whose run has ended taken over, and given back" eval '[ "$CODE" -eq 0 ] && [ ! -e "$HOME/.hive/locks/Bee-ruche/toy" ]'
+
+STUB_GATE_DOWN=1 launch hive next --project Bee-ruche/toy --login alice
+check "refused: a gate that does not answer" eval 'refused 2 "the hive'"'"'s gate does not answer" && ! ran tool'
+
+mv "$CLONE" "$T/clone-real" && ln -s "$T/clone-real" "$CLONE"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: the clone's folder as a link" eval 'refused 2 "the clone'"'"'s folder" && nothing_ran'
+rm "$CLONE"
+mv "$HOME/.hive/work/alice" "$T/alice-real" && ln -s "$T/alice-real" "$HOME/.hive/work/alice" && mv "$T/clone-real" "$T/alice-real/toy"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: a link on the way to the clone" eval 'refused 2 "the clone'"'"'s folder" && nothing_ran'
+rm "$HOME/.hive/work/alice" && mv "$T/alice-real" "$HOME/.hive/work/alice"
+mv "$HOME/.hive/state/Bee-ruche/toy" "$T/state-real" && ln -s "$T/state-real" "$HOME/.hive/state/Bee-ruche/toy"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: the state's folder as a link" eval 'refused 2 "the state'"'"'s folder" && ! ran tool'
+rm "$HOME/.hive/state/Bee-ruche/toy" && mv "$T/state-real" "$HOME/.hive/state/Bee-ruche/toy"
+
+echo "STARTED x at y" > "$HOME/.hive/started/Bee-ruche/toy"
+mkdir -p "$T/secret" && echo key > "$T/secret/id"
+for part in refs HEAD; do
+  target="$T/secret"; [ "$part" = HEAD ] && target="$T/secret/id"  # (a folder, and a file: a link to a file resolves only through its name)
+  mv "$CLONE/.git/$part" "$T/git-$part" && ln -s "$target" "$CLONE/.git/$part"
+  launch "${SANDBOX[@]}"
+  WANT="the clone's .git/$part"
+  check "refused: the clone's .git/$part as a link" eval 'refused 2 "$WANT" && ! ran sandbox'
+  rm "$CLONE/.git/$part" && mv "$T/git-$part" "$CLONE/.git/$part"
+done
+mv "$CLONE/.git" "$T/git-real" && ln -s "$T/git-real" "$CLONE/.git"
+launch "${SANDBOX[@]}"
+check "refused: the clone's .git as a link" eval 'refused 2 "the clone'"'"'s .git" && ! ran sandbox'
+rm "$CLONE/.git" && mv "$T/git-real" "$CLONE/.git"
+mkdir -p "$CLONE/.vscode" && touch "$CLONE/.envrc"
+launch "${SANDBOX[@]}"
+check "sandbox: an editor's tasks and direnv's file read-only" eval '[ "$CODE" -eq 0 ] && grep -qx "type=bind,source=$CLONE/.vscode,target=/work/.vscode,readonly" "$STUB_DIR/mounts.sandbox" \
+  && grep -qx "type=bind,source=$CLONE/.envrc,target=/work/.envrc,readonly" "$STUB_DIR/mounts.sandbox"'
+rm -rf "$CLONE/.vscode" "$CLONE/.envrc" "$HOME/.hive/started/Bee-ruche/toy"
+
+# The checker before this machine's git, and the bytes it checked the ones unpacked.
+reset_world
+: > "$T/git.log"
+rm -f "$HOME/.hive/push/Bee-ruche/toy.git/hive-fork"  # (the fork asked again: a fetch before the checker would show)
+STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" STUB_CHECK_OUT="$(said)" STUB_CHECK_CODE=2 launch "${READY[@]}"
+check "hand-over-check's refusal: this machine's git neither fetches nor unpacks" eval '[ "$CODE" -eq 2 ] && untouched && ! grep -q "index-pack\|fetch" "$T/git.log"'
+reset_world
+: > "$T/git.log"
+STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" launch "${READY[@]}"
+check "git unpacks only after hand-over-check" eval '[ "$CODE" -eq 0 ] && grep -q index-pack "$T/git.log" && [ "$(grep -n "^run .*hive.role=check" "$STUB_DIR/calls" | wc -l)" -eq 1 ]'
+reset_world
+OTHER_DIR=$(hand_over ready hive/ready "$(ask_commit)")
+STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" STUB_CHECK_SWAP="$OTHER_DIR/handover.bundle" launch "${READY[@]}"
+check "refused: a bundle changed once checked" eval 'refused 2 "the hand-over'"'"'s bundle changed while it was checked" && untouched'
+reset_world
+STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" STUB_CHECK_SWAP_TXT=1 launch "${READY[@]}"
+check "refused: a hand-over's file changed once checked" eval 'refused 2 "the hand-over'"'"'s file changed while it was checked" && untouched'
+
+# The needs' folder and the one above it: the user's own, written by no group nor others (docs/hosting.md, item 7).
+reset_world
+NEEDS="$HOME/.hive/needs/bee-ruche/toy"
+mkdir -p "$NEEDS" && chmod 755 "$NEEDS" "$(dirname "$NEEDS")"
+chmod g+w "$NEEDS"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: a needs' folder a group may write to" eval 'refused 2 "$NEEDS is not your own, or a group or others may write to it" && ! ran tool'
+echo "STARTED x at y" > "$HOME/.hive/started/Bee-ruche/toy"
+launch "${SANDBOX[@]}"
+check "refused: the sandbox, with that folder" eval 'refused 2 "$NEEDS is not your own" && ! ran sandbox'
+STUB_UNAME=MINGW64_NT-10.0-26100 STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice
+check "on Windows, no owner nor mode read (Git Bash makes them up)" eval '[ "$CODE" -eq 0 ] && grep -q "target=/hive/home/.hive/needs/bee-ruche/toy\$" "$STUB_DIR/mounts.tool"'
+chmod g-w "$NEEDS" && chmod o+w "$(dirname "$NEEDS")"
+launch hive next --project Bee-ruche/toy --login alice
+check "refused: the folder above, others may write to" eval 'refused 2 "$(dirname "$NEEDS") is not your own" && ! ran tool'
+chmod o-w "$(dirname "$NEEDS")"
+STUB_ID=12345 launch hive next --project Bee-ruche/toy --login alice
+check "refused: a needs' folder of another account's" eval 'refused 2 "$NEEDS is not your own" && ! ran tool'
+STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice
+check "a needs' folder of the user's, 0755: shown" eval '[ "$CODE" -eq 0 ]'
+rm -f "$HOME/.hive/started/Bee-ruche/toy"
+
+# A fork that is not the project's.
+git init -q --bare "$T/github/alice/other"
+STRAY=$(git -C "$MAKER" commit-tree "$EMPTY_TREE" -m stray)
+git -C "$MAKER" push -q "$T/github/alice/other" "$STRAY:refs/heads/main"
+mkdir -p "$HOME/.hive/work/alice/other" && git -C "$HOME/.hive/work/alice/other" init -q
+reset_world
+STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" launch hive ready --project Bee-ruche/toy --login alice --fork other
+check "refused: a fork with nothing of the project's history" eval 'refused 2 "the fork alice/other holds nothing of the project'"'"'s history" \
+  && [ -z "$(git -C "$T/github/alice/other" for-each-ref refs/heads/hive)" ]'
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]
