@@ -121,10 +121,9 @@ within() {  # <seconds> <input file> <command…>: the command, its memory bound
   shift 2
   ( ulimit -v "$GIT_MEMORY_KB" 2>/dev/null; exec "$@" ) < "$input" &
   pid=$!
-  # The watchdog holds none of the command's outputs (a reader of them would wait for it), and takes its sleep away
-  # with it when it is stopped.
-  ( sleep "$seconds" & sleeping=$!; trap 'kill "$sleeping" 2>/dev/null; exit 0' TERM; wait "$sleeping"; kill "$pid" 2>/dev/null ) \
-    < /dev/null > /dev/null 2>&1 &
+  # The watchdog takes its sleep away with it when it is stopped: a reader of the command's output, which the watchdog
+  # holds too, would otherwise wait for the sleep to end.
+  ( sleep "$seconds" & sleeping=$!; trap 'kill "$sleeping" 2>/dev/null; exit 0' TERM; wait "$sleeping"; kill "$pid" 2>/dev/null ) &
   dog=$!
   wait "$pid"
   code=$?
