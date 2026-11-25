@@ -7,7 +7,8 @@
 # (hive.py --hand-over) once it is checked twice: by hive.py hand-over-check in a fresh container that never sees the
 # clone, then here with git. The hive cannot tell the commits apart from pushed ones.
 #
-#   local.sh login   <login>             (the user, once: the GitHub account this machine works for)
+#   local.sh login   <login>             (the user, once, typed in a terminal of their own, never by an assistant:
+#                                         the GitHub account this machine works for)
 #   local.sh check   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh refresh --project <owner/name>
@@ -30,8 +31,9 @@
 #   push/<owner>/<name>.git        this launcher's store: the only place this machine's git fetches into and pushes from
 #   locks/<owner>/<name>           one run at a time for a project
 #
-# The project's sandbox image is built with the network, as its own Dockerfile says (every pilot's installs packages):
-# that file is one of the project's protected ones, shown by « start » to be the tip's very bytes.
+# The project's sandbox image is built from the project's commit « start » printed, its bee/sandbox taken from the
+# project into this launcher's store, never from the clone. It is built with the network, as its own Dockerfile says
+# (every pilot's installs packages): that file is one of the project's protected ones.
 #
 # Written for bash 3.2 (macOS's own) and Git Bash: no associative array, no ${x,,}, no mapfile.
 set -u
@@ -82,8 +84,12 @@ export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 # The environment: no variable of git's (a GIT_DIR, a GIT_CONFIG_*, a GIT_SSH_COMMAND would change what git reads or
 # where it pushes), and only this machine's own Docker daemon.
+SET_ASIDE=""  # those of them that may matter to the push's sign-in, said if the push fails
 for variable in $(compgen -e); do
-  case "$variable" in GIT_*) unset "$variable" ;; esac
+  case "$variable" in
+    GIT_ASKPASS|GIT_SSH|GIT_SSH_COMMAND|GIT_TERMINAL_PROMPT|GIT_CREDENTIAL_*) SET_ASIDE="$SET_ASIDE $variable"; unset "$variable" ;;
+    GIT_*) unset "$variable" ;;
+  esac
 done
 [ -z "${DOCKER_CONTEXT:-}" ] || die "DOCKER_CONTEXT is set: the launcher talks to this machine's Docker as its own settings name it. Unset DOCKER_CONTEXT, then run the command again"
 [ -z "${DOCKER_CONFIG:-}" ] || die "DOCKER_CONFIG is set: the launcher reads Docker's settings from their usual place. Unset DOCKER_CONFIG, then run the command again"
@@ -115,7 +121,10 @@ within() {  # <seconds> <input file> <command…>: the command, its memory bound
   shift 2
   ( ulimit -v "$GIT_MEMORY_KB" 2>/dev/null; exec "$@" ) < "$input" &
   pid=$!
-  ( sleep "$seconds"; kill "$pid" 2>/dev/null ) &
+  # The watchdog holds none of the command's outputs (a reader of them would wait for it), and takes its sleep away
+  # with it when it is stopped.
+  ( sleep "$seconds" & sleeping=$!; trap 'kill "$sleeping" 2>/dev/null; exit 0' TERM; wait "$sleeping"; kill "$pid" 2>/dev/null ) \
+    < /dev/null > /dev/null 2>&1 &
   dog=$!
   wait "$pid"
   code=$?
@@ -135,10 +144,13 @@ COMMAND="${1:-}"
 if [ "$COMMAND" = login ]; then
   # The user's own step, once: an existing record is never replaced by this command (the user removes the file).
   [ $# -eq 1 ] && [[ $1 =~ $LOGIN_RE ]] || die "local.sh login takes one word: the user's GitHub login"
+  # (In a terminal of the user's own: an assistant runs its commands with no terminal. This guards against an
+  # assistant's error, not against one that would pretend to be a terminal.)
+  [ -t 0 ] && [ -t 1 ] || die "local.sh login is the user's own step, typed in a terminal of their own: an assistant never runs it"
   mkdir -p "$HIVE" || die "no room under $HIVE"
   if [ -f "$HIVE/login" ]; then
     [ "$(lower "$(cat "$HIVE/login")")" = "$(lower "$1")" ] \
-      || die "this machine works for $(cat "$HIVE/login") already: to work for another account, the user removes $HIVE/login by hand"
+      || die "this machine works for $(printf %q "$(cat "$HIVE/login")") already: to work for another account, the user removes $HIVE/login by hand"
   else
     printf '%s\n' "$1" > "$HIVE/login" || die "no room under $HIVE"
   fi
@@ -221,9 +233,9 @@ fi
 if [ "$COMMAND" != refresh ]; then
   [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
   # The login is the user's, recorded once by the user (local.sh login): a fork of any other account is never written.
-  [ -f "$HIVE/login" ] || die "no login is recorded on this machine: the user runs « local.sh login <their GitHub login> » once"
+  [ -f "$HIVE/login" ] || die "no login is recorded on this machine: stop, and tell the user. The user (never an assistant) types « local.sh login <their GitHub login> » once, in a terminal of their own"
   [ "$(lower "$(cat "$HIVE/login")")" = "$(lower "$LOGIN")" ] \
-    || die "--login is not the login the user recorded on this machine ($(cat "$HIVE/login")): this machine works for that account alone"
+    || die "--login is not the login the user recorded on this machine ($(printf %q "$(cat "$HIVE/login")")): this machine works for that account alone"
   FORK="${FORK:-$NAME}"
   if ! [[ $FORK =~ $NAME_RE ]] || [ "$FORK" = . ] || [ "$FORK" = .. ]; then die "--fork: the name of your fork's repository"; fi
   [ "$(lower "$LOGIN/$FORK")" != "$(lower "$PROJECT")" ] || die "the fork named is the project's own repository: the worker pushes to their own fork only"
@@ -276,12 +288,12 @@ placed() {  # <place> <the place it must resolve to> <what it is>: prints the pl
 }
 below_hive() { placed "$1" "$HIVE_REAL${1#"$HIVE"}" "$2"; }
 
-needs_own() {  # the needs' folder and the one above it: the user's own, written by no group nor others (the tool makes them 0755)
+needs_own() {  # the needs' folder and the two above it: the user's own, written by no group nor others (the tool makes them 0755)
   # (docs/hosting.md, item 7: another account of this machine that could write there could change what /needs shows.
   # On Windows, Git Bash's stat shows owners and modes it makes up: nothing to read there.)
   [ "$SYSTEM" = windows ] && return 0
   local place said
-  for place in "$NEEDS" "$(dirname "$NEEDS")"; do
+  for place in "$NEEDS" "$(dirname "$NEEDS")" "$(dirname "$(dirname "$NEEDS")")"; do
     if [ "$SYSTEM" = macos ]; then said=$(stat -f '%u %Lp' "$place" 2>/dev/null); else said=$(stat -c '%u %a' "$place" 2>/dev/null); fi
     [ "${said%% *}" = "$(id -u)" ] && [ $((0${said##* } & 022)) -eq 0 ] \
       || die "$place is not your own, or a group or others may write to it: the project's needs are not shown from it (the tool makes these folders 0755)"
@@ -311,17 +323,28 @@ done
 command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
 command -v "$DOCKER" >/dev/null 2>&1 || die "docker is not on this machine's PATH: install Docker (Docker Desktop on Windows and macOS) and start it"
 
-# One run at a time for a project: two would share its slot. A lock whose run has ended (its process gone) is taken over.
+# One run at a time for a project: two would share its slot. The lock is a folder that holds its run's process id
+# from the moment it exists: made aside with its pid, then renamed into place (a rename over no folder is one step;
+# over one, the folder moves inside it, which says the lock is taken). A lock whose run has ended is taken over.
 mkdir -p "$HIVE/locks/$OWNER" || die "no room under $HIVE"
-if ! mkdir "$LOCK" 2>/dev/null; then
+take_lock() {
+  local aside
+  aside=$(mktemp -d "$HIVE/locks/$OWNER/.$NAME.XXXXXX") || return 1
+  printf '%s\n' "$$" > "$aside/pid"
+  mv "$aside" "$LOCK" 2>/dev/null
+  if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ ! -e "$LOCK/$(basename "$aside")" ]; then return 0; fi
+  rm -rf "$LOCK/$(basename "$aside")" "$aside"
+  return 1
+}
+if ! take_lock; then
   holder=$(cat "$LOCK/pid" 2>/dev/null)
   if [[ $holder =~ ^[0-9]+$ ]] && kill -0 "$holder" 2>/dev/null; then
     die "another run of local.sh is going on this project (process $holder): wait for it to end, then run the command again"
   fi
-  rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null || die "the project's lock ($LOCK) cannot be taken: run the command again"
+  rm -rf "$LOCK"
+  take_lock || die "the project's lock ($LOCK) cannot be taken: run the command again"
 fi
 LOCKED=1
-printf '%s\n' "$$" > "$LOCK/pid"
 
 store_git() {  # this launcher's own store, reading none of this machine's settings
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" -C "$(host_path "$STORE")" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
@@ -336,6 +359,13 @@ store_git_within() {  # <input file> <git's words…>: the same, bounded (within
 
 ostype=$("$DOCKER" info --format '{{.OSType}}' 2>/dev/null) || die "Docker does not answer: start Docker (Docker Desktop on Windows and macOS), then run the command again"
 [ "$ostype" = linux ] || die "Docker runs $ostype containers here: switch it to Linux containers"
+# The daemon the current context of Docker's settings names: this machine's own, as DOCKER_HOST must be. (An older
+# docker with no contexts answers nothing: DOCKER_HOST alone names its daemon then.)
+endpoint=$("$DOCKER" context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)
+case "$endpoint" in
+  ""|unix://*|npipe://*) ;;
+  *) die "Docker's current context names a daemon that is not this machine's own (only unix:// and npipe:// are taken): switch to this machine's own context (docker context use default), then run the command again" ;;
+esac
 DOCKERFILE_ID=$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" -C "$(host_path "$PROTOCOL")" rev-parse --verify --quiet "HEAD:tools/hive/Dockerfile" 2>/dev/null) \
   || die "the protocol's commit holds no tools/hive/Dockerfile: take the protocol afresh"
 IMAGE="hive-tool:$DOCKERFILE_ID"
@@ -508,7 +538,16 @@ check_shape() {  # the commit's skeleton, as its command makes it
   printf '%s\n' "$message" | grep -i -qx "Hive-Member: $LOGIN" || refuse_hand_over "the hand-over's commit is for another member"
 }
 
+ensure_store() {  # this launcher's bare store, made once with no template (no hooks), and lying where it is named
+  if [ ! -d "$STORE" ]; then
+    mkdir -p "$(dirname "$STORE")" && GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" init --quiet --bare --template= "$(host_path "$STORE")" >/dev/null \
+      || die "this launcher's store could not be made"
+  fi
+  below_hive "$STORE" "this launcher's store" >/dev/null || exit 2
+}
+
 shares_history() {  # the fork and the project have a commit in common: asked once for each fork's address, before its first push
+  # (Both are read anonymously, as the hive reads them: a project and its forks are public repositories.)
   [ "$(cat "$STORE/hive-fork" 2>/dev/null)" = "$FORK_URL" ] && return 0
   store_git_within /dev/null fetch --quiet --no-tags "$PROJECT_URL" "+HEAD:refs/shared/project" >/dev/null 2>&1 \
     && store_git_within /dev/null fetch --quiet --no-tags "$FORK_URL" "+HEAD:refs/shared/fork" >/dev/null 2>&1 \
@@ -544,11 +583,7 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   fi
 
   # This launcher's store, and its one remote: the fork's address as the command line names it.
-  if [ ! -d "$STORE" ]; then
-    mkdir -p "$(dirname "$STORE")" && GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" init --quiet --bare --template= "$(host_path "$STORE")" >/dev/null \
-      || refuse_hand_over "this launcher's store could not be made"
-  fi
-  below_hive "$STORE" "this launcher's store" >/dev/null || exit 2
+  ensure_store
   store_git remote remove fork >/dev/null 2>&1
   store_git remote add fork "$FORK_URL" || refuse_hand_over "this launcher's store could not name the fork"
   # This machine's settings are read by the push: an insteadOf or a pushInsteadOf there would send it elsewhere. The
@@ -556,7 +591,7 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   [ "$("$GIT" -C "$(host_path "$STORE")" remote get-url --push fork)" = "$FORK_URL" ] \
     || refuse_hand_over "this machine's git settings send the fork's address elsewhere (an insteadOf or a pushInsteadOf rule): remove the rule"
   if [ "$WANT_ACTION" != withdraw ]; then
-    heads=$(store_git bundle list-heads "$(host_path "$bundle")" 2>/dev/null) || refuse_hand_over "the hand-over's bundle is not one git reads"
+    heads=$(store_git_within /dev/null bundle list-heads "$(host_path "$bundle")" 2>/dev/null) || refuse_hand_over "the hand-over's bundle is not one git reads"
     [ "$heads" = "$H_COMMIT refs/heads/$WANT_BRANCH" ] || refuse_hand_over "the hand-over's bundle does not hold the one branch, at the commit, its file names"
   fi
 
@@ -606,7 +641,7 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   # The push: this machine's git and its credentials, one refspec, to the fork named by the command line.
   if ! "$GIT" -C "$(host_path "$STORE")" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow="$FILE_PROTOCOL" \
       push --quiet --porcelain --no-verify --no-follow-tags --no-signed --recurse-submodules=no fork "$refspec" >/dev/null 2>&1; then
-    die "the push to your fork did not land: nothing was pushed. Run the command again; if it fails again, stop and tell the user to check that this machine's git may push to the fork"
+    die "the push to your fork did not land: nothing was pushed. Run the command again; if it fails again, stop and tell the user to check that this machine's git may push to the fork${SET_ASIDE:+ (this launcher set aside$SET_ASIDE, which git's sign-in may need: the push signs in with git's own credential helper alone)}"
   fi
   case "$WANT_ACTION" in
     ready|duty) say "ASKED $H_COMMIT" ;;
@@ -627,6 +662,10 @@ run_tool() {  # the tool in its container at /work, on the clone; extra mounts i
     "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py "$@"
 }
 
+# Each place a container is shown is resolved and held to the place it names (placed) in the lines right before the
+# docker run that mounts it, after anything long (the gate, a build, the probe). What remains: a swap made between
+# those lines and Docker's mount, by something running at that very moment.
+
 case "$COMMAND" in
   check)
     say "LOCAL system $SYSTEM"
@@ -634,9 +673,9 @@ case "$COMMAND" in
     say "LOCAL docker $("$DOCKER" version --format '{{.Server.Version}}' 2>/dev/null)"
     say "LOCAL tool-image $IMAGE"
     mkdir -p "$HIVE/work" || die "no room under $HIVE"
+    egress_up
     WORK=$(below_hive "$HIVE/work" "the clones' folder") || exit 2
     watch_clock_and_owner "$WORK"
-    egress_up
     said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=names --user 65534:65534 --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
       "${PROTOCOL_MOUNT[@]}" "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py names --project "$PROJECT" --system "$SYSTEM") || exit $?
     say "$said"
@@ -646,9 +685,9 @@ case "$COMMAND" in
   clone)
     if [ -e "$CLONE" ] && [ -n "$(ls -A "$CLONE" 2>/dev/null)" ]; then die "$CLONE already holds files: the clone is made once, into an empty folder"; fi
     mkdir -p "$CLONE" || die "no room under $HIVE"
-    CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
-    watch_clock_and_owner "$CLONE_SOURCE"
     egress_up
+    watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
+    CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
     "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=clone --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
       --mount "type=bind,source=$(host_path "$CLONE_SOURCE"),target=/work" "$IMAGE" \
       git -c core.hooksPath=/dev/null clone --quiet --no-recurse-submodules --template= "$FORK_URL" /work >/dev/null \
@@ -657,9 +696,9 @@ case "$COMMAND" in
     ;;
   refresh)
     mkdir -p "$STATE" || die "no room under $HIVE"
-    STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
-    watch_clock_and_owner "$STATE_SOURCE"
     egress_up
+    watch_clock_and_owner "$STATE"  # (with no network, reading an owner and a clock: the places are checked after it)
+    STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
     "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=refresh --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
       --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state" "$IMAGE" sh -c '
         if [ -d /hive/state/.git ]; then
@@ -671,21 +710,14 @@ case "$COMMAND" in
     ;;
   hive)
     [ -d "$CLONE/.git" ] || die "there is no clone at $CLONE: make it with local.sh clone"
-    CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
-    watch_clock_and_owner "$CLONE_SOURCE"
     case "$SUB" in
       next|release|duty)
         [ -d "$STATE/.git" ] || die "there is no state at $STATE: take it with local.sh refresh"
-        STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
-        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly")
         PASS+=(--state /hive/state) ;;
     esac
     case "$SUB" in
       next|ready|start)
         (umask 022 && mkdir -p "$NEEDS") || die "no room under $HIVE"
-        NEEDS_SOURCE=$(below_hive "$NEEDS" "the needs' folder") || exit 2
-        needs_own
-        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/hive/home/.hive/needs/$(lower "$OWNER")/$(lower "$NAME")")
         PASS+=(--needs-home /hive/home --needs-shown "$(host_path "$NEEDS")") ;;
     esac
     PUSHING=""
@@ -694,14 +726,30 @@ case "$COMMAND" in
         PUSHING=1
         wanted_hand_over
         mkdir -p "$SLOT" "$HIVE/push" || die "no room under $HIVE"
-        SLOT_SOURCE=$(below_hive "$SLOT" "the hand-over's slot") || exit 2
         if [ -n "$(ls -A "$SLOT")" ]; then empty_slot; die "the hand-over slot held what an earlier run left: it was emptied, and nothing of it was pushed. Run the command again"; fi
-        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$SLOT_SOURCE"),target=/hive/outbox")
         PASS+=(--hand-over /hive/outbox) ;;
     esac
     [ "$SUB" = start ] && rm -f "$STARTED"
     egress_up
     [ -n "$PUSHING" ] && EMPTY_ON_EXIT=1
+    watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
+    # Right before the tool runs: each place resolved, each mount built.
+    CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
+    case "$SUB" in
+      next|release|duty)
+        STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
+        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly") ;;
+    esac
+    case "$SUB" in
+      next|ready|start)
+        NEEDS_SOURCE=$(below_hive "$NEEDS" "the needs' folder") || exit 2
+        needs_own
+        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/hive/home/.hive/needs/$(lower "$OWNER")/$(lower "$NAME")") ;;
+    esac
+    if [ -n "$PUSHING" ]; then
+      SLOT_SOURCE=$(below_hive "$SLOT" "the hand-over's slot") || exit 2
+      TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$SLOT_SOURCE"),target=/hive/outbox")
+    fi
     out=$(mktemp "$HIVE/.out.XXXXXX") || die "no room under $HIVE"
     run_tool "$SUB" --project "$PROJECT" --login "$LOGIN" --fork "$FORK" ${PASS[@]+"${PASS[@]}"} > "$out"
     code=$?
@@ -728,18 +776,28 @@ case "$COMMAND" in
   sandbox)
     [ -d "$CLONE/.git" ] || die "there is no clone at $CLONE: make it with local.sh clone"
     [ -f "$STARTED" ] || die "no task is started in this clone (local.sh hive start prints STARTED): nothing is run from the clone before"
+    # The image is built from the bytes « start » proved, the project's commit it printed, taken from the project
+    # into this launcher's own store, never from the clone, where the assistant writes.
+    TIP=$(sed -n 's/^STARTED [^ ]* at \([0-9a-f]\{40\}\)$/\1/p' "$STARTED")
+    [[ $TIP =~ $SHA_RE ]] || die "the record of the last start is not one this launcher writes: run local.sh hive start again"
+    ensure_store
+    store_git_within /dev/null fetch --quiet --no-tags "$PROJECT_URL" "$TIP" >/dev/null 2>&1 && store_git cat-file -e "$TIP^{commit}" 2>/dev/null \
+      || die "the project's commit the last start was on could not be fetched from $PROJECT_URL: run the command again"
+    CONTEXT_DIR=$(mktemp -d "$HIVE/push/.context.XXXXXX") || die "no room under $HIVE"
+    COPY="$CONTEXT_DIR"
+    store_git_within /dev/null archive --format=tar "$TIP" bee/sandbox 2>/dev/null | tar -x -C "$CONTEXT_DIR" 2>/dev/null
+    [ -f "$CONTEXT_DIR/bee/sandbox/Dockerfile" ] || die "the project's commit holds no bee/sandbox/Dockerfile: it has no sandbox's image for this machine"
+    SANDBOX_IMAGE="hive-sandbox:$(lower "$OWNER")-$(lower "$NAME")"
+    "$DOCKER" build --quiet -t "$SANDBOX_IMAGE" "$(host_path "$CONTEXT_DIR/bee/sandbox")" >/dev/null 2>&1 \
+      || die "Docker could not build the project's sandbox's image (bee/sandbox/Dockerfile): tell the user"
+    watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
+    user="$OWNER_IDS"
+    [ "${user%%:*}" = 0 ] && user=65534:65534  # (Docker Desktop shows the machine's files as root's: the sandbox is never root)
+    # Right before the run: every place shown to the sandbox is the very place it names below the clone, resolved: a
+    # link (a .git, a .git/refs, a guarded name made into one) would have Docker show what it leads to on this machine.
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
-    # Every place shown to the sandbox is the very place it names below the clone, resolved: a link (a .git, a
-    # .git/refs, a guarded name made into one) would have Docker show what it leads to on this machine. What remains:
-    # a swap made between this check and Docker's mount, by something running at that very moment.
     in_clone() { placed "$CLONE_SOURCE/$1" "$CLONE_SOURCE/$1" "the clone's $1"; }
-    for part in bee bee/sandbox; do
-      [ -d "$CLONE/$part" ] && [ ! -L "$CLONE/$part" ] || die "the clone holds no folder $part: the project has no sandbox's image to run"
-    done
-    [ -f "$CLONE/bee/sandbox/Dockerfile" ] && [ ! -L "$CLONE/bee/sandbox/Dockerfile" ] || die "the project's sandbox has no Dockerfile: it has no form for this machine"
-    CONTEXT=$(in_clone bee/sandbox) || exit 2
-    in_clone bee/sandbox/Dockerfile >/dev/null || exit 2
-    GIT_SOURCE=$(in_clone .git) || exit 2
+    in_clone .git >/dev/null || exit 2
     MOUNTS=(--mount "type=bind,source=$(host_path "$CLONE_SOURCE"),target=/work")
     absent=""
     for name in $GUARDED; do
@@ -762,12 +820,6 @@ case "$COMMAND" in
       needs_own
       MOUNTS+=(--mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/needs,readonly")
     fi
-    SANDBOX_IMAGE="hive-sandbox:$(lower "$OWNER")-$(lower "$NAME")"
-    "$DOCKER" build --quiet -t "$SANDBOX_IMAGE" "$(host_path "$CONTEXT")" >/dev/null 2>&1 \
-      || die "Docker could not build the project's sandbox's image (bee/sandbox/Dockerfile): tell the user"
-    watch_clock_and_owner "$CLONE_SOURCE"
-    user="$OWNER_IDS"
-    [ "${user%%:*}" = 0 ] && user=65534:65534  # (Docker Desktop shows the machine's files as root's: the sandbox is never root)
     "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=sandbox --user "$user" -e HOME=/tmp/home -e LANG=C.UTF-8 \
       --tmpfs /tmp:rw,exec,mode=1777 -w /work "${MOUNTS[@]}" "$SANDBOX_IMAGE" "${SANDBOXED[@]}"
     code=$?
