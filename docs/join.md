@@ -148,8 +148,9 @@ the packages that provide them, the machine's processors, memory, disk and archi
 worker's tool fetches, each held to its fingerprint, under a licence you accept. Run
 `python3 -I ~/.hive/protocol/tools/hive/hive.py needs --project <the project's repository>` once (on Linux, with the
 hive's protocol taken as the prompt below says: no clone and no login needed), or read the lines your worker's first
-run prints (`NEEDS-…`, `CANNOT-ASK`), and prepare the machine yourself. Nothing of the hive installs anything: the
-worker only says what is missing, and asks for no task while it is (at no cost).
+run prints (`NEEDS-…`, `CANNOT-ASK`), and prepare the machine yourself. The hive's tool installs nothing: it says
+what is missing, and asks for no task while it is (at no cost). Your worker installs packages only as one of the
+sentences of the prompt below allows ("The prompt", the sentences for a project that names needs).
 
 ## The prompt
 
@@ -195,11 +196,21 @@ Three more sentences, each optional, for a project that names needs (`hive needs
 
 - "I accept the project's needs <digest>.", with the digest `hive needs` printed (`NEEDS-DIGEST`): the worker's tool
   may then fetch the project's files and documents, from the hosts and under the licences it showed you, into a
-  folder of its own outside the clone (`~/.hive/needs`). If the project changes a file, a host or a licence, the
+  folder of its own outside the clone (`~/.hive/needs`), and your worker may install the packages `hive needs`
+  listed, when a `NEEDS-MISSING` line names them. If the project changes a package, a file, a host or a licence, the
   digest changes: your worker stops (`NEEDS-UNACCEPTED`) until you have read the change and given the new one.
 - "This machine may install, from the system's archive, the packages <list> before anything of the project runs.":
-  only those packages, by name, and only from the archive the machine already has. Without it, your worker installs
-  nothing.
+  the packages you name yourself, without accepting the project's files.
+
+  An install needs one of two sentences of the owner's prompt: "I accept the project's needs <digest>.", and then only
+  when no `NEEDS-UNACCEPTED` line was printed, for exactly the packages the `NEEDS-MISSING` lines name; or "This
+  machine may install, from the system's archive, the packages <list> before anything of the project runs.", for the
+  packages that are both in that list and named by a `NEEDS-MISSING` line. Without either, nothing is installed. Each
+  package goes by the name the line gives: first `apt-cache policy <package>` for each, which must show a candidate
+  (`Candidate:` followed by a version, not `(none)`), or nothing is installed and the owner is told; then
+  `sudo apt-get install -y --no-install-recommends --no-remove -- <packages>`: with `--no-remove`, apt stops rather
+  than remove any package. Only from the archive the machine already has, before anything of the project runs: no new
+  source, no PPA, no address, no pip, npm, cargo or `curl … | sh`.
 - "Ask even if this machine lacks what the project needs.": your worker asks all the same. It usually ends with the
   task given back because the machine cannot run it (`cannot_run`), which costs the first wait: leave it out unless
   you know why.

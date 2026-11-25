@@ -275,6 +275,10 @@ All of it in the project's own repository. Copies of the first test project's ar
    folder means no `/needs`, and that a folder reached through a link is refused. No judge reads the needs: the
    judge's data is its manifest's own.
 
+   A project whose commit holds `bee/sandbox/Dockerfile` passes every program check on a machine whose docker
+   answers (`NEEDS-DOCKER`), and the tool does not read the Dockerfile: its image must itself bring the programs the
+   needs name.
+
 **Who can change the settings is whoever can write to the published branch.** A change acts at the next run that
 plans after it (see "What a run reads, and when").
 

@@ -100,9 +100,10 @@
    "what": "Paths no candidate may change, beside those the hive protects in every project ('always': the hive's own folder at the root, and, at any depth and in any letter case, the names and folders that steer git, CI and editors, and that coding agents read as instructions). The project's own sandbox, judge and tests are not among them: a project's file lists them here."},
 
   {"key": "needs", "section": "machine", "type": "needs", "default": [], "most_entries": 10,
-   "kinds": {"program": {"fields": ["name", "package"], "optional": ["version"]},
-             "file": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 536870912},
-             "document": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 33554432},
+   "kinds": {"program": {"fields": ["name", "package"], "optional": ["version"],
+                         "names_refused": ["bash", "dash", "dd", "mount", "reboot", "rm", "sh", "shutdown", "ssh", "su", "sudo", "systemctl", "umount", "zsh"]},
+             "file": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 536870912, "why_most": 80},
+             "document": {"fields": ["name", "why", "url", "sha256", "bytes", "licence"], "optional": [], "bytes_most": 33554432, "why_most": 80},
              "resources": {"fields": [], "optional": ["processors", "memory_mb", "disk_mb", "architectures"], "processors": [1, 256], "memory_mb": [64, 1048576],
                            "disk_mb": [1, 4194304], "architectures": ["x86_64", "aarch64"], "most_entries": 1}},
    "what": "What a worker's machine needs for the project, which a worker's tool checks before it asks for a task and before it starts one (none: a worker's machine is not checked before an ask). A program of the system (/usr/bin/<name>, the package that provides it, and a dotted prefix of its version); a file or a document the tool fetches over https, held to its SHA-256 and size, into a folder of its own outside the clone, shown to the sandbox read-only at /needs and never run on the machine, each with the licence its owner accepts before the yes; the machine's processors, memory, free disk and architecture. No entry is ever a command, an address other than https, a file without its fingerprint, a key, an account or a service: a file that names one does not load. Not a task's needs (the tasks done first), which the tasks file gives."}

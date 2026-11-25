@@ -986,18 +986,25 @@ task's `needs`, the tasks done first, which the tasks file gives): a list of ten
 `kind` and the fields of that kind, no more and no fewer ([`hive/settings.json`](../hive/settings.json) gives each
 kind's fields and bounds):
 
-- `program`: `name`, a bare file name meaning `/usr/bin/<name>` and nothing else; `package`, the system's package
-  that provides it, only ever shown; `version` (optional), a dotted prefix of the version the program gives (`1.75`
+- `program`: `name`, a bare file name meaning `/usr/bin/<name>` and nothing else, never a shell or a program
+  that changes who runs, mounts, stops the machine or erases (`sh`, `bash`, `dash`, `zsh`, `su`, `sudo`, `ssh`,
+  `mount`, `umount`, `reboot`, `shutdown`, `systemctl`, `dd`, `rm`); `package`, the system's package that provides
+  it, only ever shown: lower-case letters and digits, with `+`, `.` and `-` each alone between two, so that it reads
+  as no pattern of apt's; `version` (optional), a dotted prefix of the version the program gives (`1.75`
   takes 1.75.0 and 1.75.2, never 1.7.5).
 - `file` and `document`: `name` (one folder for both: each name once), `why`, `url`, `sha256`, `bytes` (512 MiB at
-  most for a file, 32 MiB for a document, 2 GiB for all of them together) and `licence`.
+  most for a file, 32 MiB for a document, 2 GiB for all of them together) and `licence`. `why` is one line of 80
+  characters at most; `licence` a name as SPDX gives one (`MIT`, `CC-BY-4.0`, `GPL-2.0+`: letters, digits, `.`,
+  `+`, `-`, brackets and spaces, 64 at most).
 - `resources`, once at most: `processors`, `memory_mb`, `disk_mb` (free on the clone's disk) and `architectures`
   (`x86_64`, `aarch64`), one at least.
 
 **What is never allowed**, and a file that names it does not load, at any step of the hive or any command of a
 worker: a command written by the project (no field of any kind is run: a program is only asked `--version`, by the
 tool); an address other than `https://<a public name>/<path>` (no user, port, query or fragment, no machine's
-number, no `localhost`, no `..`, and no part of 32 characters or more that looks like a key or a token, but a
+number nor one written into a name, no `localhost`, no name whose last label is one of a machine's own network
+or kept for tests (`local`, `internal`, `localdomain`, `lan`, `home`, `corp`, `test`, `invalid`, `example`,
+`arpa`), no `..`, and no part of 32 characters or more that looks like a key or a token, but a
 commit's id or a fingerprint); a file or a document without its fingerprint and its size; a key, a token, an account
 to create, or a service to reach while working (there is no field for any of them, and a host that asks for an account
 is refused at the fetch).
@@ -1007,29 +1014,52 @@ is refused at the fetch).
 
 - a program must be a file of the system's (`/usr/bin/<name>` leads, once every link is followed, to a plain file
   under `/usr/`, owned by root, that nobody else may write), and answer `--version` with exit 0 and, if the entry
-  names one, a version that begins with it. It is run in an empty folder of its own, with `PATH`, `LANG` and `LC_ALL`
-  alone, nothing on its input, for ten seconds at most, 64 KiB of its output read. A program the machine lacks is
-  met all the same when the project's commit holds `bee/sandbox/Dockerfile` and the system's docker answers
-  (`NEEDS-DOCKER`: the task is done in the sandbox's Docker form);
+  names one, a version that begins with it. It is run by the worker's tool, as the worker's own user and wherever
+  the tool runs (inside the bee's sandbox when the worker runs there): the tool starts no sandbox of its own for it,
+  and bounds it as it bounds git, in an empty folder of its own, with `PATH`, `LANG` and `LC_ALL` alone, nothing on
+  its input, in a session of its own ended whole, for ten seconds at most, 64 KiB of its output read. A program the
+  machine lacks is met all the same when the project's commit holds `bee/sandbox/Dockerfile` and the system's docker
+  answers (`NEEDS-DOCKER`: the task is done in the sandbox's Docker form). The Dockerfile itself is not read: a
+  project that brings one passes every program check that way, whatever its image holds;
 - resources are read from the system alone (processors and memory, with the control group's bounds; free room on the
   clone's disk; `uname`'s architecture);
-- files and documents are fetched only once the user accepted them, by their digest: the first 16 hexadecimal digits
-  of the SHA-256 of `[{name, url, sha256, bytes, licence}]` of each, in the file's order, as canonical JSON
-  (`--needs-accepted <digest>`). Another file, host or licence is another digest, and the workers of the project stop
-  (`NEEDS-UNACCEPTED`) until their users have read the change. They are fetched over https, by the tool itself
+- **the digest** covers every need: the SHA-256, all 64 hexadecimal digits, of every entry as the loader holds it (a
+  program's name, package and version; the resources; a file's or a document's kind, name, why, url, sha256, bytes
+  and licence), in the file's order, as canonical JSON. The user accepts it with `--needs-accepted <digest>`; that
+  yes lets the tool fetch the files and documents, and the guide install the packages the `NEEDS-MISSING` lines
+  name (below). Any change of what the user was shown (a package, a version, a kind, a reason, a file, a host, a
+  licence) is another digest: a worker given the old one stops (`NEEDS-UNACCEPTED`) until its user has read the
+  change, and so does a worker given none when the project names files or documents;
+- files and documents are fetched only once the needs are accepted. They are fetched over https, by the tool itself
   (`User-Agent: bee-hive-needs/1`, nothing of the user's; a redirection followed only to https on a public host,
-  five at most), into `~/.hive/needs/<owner>/<name>/` in the home the system's list of users gives (never `$HOME`):
+  five at most; before each connection, its own or a redirection's, the name is resolved and every address it gives
+  must be a global one, in IPv6 only in `2000::/3`, as `tools/hive/egress.py` holds them, or the host is refused;
+  the tool connects to that address, with the name given to TLS for the certificate's check, and through no proxy;
+  all the fetches of one check take 30 minutes at most together, each 15 minutes at most), into
+  `~/.hive/needs/<owner>/<name>/` in the home the system's list of users gives (never `$HOME`):
   outside the clone, a folder of the tool's own that holds the declared files alone, each mode 0444, held to its size
-  and SHA-256 again at every check. Nothing there is extracted, opened or run on the machine.
+  and SHA-256 again at every check. A file that does not match is said to be of another size or fingerprint, and
+  nothing more of what was received is shown. Nothing there is extracted, opened or run on the machine.
 
 What is missing is said in `NEEDS-MISSING` lines (`NEEDS-MET` when everything holds): `next` then says `CANNOT-ASK`
 in place of `ASK`, `ready` makes no ask, and `start` changes nothing, each at no cost. `--despite-needs`, from the
 user's own words alone, prints the lines and goes on. A deal whose needs show up unmet after the ask (an entry added
-since, a file that vanished, a fetch that fails) is given back as `cannot_run`. Nothing installs anything: the guide
-installs, from the system's archive, only the packages those lines name, and only where the user's own words allow
-it. `hive.py needs --project <owner/name>` prints the needs as the project's own address gives them, with their
-digest, for the user to read before the yes: it reads the settings at the default branch's commit from
-`raw.githubusercontent.com`, needs no clone and no login, and checks and fetches nothing.
+since, a file that vanished, a fetch that fails) is given back as `cannot_run`. The tool installs nothing; the guide
+installs packages as follows.
+
+An install needs one of two sentences of the owner's prompt: "I accept the project's needs <digest>.", and then only
+when no `NEEDS-UNACCEPTED` line was printed, for exactly the packages the `NEEDS-MISSING` lines name; or "This
+machine may install, from the system's archive, the packages <list> before anything of the project runs.", for the
+packages that are both in that list and named by a `NEEDS-MISSING` line. Without either, nothing is installed. Each
+package goes by the name the line gives: first `apt-cache policy <package>` for each, which must show a candidate
+(`Candidate:` followed by a version, not `(none)`), or nothing is installed and the owner is told; then
+`sudo apt-get install -y --no-install-recommends --no-remove -- <packages>`: with `--no-remove`, apt stops rather
+than remove any package. Only from the archive the machine already has, before anything of the project runs: no new
+source, no PPA, no address, no pip, npm, cargo or `curl … | sh`.
+
+`hive.py needs --project <owner/name>` prints the needs as the project's own address gives them, with their digest
+and the packages it covers, for the user to read before the yes: it reads the settings at the default branch's
+commit from `raw.githubusercontent.com`, needs no clone and no login, and checks and fetches nothing.
 
 **What the sandbox sees.** The project's own launcher (`bee/sandbox/sans-docker.sh`) shows the needs' folder to
 project code at `/needs`, read-only, and nothing else of the home ([hosting.md](hosting.md), "What a project holds",
