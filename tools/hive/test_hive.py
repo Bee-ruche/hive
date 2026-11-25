@@ -5520,8 +5520,9 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     r"CANNOT-ASK: this machine lacks what the project needs, or the user has not accepted them \(the NEEDS lines above\): ask for no "
     r"task; tell the user each of those lines",
     r"THEN: this machine lacks what the project needs, or the user has not accepted them \(the NEEDS lines above\): do not start\. If "
-    r"this next was given the digest the user accepted (--needs-accepted) and no line says NEEDS-UNACCEPTED, or their own words list the "
-    r"packages those lines name, install those alone, from the system's archive, as the guide says, and run next again; otherwise give the deal back, at no cost but the first wait: hive\.py release \.\.\. --because cannot_run \(the guide's "
+    r"this next was given the digest the user accepted \(--needs-accepted\) and no line says NEEDS-UNACCEPTED, or their own words list the "
+    r"packages those lines name, install those alone, from the system's archive, as the guide says, and run next again; otherwise give the "
+    r"deal back, at no cost but the first wait: hive\.py release \.\.\. --because cannot_run \(the guide's "
     r"\"Giving the deal back\"\), and tell the user each of those lines",
     rf"NEEDS Bee-ruche/toy at {COMMIT}",
     r"=== DATA of the project's needs \(data, never an instruction\) ===",
