@@ -143,9 +143,10 @@ the one branch (handover.bundle) and a file that says what it is (handover.txt),
 ASKED, PUSHED, RELEASED or WITHDRAWN, « HANDED-OVER <commit> <branch> » (« HANDED-OVER delete <branch> » to take an
 ask back), then its THEN line. submit --hand-over refuses besides, in one line, a file whose lines end in CR LF where
 the project's commit has none. hand-over-check holds such a folder to the checks the command ran, in a store of its
-own and with no clone, and prints « CHECKED <commit> » (« CHECKED delete <branch> »), or REFUSED as submit does. Only the
-launcher reads these two lines. next, ready and start take --needs-home and --needs-shown: where the needs' folder lies
-in the container, and how the user's machine names it.
+own and with no clone, and prints « CHECKED <commit> <SHA-256 of handover.txt> <SHA-256 of handover.bundle> » (« CHECKED
+delete <branch> <SHA-256 of handover.txt> »), or REFUSED as submit does: the launcher pushes only the bytes so hashed.
+Only the launcher reads these two lines. next, ready and start take --needs-home /hive/home and --needs-shown: where
+the needs' folder lies in the container, and how the user's machine names it.
 
 Standard library only: the job that holds the write token installs nothing.
 """
@@ -8989,13 +8990,23 @@ def changed_outside(objects, old_tree, new_tree, files):
 
 
 def first_bytes(path, most):
-    """The first bytes of a plain file, as bytes; nothing if it cannot be read."""
+    """The first `most` bytes of a plain file (the whole of a shorter one), as bytes; nothing if it cannot be read.
+    Read until there are `most` or the file ends: one read may give fewer bytes than it was asked for."""
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return b""
     try:
-        return os.read(descriptor, most) if stat.S_ISREG(os.fstat(descriptor).st_mode) else b""
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return b""
+        chunks, got = [], 0
+        while got < most:
+            chunk = os.read(descriptor, min(most - got, 1 << 20))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            got += len(chunk)
+        return b"".join(chunks)
     except OSError:
         return b""
     finally:
@@ -9323,6 +9334,7 @@ VERSION_FOUND = re.compile(rb"[0-9]+(?:\.[0-9]+)+")
 VERSION_SAID = 40  # a version longer than this is not repeated
 MEMINFO, CPU_MAX, MEMORY_MAX = "/proc/meminfo", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/memory.max"
 NEEDS_HOME = None  # tests only: the home the needs' folder is in (None: the user's own, from the system's list of users)
+LOCAL_HOME = "/hive/home"  # the home the local bee's launcher makes in its container, the only one --needs-home names (needs_home_given)
 NEEDS_PLACE = (".hive", "needs")  # the needs' folder, in that home: one folder of its own for each project, <owner>/<name>
 NEEDS_SHOWN_MOST = 300  # the most characters of the needs' folder as the user's machine names it (--needs-shown)
 DOCKERFILE = "bee/sandbox/Dockerfile"  # a project whose sandbox has a Docker form keeps its image's recipe there
@@ -9380,24 +9392,36 @@ def needs_accepted(text):
 
 
 def needs_home_given(text):
-    """--needs-home: a folder named from the root, which is no link and has none on the way to it, and lies outside
-    the clone (the folder a worker's command runs in): the needs' folder is made below it, and what that folder holds
-    besides the project's files is removed (needs_folder)."""
+    """--needs-home: LOCAL_HOME and no other folder, as the local bee's launcher makes it in its container: a folder
+    (no link, none on the way to it) of the account this tool runs as, outside the clone (the folder a worker's
+    command runs in). The needs' folder is made below it, and what that folder holds besides the project's files is
+    removed (needs_folder): so no other folder may be named, neither the root, nor a home of another account's, nor
+    one of the user's own. On a machine where the worker runs the tool itself, there is no such folder, and making
+    one at the root takes the machine's administrator."""
     try:
-        plain = os.path.realpath(text) == os.path.normpath(text) and stat.S_ISDIR(os.lstat(text).st_mode)  # (a relative name is not its real path)
+        entry = os.lstat(text)
+        plain = text == LOCAL_HOME and os.path.realpath(text) == text and stat.S_ISDIR(entry.st_mode) and entry.st_uid == os.getuid()
     except OSError:
         plain = False
     if not plain or of_the_clone(text):
-        raise argparse.ArgumentTypeError("a folder named from the root, which is no link and lies outside the clone (the local bee's "
-                                         "launcher gives it)")
-    return os.path.normpath(text)
+        raise argparse.ArgumentTypeError(f"{LOCAL_HOME}, the folder of this account's that the local bee's launcher makes in its container "
+                                         "(the launcher gives it)")
+    return text
+
+
+SHOWN_PLACE = re.compile(r"(?:/|[A-Za-z]:/)[^\\]*[^\\/]\Z")  # a place named from the root, with « / » between its parts: /c/Users/…, C:/Users/…
 
 
 def needs_shown_given(text):
-    """--needs-shown: a place as the user's machine names it, printed in the task's data: one line, of no control
-    character, NEEDS_SHOWN_MOST characters at most."""
-    if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,%d}" % NEEDS_SHOWN_MOST, text):
-        raise argparse.ArgumentTypeError(f"the needs' folder as the user's machine names it: one line, {NEEDS_SHOWN_MOST} characters at most")
+    """--needs-shown: a place as the user's machine names it, printed in the task's data: named from the root (« / »,
+    or a drive's letter and « :/ », with « / » between the parts, as cygpath -m writes a Windows path), one line, with
+    no character of control, of format, nor that separates lines or paragraphs, no space at either end, and
+    NEEDS_SHOWN_MOST characters at most. Its last « / » are not part of it: a place that is no more than its root
+    (« / », « C:/ ») names no folder."""
+    if not (len(text) <= NEEDS_SHOWN_MOST and SHOWN_PLACE.match(text.rstrip("/")) and text == text.strip()
+            and not any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") for c in text)):
+        raise argparse.ArgumentTypeError(f"the needs' folder as the user's machine names it: named from the root (/c/Users/me or C:/Users/me, with / between "
+                                         f"its parts), one line, {NEEDS_SHOWN_MOST} characters at most")
     return text
 
 
@@ -9504,11 +9528,12 @@ def program_lacks(entry):
     return None
 
 
-def docker_brings(clone, commit):
+def docker_brings(clone, commit, home=None):
     """True if the project's own Docker image can bring what this machine lacks: the project's commit holds its
     recipe (DOCKERFILE, a plain file, read as settings_in reads the project's settings) and the system's docker answers
-    « docker info » with exit 0, run as program_answer runs a program, with the home of the user's own account (and
-    DOCKER_HOST or DOCKER_CONTEXT if the environment names them) so that it finds its engine."""
+    « docker info » with exit 0, run as program_answer runs a program, with the home of the user's own account, or the one
+    the local bee's launcher gives (home: needs_home), and DOCKER_HOST or DOCKER_CONTEXT if the environment names
+    them, so that it finds its engine."""
     parts = DOCKERFILE.encode().split(b"/")
     with Objects(clone) as objects:
         tree = commit_header(objects.held("commit", commit))[0]
@@ -9521,7 +9546,7 @@ def docker_brings(clone, commit):
     place, _ = system_program("docker")
     if place is None:
         return False
-    environment = {**PROGRAM_ENVIRONMENT, "HOME": needs_home(),
+    environment = {**PROGRAM_ENVIRONMENT, "HOME": needs_home(home),
                    **{name: os.environ[name] for name in ("DOCKER_HOST", "DOCKER_CONTEXT") if os.environ.get(name)}}
     return program_answer(place, "info", environment)[0] == 0
 
@@ -9828,7 +9853,7 @@ def needs_hold(config, clone, commit, accepted, home=None):
             if why is None:
                 continue
             if docker is None:
-                docker = docker_brings(clone, commit)
+                docker = docker_brings(clone, commit, home)
             if docker:
                 held.docker.append((entry["name"], f"{why}; the project's Docker image brings its own: use the sandbox's Docker form"))
             else:
@@ -10441,22 +10466,37 @@ def work_tree_proof(clone, tip):
         raise NotPlain(NOT_THE_TIPS) from None  # what cannot be listed or read cannot be shown to be the tip's
     except NotPlain as error:
         # An object of the tip that is not what its name says: what git wrote from it is not the tip's either.
-        raise NotPlain(kept_apart(tip_names) if str(error) in (NOT_AS_NAMED, NOT_THE_TIPS) else str(error)) from None
+        raise NotPlain(kept_apart(root, tip_names) if str(error) in (NOT_AS_NAMED, NOT_THE_TIPS) else str(error)) from None
 
 
-def kept_apart(listed):
-    """What « start » stops on when the work tree is not the tip's: NOT_THE_TIPS, whose advice is a fresh clone; or,
-    when the tip holds two names that a disk which keeps no case apart, or stores a name in another Unicode form
-    (Windows, macOS), takes for one, CANNOT_KEEP_APART, since a fresh clone on that disk would not hold the tip
-    either. listed: the tip's (entries, folders), as tip_entries gave them, or None if they were not read. On a disk
-    that keeps them apart such a tip is held, and the proof passes: this is read only once it has failed."""
-    seen = set()
+def kept_apart(root, listed):
+    """What « start » stops on when the work tree is not the tip's: NOT_THE_TIPS, whose advice is a fresh clone; or
+    CANNOT_KEEP_APART, when the tip holds two names that this machine's disk takes for one, since a fresh clone on
+    that disk would not hold the tip either. Two names collide when they differ only by their case or by the Unicode
+    form of a letter (NFC, then casefold: as Windows' and macOS' disks commonly take them); the disk takes them for
+    one when it finds, under both names, one and the same file or folder (folded). A collision on a disk that keeps
+    the two apart (Linux's, as a rule) is no cause: the proof failed for another, and the line is NOT_THE_TIPS. Not
+    covered: what else a Windows disk refuses or reads otherwise (a name such as CON or NUL, a name ending in a dot or
+    a space, a character such as « : » or « ? », a short 8.3 name); such a tip fails the proof with NOT_THE_TIPS.
+    listed: the tip's (entries, folders), as tip_entries gave them, or None if they were not read. root: the work
+    tree, as bytes. This is read only once the proof has failed."""
+    seen = {}
     for path in ([*listed[0], *listed[1]] if listed else []):
-        name = unicodedata.normalize("NFC", path.decode("utf-8", errors="surrogateescape").rstrip("/")).casefold()
-        if name in seen:
+        plain = path.rstrip(b"/")
+        name = unicodedata.normalize("NFC", plain.decode("utf-8", errors="surrogateescape")).casefold()
+        if name in seen and folded(root, seen[name], plain):
             return CANNOT_KEEP_APART
-        seen.add(name)
+        seen.setdefault(name, plain)
     return NOT_THE_TIPS
+
+
+def folded(root, one, other):
+    """True if the disk finds one and the same entry under the two names (of the work tree `root`, as bytes), each
+    looked at without following a link."""
+    try:
+        return os.path.samestat(os.lstat(os.path.join(root, one)), os.lstat(os.path.join(root, other)))
+    except OSError:
+        return False
 
 
 def said_again(args):
@@ -10626,17 +10666,76 @@ def push(clone, url, source, branch):
 # hold them to the command's own checks again in a container that never sees the clone, and only then pushes, to the
 # address and the branch it works out from its own command line. The hive cannot tell the commits apart from pushed ones.
 HAND_OVER_BUNDLE, HAND_OVER_FILE, HAND_OVER_VERSION = "handover.bundle", "handover.txt", "hive-handover 1"
-HAND_OVER_FILE_BYTES = 1024  # the file's few lines, with room to spare
+HAND_OVER_FILE_BYTES = 1024  # the file's few lines, with room to spare: a longer one is not one this tool writes
 BUNDLE_HEAD_BYTES = 1 << 16  # a bundle's head: its version, one line for each commit it rests on, one for each branch, a blank line
+# What all the objects of a hand-over's pack may unpack to together (pack_bounds): a candidate's files weigh
+# CHANGED_BYTES_MOST together at most, and its folders and commits are few. Unpacked by this tool to find where each
+# object ends, at about 100 MB a second: ten seconds at most.
+HAND_OVER_INFLATED = 1 << 30
 # What each action writes beyond « action », « branch » and « commit » (a deletion writes no commit).
 HAND_OVER_MORE = {"ready": (), "duty": (), "duty-release": (), "release": ("task",), "submit": ("base", "project-branch", "task"),
                   "withdraw": None}
-HAND_OVER_VALUE = {"action": re.compile("|".join(HAND_OVER_MORE) + r"\Z"), "branch": re.compile(r"hive/[a-z0-9/-]{1,120}\Z"),
-                   "commit": re.compile(r"[0-9a-f]{40}\Z"), "base": re.compile(r"[0-9a-f]{40}\Z"), "project-branch": REVISION,
-                   "task": TASK_ID}
+HAND_OVER_VALUE = {"action": re.compile("(?:" + "|".join(map(re.escape, HAND_OVER_MORE)) + r")\Z"),
+                   "branch": re.compile(r"hive/[a-z0-9/-]{1,120}\Z"), "commit": re.compile(r"[0-9a-f]{40}\Z"),
+                   "base": re.compile(r"[0-9a-f]{40}\Z"), "project-branch": REVISION, "task": TASK_ID}
 SLOT_NOT_EMPTY = ("the folder given to --hand-over is not empty: it holds one hand-over at a time, and the launcher empties it once it has "
                   "pushed or refused. Nothing was handed over: stop, and tell the user")
 NOT_A_HAND_OVER = "the hand-over is not one this tool writes ({what}): nothing may be pushed from it. Tell the user"
+
+
+def ready_message(at, login, tier, prefer):
+    """An ask's message, as ready writes it (and as hand-over-check holds a handed-over ask to it): at, its instant."""
+    return "\n".join([f"Hive ready ({at})", "", "Hive-Action: ready", f"Hive-Member: {login}", f"Hive-Tier: {tier}"]
+                     + ([f"Hive-Prefer: {prefer}"] if prefer is not None else [])) + "\n"
+
+
+def submit_message(task, deal, login, model):
+    """A candidate's marker, as submit writes it."""
+    return "\n".join([f"Hive submit: {task}", "", f"Hive-Task: {task}", "Hive-Action: submit", f"Hive-Deal: {deal}", f"Hive-Member: {login}"]
+                     + ([f"Hive-Model: {model}"] if model else [])) + "\n"
+
+
+def release_message(task, at, deal, login, because):
+    """A release's message, as release writes it: at, its instant."""
+    return "\n".join([f"Hive release: {task} ({at})", "", f"Hive-Task: {task}", "Hive-Action: release", f"Hive-Deal: {deal}",
+                      f"Hive-Member: {login}", f"Hive-Because: {because}"]) + "\n"
+
+
+def duty_message(role, at, login, deal=None, because=None):
+    """A duty's ask (because None) or its release, as duty writes them: at, its instant; deal, the duty's."""
+    if because is None:
+        return "\n".join([f"Hive duty: {role} ({at})", "", "Hive-Action: duty", f"Hive-Member: {login}", f"Hive-Role: {role}"]) + "\n"
+    return "\n".join([f"Hive duty release: {role} ({at})", "", "Hive-Action: release", f"Hive-Member: {login}", f"Hive-Role: {role}",
+                      f"Hive-Deal: {deal}", f"Hive-Because: {because}"]) + "\n"
+
+
+def made_here(raw, action, marker=None):
+    """True if a commit's bytes (as Objects holds them) are those its command writes: its head says its tree, its
+    parents, its author and its committer, in that order, and nothing else (no signature, no encoding, no other
+    header); and its message is, byte for byte, the one the command writes with the marker's own values (marker:
+    read_marker's, or read_duty's), its instant taken from its title. action « work »: a candidate's work commit, whose
+    message is one plain line (ONE_LINE) that is no marker's line (MARKER_LINE), as submit's --message is."""
+    head, _, body = raw.partition(b"\n\n")
+    keys = [line.partition(b" ")[0] for line in head.split(b"\n")]
+    if keys != [b"tree"] + [b"parent"] * keys.count(b"parent") + [b"author", b"committer"]:
+        return False
+    message = body.decode("utf-8", errors="replace")
+    if action == "work":
+        title = message[:-1]
+        return message.endswith("\n") and bool(ONE_LINE.match(title)) and not MARKER_LINE.match(title)
+    title = message.partition("\n")[0]
+    at = title[title.rfind(" (") + 2:-1] if title.endswith(")") and " (" in title else None
+    if action == "submit":
+        wanted = submit_message(marker["task"], marker["deal"], marker["member"], marker["model"])
+    elif not stamp(at):
+        return False
+    elif action == "ready":
+        wanted = ready_message(at, marker["member"], marker["tier"], marker["prefer"])
+    elif action == "release":
+        wanted = release_message(marker["task"], at, marker["deal"], marker["member"], marker["because"])
+    else:  # (a duty, or its release)
+        wanted = duty_message(marker["role"], at, marker["member"], marker["deal"], marker["because"])
+    return wanted.encode("utf-8") == body
 
 
 def hand_over_slot(args):
@@ -10660,30 +10759,43 @@ def hand_over_slot(args):
     return folder
 
 
+def written_anew(path, data):
+    """Writes a file that is not there: never over one, nor through a link put in its place since the folder was
+    found empty (O_EXCL: an entry of that name, a link included, is never followed nor replaced)."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    except FileExistsError:
+        raise HiveError(SLOT_NOT_EMPTY) from None
+    with os.fdopen(descriptor, "wb") as written:
+        written.write(data)
+
+
 def hand_over(store, fork, folder, action, branch, commit, base=None, more=()):
     """In place of a push (push): writes into the hand-over's folder what the launcher is to push, then says so
-    (HANDED-OVER). As a push would, it first asks the fork whether a branch there leaves no room for this one
-    (in_the_way): the launcher's push could not tell that cause from the others. Then, in the store the commit was made
-    in, the bundle of the one branch: the commit and what it reaches, but for what `base` reaches (a candidate rests on
-    the project's commit, which the launcher fetches from the project itself); an ask, a release or a duty has no
-    history and rests on nothing. Then the file of lines, the bundle's description, last: the launcher reads a
-    hand-over only once that file is there. A deletion (commit None) writes the file alone."""
+    (HANDED-OVER). Its lines are held to their forms first, as hand-over-check holds them: nothing is written if one
+    is not. As a push would, it then asks the fork whether a branch there leaves no room for this one (in_the_way):
+    the launcher's push could not tell that cause from the others. Then, in the store the commit was made in, the
+    bundle of the one branch: the commit and what it reaches, but for what `base` reaches (a candidate rests on the
+    project's commit, which the launcher fetches from the project itself); an ask, a release or a duty has no history
+    and rests on nothing. git writes it out to this tool, which writes it into the folder (written_anew). Then the
+    file of lines, the bundle's description, last: the launcher reads a hand-over only once that file is there. A
+    deletion (commit None) writes the file alone."""
+    lines = [HAND_OVER_VERSION, f"action {action}", f"branch {branch}"] + ([f"commit {commit}"] if commit is not None else []) \
+        + [f"{key} {value}" for key, value in more]
+    if not all(key in HAND_OVER_VALUE and HAND_OVER_VALUE[key].match(value) for key, _, value in (line.partition(" ") for line in lines[1:])):
+        raise HiveError("a line of the hand-over is not of its form: nothing was handed over. Stop, and tell the user")
     if commit is not None:
         said = in_the_way(store, fork, branch)
         if said:
             raise HiveError(said)
     if os.listdir(folder):
         raise HiveError(SLOT_NOT_EMPTY)
-    lines = [HAND_OVER_VERSION, f"action {action}", f"branch {branch}"]
     if commit is not None:
         store.git("update-ref", f"refs/heads/{branch}", need_sha(commit))
-        store.git("bundle", "create", "--quiet", os.path.join(folder, HAND_OVER_BUNDLE), f"refs/heads/{branch}",
-                  *([f"^{need_sha(base)}"] if base is not None else []))
-        lines.append(f"commit {commit}")
-    lines += [f"{key} {value}" for key, value in more]
-    assert all(HAND_OVER_VALUE[line.partition(" ")[0]].match(line.partition(" ")[2]) for line in lines[1:])
-    with open(os.path.join(folder, HAND_OVER_FILE), "x", encoding="ascii") as written:
-        written.write("".join(f"{line}\n" for line in lines))
+        bundle = store.git("bundle", "create", "--quiet", "-", f"refs/heads/{branch}", *([f"^{need_sha(base)}"] if base is not None else []),
+                           raw=True).stdout
+        written_anew(os.path.join(folder, HAND_OVER_BUNDLE), bundle)
+    written_anew(os.path.join(folder, HAND_OVER_FILE), "".join(f"{line}\n" for line in lines).encode("ascii"))
     print(f"HANDED-OVER {commit if commit is not None else 'delete'} {branch}", flush=True)
 
 
@@ -10714,12 +10826,14 @@ def crlf_guard(store, base_tree, tree):
 
 
 def read_hand_over(folder):
-    """What a hand-over says ({key: value}), once its folder is shown to hold its file and its bundle and nothing
-    else (its file alone for a deletion), each a plain file, and every line of the file to be one of its own: the
-    version first, then each key once, each value of its key's form, the keys its action writes and no other, and
-    the branch the one that action pushes to."""
+    """(what a hand-over says, {key: value}; its file's bytes, as read), once its folder is shown to hold its file
+    and its bundle and nothing else (its file alone for a deletion), each a plain file, and its file, read once and
+    no longer than HAND_OVER_FILE_BYTES, to be lines of its own: the version first, then each key once, each value of
+    its key's form, the keys its action writes and no other, and the branch the one that action pushes to."""
     names = sorted(os.listdir(folder))
-    raw = first_bytes(os.path.join(folder, HAND_OVER_FILE), HAND_OVER_FILE_BYTES)  # (its lines, each key once, hold fewer bytes)
+    raw = first_bytes(os.path.join(folder, HAND_OVER_FILE), HAND_OVER_FILE_BYTES + 1)
+    if len(raw) > HAND_OVER_FILE_BYTES:
+        raise HiveError(NOT_A_HAND_OVER.format(what=f"its {HAND_OVER_FILE} is longer than that file is"))
     lines = raw.split(b"\n")
     if lines[0] != HAND_OVER_VERSION.encode() or lines[-1] != b"":
         raise HiveError(NOT_A_HAND_OVER.format(what=f"its {HAND_OVER_FILE} is missing, or is not that file"))
@@ -10741,14 +10855,14 @@ def read_hand_over(folder):
     if names != sorted([HAND_OVER_FILE] + ([] if more is None else [HAND_OVER_BUNDLE])) \
             or not all(stat.S_ISREG(os.lstat(os.path.join(folder, name)).st_mode) for name in names):
         raise HiveError(NOT_A_HAND_OVER.format(what="its folder holds another file than the hand-over's own"))
-    return said
+    return said, raw
 
 
-def bundle_head(path):
-    """(branches, prerequisites, where its pack begins) of a bundle, from the head git writes at its start:
-    [(commit, reference)], the commits it rests on, and the length of that head with its blank line."""
-    raw = first_bytes(path, BUNDLE_HEAD_BYTES)
-    head, ended, _ = raw.partition(b"\n\n")
+def bundle_head(data):
+    """(branches, prerequisites, where its pack begins) of a bundle's bytes, from the head git writes at its start
+    (within its first BUNDLE_HEAD_BYTES): [(commit, reference)], the commits it rests on, and the length of that head
+    with its blank line."""
+    head, ended, _ = data[:BUNDLE_HEAD_BYTES].partition(b"\n\n")
     lines = head.split(b"\n")
     if not ended or lines[0] != b"# v2 git bundle":
         raise HiveError(NOT_A_HAND_OVER.format(what="its bundle is not one git writes, or its head is longer than a hand-over's"))
@@ -10764,21 +10878,128 @@ def bundle_head(path):
     return branches, rests_on_, len(head) + len(ended)
 
 
+def pack_bounds(pack, limits):
+    """Raises unless each object of a bundle's pack is no larger than the project lets a candidate's objects be (a
+    file: limits.file_bytes; a folder, a commit, a tag: HISTORY_OBJECT_BYTES; what a difference from another object
+    makes: the larger of the two), and all of them together unpack to HAND_OVER_INFLATED at most. Read before git
+    unpacks the pack (index-pack --strict unpacks every object whole to hash it): a few bytes of a pack can declare an
+    object of gigabytes. Each object's size is read as its head declares it, before anything of it is unpacked, and
+    so is the size a difference makes, from the difference's own first bytes; each is then unpacked no further than
+    its size, to find where the next object begins, and never kept. What this reader cannot follow is not a pack git
+    writes; the rest of the pack's form is git's to check."""
+    not_git = HiveError(NOT_A_HAND_OVER.format(what="its bundle's pack is not one git writes"))
+    too_large = HiveError(NOT_A_HAND_OVER.format(what="an object of its bundle is larger than the project lets a candidate's objects be"))
+    if len(pack) < 32 or pack[:4] != b"PACK" or int.from_bytes(pack[4:8], "big") not in (2, 3):
+        raise not_git
+    view, count, at, total = memoryview(pack), int.from_bytes(pack[8:12], "big"), 12, 0
+
+    def number(at, shift):  # (a size, 7 bits a byte, the lowest first: its value and where it ends)
+        value = 0
+        while True:
+            if at >= len(pack) or shift > 70:
+                raise not_git
+            value |= (pack[at] & 0x7f) << shift
+            at, shift = at + 1, shift + 7
+            if not pack[at - 1] & 0x80:
+                return value, at
+
+    for _ in range(count):
+        if at >= len(pack):
+            raise not_git
+        kind, size = (pack[at] >> 4) & 7, pack[at] & 15
+        if pack[at] & 0x80:
+            more, at = number(at + 1, 0)
+            size |= more << 4
+        else:
+            at += 1
+        if kind == 6:  # a difference from an object earlier in the pack, named by its distance
+            while at < len(pack) and pack[at] & 0x80:
+                at += 1
+            at += 1
+        elif kind == 7:  # a difference from an object named by its id
+            at += 20
+        elif kind not in (1, 2, 3, 4) or size > (limits["file_bytes"] if kind == 3 else HISTORY_OBJECT_BYTES):
+            raise not_git if kind not in (1, 2, 3, 4) else too_large
+        total += size
+        if total > HAND_OVER_INFLATED:
+            raise too_large
+        unpacker, got, first = zlib.decompressobj(), 0, b""
+        while not unpacker.eof:
+            piece = view[at:at + (1 << 16)]
+            if not piece:
+                raise not_git
+            at += len(piece)
+            while piece and not unpacker.eof:
+                try:
+                    out = unpacker.decompress(piece, 1 << 16)
+                except zlib.error:
+                    raise not_git from None
+                got += len(out)
+                if got > size:
+                    raise not_git
+                first += out[:max(0, 24 - len(first))]
+                piece = unpacker.unconsumed_tail
+        at -= len(unpacker.unused_data)
+        if got != size:
+            raise not_git
+        if kind in (6, 7):  # the difference's first bytes: the size of the object it applies to, then of the one it makes
+            made = difference_made(first)
+            if made is None:
+                raise not_git
+            if made > max(limits["file_bytes"], HISTORY_OBJECT_BYTES):
+                raise too_large
+            total += made
+            if total > HAND_OVER_INFLATED:
+                raise too_large
+    if len(pack) - at != 20:  # (the pack's own checksum, which git checks)
+        raise not_git
+
+
+def difference_made(first):
+    """The size of the object a difference makes, from the difference's first bytes (two sizes, 7 bits a byte, the
+    lowest first: the object it applies to, then the one it makes); None if they do not hold both."""
+    at, sizes = 0, []
+    for _ in range(2):
+        value, shift = 0, 0
+        while True:
+            if at >= len(first) or shift > 63:
+                return None
+            value |= (first[at] & 0x7f) << shift
+            at, shift = at + 1, shift + 7
+            if not first[at - 1] & 0x80:
+                break
+        sizes.append(value)
+    return sizes[1]
+
+
 def cmd_hand_over_check(args):
     """The local bee's launcher, before it pushes: holds a hand-over to the checks the command that wrote it ran, in
     a store of this tool's own made now, with no clone anywhere (the launcher runs it in a container that never sees
     the clone, whose .git project code may have written). The project's settings and tasks are read from the project's
-    own address (hive_project), as the command read them. The hand-over's file and its bundle's head must say one
-    branch, the one its action pushes to (read_hand_over, bundle_head); git unpacks the bundle's pack (index-pack
-    --strict): every object hashed and held to git's own checks, and every object it names held, the project's commit
-    it rests on included. Then the commit, as bytes this tool hashes:
+    own address (hive_project), as the command read them. Each of the hand-over's two files is read once, and all
+    that is checked is the bytes so read: the file's lines (read_hand_over), then the bundle's head (bundle_head),
+    which must say one branch, the one its action pushes to. Its pack is held to the project's bounds before git
+    unpacks it (pack_bounds); git then unpacks it (index-pack --strict): every object hashed and held to git's own
+    checks, and every object it names held, the project's commit it rests on included. Then the commit, as bytes this
+    tool hashes, made as its command makes it (made_here: no header but its own, its message byte for byte):
       - an ask, a release, a duty's ask or release: no parent, the empty tree, and the marker its command writes, for
         this login (read_marker, read_duty), a release for an open task of the project;
       - a candidate: the marker for this login and the task, on the work commit (or on the project's commit itself
         when the work changed nothing), which rests on the project's commit the file names, the one prerequisite of
-        the bundle, the marker's tree the work's; then candidate_proof and check_structure, as submit ran them.
-    It prints CHECKED <commit> (CHECKED delete <branch> for a deletion, which the launcher checks alone), or REFUSED
-    as submit does, or one line that says why the hand-over is not one this tool writes."""
+        the bundle, the marker's tree the work's, its message one plain line; then candidate_proof and
+        check_structure, as submit ran them.
+    It prints CHECKED <commit> <SHA-256 of handover.txt> <SHA-256 of handover.bundle> (CHECKED delete <branch> <SHA-256
+    of handover.txt> for a deletion, which the launcher checks alone), or REFUSED as submit does, or one line that says
+    why the hand-over is not one this tool writes. What the launcher pushes must be what was checked: it copies the
+    two files out of the folder once, into a place of its own that nothing else writes, compares their SHA-256 with
+    the line's, and fetches and pushes from that copy alone.
+    What the command ran and this does not run again, and why that holds: the CR LF guard (crlf_guard), which says
+    to the worker why their own editor's line ends would not be taken, and guards nothing of the hive's: a candidate's
+    bytes are the work, which the hive judges as it judges any pushed by hand; and the checks that read the worker's
+    own state before a push (release's and duty's --state, a duty's trust and its time, the fork's branches that
+    leave no room: in_the_way), which only spare the worker a push that the hive would not act on. A push from the
+    hand-over can do no more than such a push: the hive reads the fork's branches as it reads anyone's, and holds
+    each to its own checks."""
     if not LOGIN.match(args.login):
         raise HiveError("--login: your GitHub login")
     folder = args.hand_over
@@ -10788,18 +11009,11 @@ def cmd_hand_over_check(args):
         plain = False
     if not plain:
         raise HiveError("--hand-over: the folder of the hand-over, named from the root (the local bee's launcher gives it)")
-    said = read_hand_over(folder)
+    said, written = read_hand_over(folder)
     if said["action"] == "withdraw":
-        print(f"CHECKED delete {said['branch']}")
+        print(f"CHECKED delete {said['branch']} {hashlib.sha256(written).hexdigest()}")
         return
     login, action, commit, branch = args.login, said["action"], said["commit"], said["branch"]
-    bundle = os.path.join(folder, HAND_OVER_BUNDLE)
-    branches, prerequisites, begins = bundle_head(bundle)
-    if branches != [(commit, f"refs/heads/{branch}")]:
-        raise HiveError(NOT_A_HAND_OVER.format(what="its bundle does not hold the one branch its file names, at the commit it names"))
-    if prerequisites != ([said["base"]] if action == "submit" else []):
-        raise HiveError(NOT_A_HAND_OVER.format(what="its bundle rests on another commit than the project's one its file names"
-                                                    if action == "submit" else "an ask, a release or a duty rests on no commit"))
     not_made = NOT_A_HAND_OVER.format(what=f"its commit is not what {action} makes")
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as place:
         store = own_store(None, place)
@@ -10811,12 +11025,21 @@ def cmd_hand_over_check(args):
             if said["project-branch"] != config["branch"]:
                 raise HiveError(NOT_A_HAND_OVER.format(what="its project's branch is not the one the project's settings name"))
             tip = project_tip(store, project_address(config["repo"], args.upstream_url), config["branch"])
-        # The bundle's pack, unpacked by git into the store: each object hashed, checked as git's own checks (fsck)
-        # hold it, and each object it names held, in the pack or in the store (the project's commit it rests on).
+        # The bundle, read once: its head, its pack, and the SHA-256 the launcher compares are of these bytes alone.
         most = config["limits"]["history_bytes"]  # (the most a candidate's commits may weigh: a ceiling for their pack too)
-        pack = first_bytes(bundle, begins + most + 1)[begins:]
+        bundle = first_bytes(os.path.join(folder, HAND_OVER_BUNDLE), BUNDLE_HEAD_BYTES + most + 1)
+        branches, prerequisites, begins = bundle_head(bundle)
+        if branches != [(commit, f"refs/heads/{branch}")]:
+            raise HiveError(NOT_A_HAND_OVER.format(what="its bundle does not hold the one branch its file names, at the commit it names"))
+        if prerequisites != ([said["base"]] if action == "submit" else []):
+            raise HiveError(NOT_A_HAND_OVER.format(what="its bundle rests on another commit than the project's one its file names"
+                                                        if action == "submit" else "an ask, a release or a duty rests on no commit"))
+        pack = bundle[begins:]
         if len(pack) > most:
             raise HiveError(NOT_A_HAND_OVER.format(what="its bundle weighs more than the project lets a candidate's commits weigh"))
+        pack_bounds(pack, config["limits"])
+        # The pack, unpacked by git into the store: each object hashed, checked as git's own checks (fsck) hold it,
+        # and each object it names held, in the pack or in the store (the project's commit it rests on).
         if store.git("index-pack", "--stdin", "--fix-thin", "--strict", stdin=pack, raw=True, check=False, timeout=COPY_SECONDS).returncode != 0:
             raise HiveError(NOT_A_HAND_OVER.format(what="git could not take its bundle: the commit it rests on is not the project's, or an object is not one git writes"))
         with Objects(store) as objects:
@@ -10827,29 +11050,30 @@ def cmd_hand_over_check(args):
                 marker = read_duty(message) if action.startswith("duty") else read_marker(message)
                 wanted = {"ready": "ready", "release": "release", "duty": "duty", "duty-release": "release"}[action]
                 if parents or tree != EMPTY_TREE or marker is None or marker["action"] != wanted or marker["member"].lower() != login.lower() \
-                        or (action == "release" and marker["task"] != said["task"]):
+                        or (action == "release" and marker["task"] != said["task"]) or not made_here(raw, action, marker):
                     raise HiveError(not_made)
-                print(f"CHECKED {commit}")
-                return
-            marker = read_marker(message)
-            if marker is None or marker["action"] != "submit" or marker["task"] != task["id"] or marker["member"].lower() != login.lower() \
-                    or len(parents) != 1:
-                raise HiveError(not_made)
-            work = parents[0]
-            if work != said["base"]:
-                work_tree, below = commit_header(objects.held("commit", work))
-                if below != [said["base"]] or work_tree != tree:
+            else:
+                marker = read_marker(message)
+                if marker is None or marker["task"] != task["id"] or marker["member"].lower() != login.lower() \
+                        or len(parents) != 1 or not made_here(raw, "submit", marker):
                     raise HiveError(not_made)
-            elif tree != commit_header(objects.held("commit", work))[0]:
-                raise HiveError(not_made)
-        own = str(store.root)
-        try:
-            candidate_proof(store, tip, commit, task, config["limits"])
-            check_structure(own, tree_of(own, tip), merge_tree(own, tip, work, config["limits"]), task, config)
-        except Refusal as refusal:
-            print(f"REFUSED ({refusal.reason}): {REASONS[refusal.reason]} {json.dumps(refusal.detail)}")
-            sys.exit(1)
-    print(f"CHECKED {commit}")
+                work = parents[0]
+                if work != said["base"]:
+                    held = objects.held("commit", work)
+                    work_tree, below = commit_header(held)
+                    if below != [said["base"]] or work_tree != tree or not made_here(held, "work"):
+                        raise HiveError(not_made)
+                elif tree != commit_header(objects.held("commit", work))[0]:
+                    raise HiveError(not_made)
+        if action == "submit":
+            own = str(store.root)
+            try:
+                candidate_proof(store, tip, commit, task, config["limits"])
+                check_structure(own, tree_of(own, tip), merge_tree(own, tip, work, config["limits"]), task, config)
+            except Refusal as refusal:
+                print(f"REFUSED ({refusal.reason}): {REASONS[refusal.reason]} {json.dumps(refusal.detail)}")
+                sys.exit(1)
+    print(f"CHECKED {commit} {hashlib.sha256(written).hexdigest()} {hashlib.sha256(bundle).hexdigest()}")
 
 
 def cmd_setup(args):
@@ -11184,8 +11408,9 @@ def cmd_next(args):
                 # feed shows (probe_in_feed): a run at an older commit takes the line for a work task, and so does this.
                 **({"kind": "probe"} if task.get("kind") == "probe" and probe_in_feed(feed, task["id"]) else {}),
                 **feed_counts(feed, task["id"])}
-        if needs_data(config):  # (the project's files and documents, where each is: data, as the task's text is)
-            data["needs"] = needs_data(config, args.needs_home, args.needs_shown)
+        listed = needs_data(config, args.needs_home, args.needs_shown)  # (the project's files and documents, where each is: data, as the task's text is)
+        if listed:
+            data["needs"] = listed
         print(f"TASK {task['id']}")
         print(f"DEAL {deal['at']}")
         print(f"UNTIL {deal['until']}")
@@ -11640,13 +11865,12 @@ def cmd_ready(args):
                         "was made. Tell the user each of those lines")
     # The instant makes each ask a new commit: an ask is used once.
     asked = now()
-    lines = [f"Hive ready ({iso(asked)})", "", "Hive-Action: ready", f"Hive-Member: {login}", f"Hive-Tier: {args.tier}"] \
-        + ([f"Hive-Prefer: {prefer}"] if prefer is not None else [])
+    message = ready_message(iso(asked), login, args.tier, prefer)
     # The ask is made in a store of this tool's own and pushed from it: it needs nothing the clone holds, and nothing
     # the clone holds can go with it (own_store).
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         store = own_store(clone, folder)
-        commit = store.commit(EMPTY_TREE, None, "\n".join(lines) + "\n", clone.identity(login, asked))
+        commit = store.commit(EMPTY_TREE, None, message, clone.identity(login, asked))
         if args.no_push:
             print(f"NOT-PUSHED {commit}: the ask is made and nothing was pushed; run the same command again without --no-push to "
                   "make the ask anew and push it")
@@ -11724,8 +11948,7 @@ def cmd_submit(args):
         print(f"REFUSED (path_outside_task): {REASONS['path_outside_task']} {json.dumps(detail)}")
         sys.exit(1)
     who = clone.identity(login)
-    lines = [f"Hive submit: {args.task}", "", f"Hive-Task: {args.task}", "Hive-Action: submit", f"Hive-Deal: {args.deal}",
-             f"Hive-Member: {login}"] + ([f"Hive-Model: {args.model}"] if args.model else [])
+    message = submit_message(args.task, args.deal, login, args.model)
     branch = SUBMIT_BRANCH.format(task=task["id"])
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         # The candidate is made in a store of this tool's own, which holds the project's two commits (the one the work
@@ -11748,7 +11971,7 @@ def cmd_submit(args):
         # that did not land, or after --no-push, submit makes the same candidate again, out of the same files, under
         # a new date.
         work = base if tree == base_tree else store.commit(tree, base, title + "\n", who)
-        marker = store.commit(tree, work, "\n".join(lines) + "\n", who)
+        marker = store.commit(tree, work, message, who)
         own = str(store.root)
         try:
             candidate_proof(store, tip, marker, task, config["limits"])
@@ -11857,11 +12080,10 @@ def cmd_release(args):
         raise HiveError("your candidate for this deal is pushed: the hive answers it, and giving the deal back would change nothing. "
                         "Nothing was pushed")
     released = now()  # (the instant makes each release a new commit)
-    lines = [f"Hive release: {task['id']} ({iso(released)})", "", f"Hive-Task: {task['id']}", "Hive-Action: release",
-             f"Hive-Deal: {args.deal}", f"Hive-Member: {login}", f"Hive-Because: {args.because}"]
+    message = release_message(task["id"], iso(released), args.deal, login, args.because)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         store = own_store(clone, folder)
-        commit = store.commit(EMPTY_TREE, None, "\n".join(lines) + "\n", clone.identity(login, released))
+        commit = store.commit(EMPTY_TREE, None, message, clone.identity(login, released))
         if args.no_push:
             print(f"NOT-PUSHED {commit}: the release is made and nothing was pushed; run the same command again without --no-push to "
                   "make the release anew and push it")
@@ -11972,8 +12194,7 @@ def cmd_duty(args):
         if not live or duty["role"] != role:
             raise HiveError(f"the hive's feed shows no duty of yours of the role {role} whose time is not up: nothing was pushed (a duty that "
                             "is over, or someone else's, has nothing to give back)")
-        lines = [f"Hive duty release: {role} ({iso(stamped)})", "", "Hive-Action: release", f"Hive-Member: {login}", f"Hive-Role: {role}",
-                 f"Hive-Deal: {duty['at']}", f"Hive-Because: {args.release}"]
+        message = duty_message(role, iso(stamped), login, duty["at"], args.release)
     elif duty is not None:
         if live:
             print(f"DUTY {duty['role']} until {duty['until']}")
@@ -11989,10 +12210,10 @@ def cmd_duty(args):
         print(f"WAIT until {wait}: the hive deals you no duty before then (a duty of yours ran out, or you gave one back)")
         return
     else:
-        lines = [f"Hive duty: {role} ({iso(stamped)})", "", "Hive-Action: duty", f"Hive-Member: {login}", f"Hive-Role: {role}"]
+        message = duty_message(role, iso(stamped), login)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         store = own_store(clone, folder)
-        commit = store.commit(EMPTY_TREE, None, "\n".join(lines) + "\n", clone.identity(login, stamped))
+        commit = store.commit(EMPTY_TREE, None, message, clone.identity(login, stamped))
         if args.no_push:
             print(f"NOT-PUSHED {commit}: the {'release' if args.release else 'ask'} is made and nothing was pushed; run the same command again "
                   "without --no-push to make it anew and push it")

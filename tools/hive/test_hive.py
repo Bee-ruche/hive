@@ -19518,7 +19518,7 @@ class TestTheNeedsHold(NeedsMachine):
             self.assertEqual((held.missing, held.held), (said, brings))
             self.assertEqual(held.docker, [("toyc", f"not in {self.usr}/bin; the project's Docker image brings its own: use the sandbox's Docker form")]
                              if brings else [])
-            asked.assert_called_once_with(self.clone, "c" * 40)
+            asked.assert_called_once_with(self.clone, "c" * 40, None)
 
 
 class NeedsVolunteer(Volunteer):
@@ -19835,9 +19835,16 @@ class HandingOver(Volunteer):
         self.assertEqual((lines[0], lines[-1]), (hive.HAND_OVER_VERSION, ""))
         return dict(line.split(" ", 1) for line in lines[1:-1])
 
+    def checked(self, commit, files=None):
+        """The line hand-over-check prints for this folder (or for these files, {name: bytes}): CHECKED, the commit (or
+        « delete <branch> »), and the SHA-256 of handover.txt, then of handover.bundle if there is one."""
+        files = files or HandingOver.handed(self)
+        return " ".join(["CHECKED", commit] + [hashlib.sha256(files[name]).hexdigest() for name in (hive.HAND_OVER_FILE, hive.HAND_OVER_BUNDLE)
+                                               if name in files]) + "\n"
+
     def bundle_lines(self):
         """The bundle's head, as git lists it: (its branches, the commits it rests on)."""
-        return hive.bundle_head(str(self.slot / hive.HAND_OVER_BUNDLE))[:2]
+        return hive.bundle_head((self.slot / hive.HAND_OVER_BUNDLE).read_bytes())[:2]
 
     def check(self, login="alice", slot=None):
         """hand-over-check, run from a folder that is no clone, as the launcher runs it in a container of its own."""
@@ -19871,7 +19878,7 @@ class TestTheHandOver(HandingOver):
         self.assertEqual(sorted(self.handed()), ["handover.bundle", "handover.txt"])
         self.assertEqual(self.said(), {"action": "ready", "branch": "hive/ready", "commit": ask})
         self.assertEqual(self.bundle_lines(), ([(ask, "refs/heads/hive/ready")], []), "one branch, resting on nothing")
-        self.assertEqual(self.check(), (0, f"CHECKED {ask}\n"), self.err)
+        self.assertEqual(self.check(), (0, self.checked(ask)), self.err)
         self.land()
         self.assertEqual(self.fork_branch("hive/ready"), ask)
         head = sh("git", "cat-file", "commit", ask, cwd=self.alice.bare).stdout.partition("\n\n")[0]
@@ -19923,7 +19930,7 @@ class TestTheHandOver(HandingOver):
         self.assertEqual(self.ready("--withdraw", "--hand-over", str(self.slot)), (0, "HANDED-OVER delete hive/ready\n"), self.err)
         self.assertEqual((sorted(self.handed()), self.said()), (["handover.txt"], {"action": "withdraw", "branch": "hive/ready"}))
         self.assertIsNotNone(self.fork_branch("hive/ready"), "the launcher deletes it")
-        self.assertEqual(self.check(), (0, "CHECKED delete hive/ready\n"), self.err)
+        self.assertEqual(self.check(), (0, self.checked("delete hive/ready")), self.err)
         self.land()
         self.assertIsNone(self.fork_branch("hive/ready"))
 
@@ -19941,7 +19948,7 @@ class TestTheHandOver(HandingOver):
         self.assertEqual(self.said(), {"action": "submit", "branch": "hive/submit/toy-0001", "commit": marker, "base": base,
                                        "project-branch": "main", "task": "toy-0001"})
         self.assertEqual(self.bundle_lines(), ([(marker, "refs/heads/hive/submit/toy-0001")], [base]), "the project's commit is its one prerequisite")
-        self.assertEqual(self.check(), (0, f"CHECKED {marker}\n"), self.err)
+        self.assertEqual(self.check(), (0, self.checked(marker)), self.err)
         self.land()
         self.assertEqual(self.fork_branch("hive/submit/toy-0001"), marker)
         self.assertEqual(sh("git", "rev-parse", f"{marker}~2", cwd=self.alice.bare).stdout.strip(), base)
@@ -19956,7 +19963,7 @@ class TestTheHandOver(HandingOver):
         self.assertEqual((code, text.splitlines()[0]), (0, f"HANDED-OVER {given} hive/release/toy-0001"), self.err)
         self.assertNotIn("RELEASED", text)
         self.assertEqual(self.said(), {"action": "release", "branch": "hive/release/toy-0001", "commit": given, "task": "toy-0001"})
-        self.assertEqual(self.check(), (0, f"CHECKED {given}\n"), self.err)
+        self.assertEqual(self.check(), (0, self.checked(given)), self.err)
         self.land()
         self.w.run()
         self.assertEqual([(e["task"], e.get("released")) for e in self.w.load()[2].events if e["type"] == "expired"], [("toy-0001", "out_of_reach")])
@@ -19993,21 +20000,62 @@ class TestTheHandOver(HandingOver):
             hive.crlf_guard(store, before, tree({"a.txt": blob(b"a\r\n")}))
 
 
+class TestTheHandOverWrittenSafely(HandingOver):
+    """What hand_over writes: lines of their forms, or nothing; and its two files written anew, never over an entry
+    or through a link put in the folder since it was found empty."""
+
+    def test_a_line_not_of_its_form_writes_nothing(self):
+        for name, more in (("a task of another form", (("task", "toy 1"),)), ("an unknown key", (("fork", "x"),))):
+            with self.subTest(name=name):
+                with self.assertRaises(hive.HiveError) as raised:
+                    hive.hand_over(None, None, str(self.slot), "release", "hive/release/toy-0001", "a" * 40, more=more)
+                self.assertEqual(str(raised.exception), "a line of the hand-over is not of its form: nothing was handed over. Stop, and tell the user")
+                self.assertEqual(self.handed(), {})
+
+    def test_a_link_put_in_the_folder_while_the_bundle_is_made_is_neither_followed_nor_replaced(self):
+        elsewhere = Path(os.path.realpath(self.w.root)) / "elsewhere"
+        elsewhere.write_bytes(b"kept")
+        real = hive.Clone.git
+
+        def planting(clone, *words, **options):
+            if words[:2] == ("bundle", "create"):
+                (self.slot / hive.HAND_OVER_BUNDLE).symlink_to(elsewhere)
+            return real(clone, *words, **options)
+
+        with mock.patch.object(hive.Clone, "git", planting):
+            self.one_line(self.ready("--hand-over", str(self.slot)), hive.SLOT_NOT_EMPTY)
+        self.assertEqual(elsewhere.read_bytes(), b"kept")
+        self.assertTrue((self.slot / hive.HAND_OVER_BUNDLE).is_symlink(), "the link is left as it was found")
+        self.assertFalse((self.slot / hive.HAND_OVER_FILE).exists())
+
+
+class TestFirstBytes(unittest.TestCase):
+
+    def test_a_read_that_gives_fewer_bytes_is_read_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "f")
+            Path(path).write_bytes(b"0123456789")
+            real = os.read
+            with mock.patch.object(hive.os, "read", lambda descriptor, most: real(descriptor, min(most, 3))):
+                self.assertEqual((hive.first_bytes(path, 8), hive.first_bytes(path, 100)), (b"01234567", b"0123456789"))
+
+
 class TestTheHandOverCheck(HandingOver):
     """hand-over-check holds a hand-over to the checks the command that wrote it ran, with no clone: what the folder
     holds, the file's lines, the bundle's one branch and its one prerequisite, the commit's shape and marker, and for a
     candidate candidate_proof and check_structure. Each refusal has its case; a hand-over that passes is CHECKED."""
 
     def handed_candidate(self, dealt, files, marker_of="alice", task="toy-0002", parents=None, base=None, marked_task=None, action="submit",
-                         marker_files=None):
+                         marker_files=None, work_message="the work", marker_more=""):
         """A candidate made by hand, as a work container whose tool had gone wrong could write one, then handed over:
         a work commit changing `files` on the project's commit, its marker, the bundle and the file. The marker's
-        parent, what it changes besides, its task and its action, and the bundle's prerequisite may be given."""
+        parent, what it changes besides, its task and its action, and the bundle's prerequisite may be given, and so
+        may the work's message and lines of more at the end of the marker's."""
         base = base or self.w.tip()
-        work = self.planted_commit([base], files, message="the work")
+        work = self.planted_commit([base], files, message=work_message)
         marked = marked_task or task
         lines = f"Hive submit: {marked}\n\nHive-Task: {marked}\nHive-Action: {action}\nHive-Deal: {dealt}\nHive-Member: {marker_of}\n" \
-            + ("Hive-Because: out_of_reach\n" if action == "release" else "")
+            + ("Hive-Because: out_of_reach\n" if action == "release" else "") + marker_more
         marker = self.planted_commit(parents or [work], marker_files or {}, tree_of=work, message=lines)
         self.handed(marker, "submit", f"hive/submit/{task}", base=base, more=f"base {base}\nproject-branch main\ntask {task}\n")
         return marker
@@ -20030,6 +20078,91 @@ class TestTheHandOverCheck(HandingOver):
         for path in self.slot.iterdir():
             path.unlink()
 
+    def literal_commit(self, raw):
+        """A commit of these very bytes, written into the clone under its id."""
+        return sh("git", "hash-object", "-t", "commit", "--literally", "-w", "--stdin", cwd=self.alice.work, stdin=raw).stdout.strip()
+
+    def crafted(self, objects):
+        """An ask's hand-over whose bundle's pack holds these objects and nothing git wrote ([(kind, the size its head
+        declares, the bytes after its head)]), under a commit it does not hold."""
+        def head(kind, size):
+            rest, out = size >> 4, bytearray([(kind << 4) | (size & 15)])
+            while rest:
+                out[-1] |= 0x80
+                out.append(rest & 0x7f)
+                rest >>= 7
+            return bytes(out)
+
+        pack = b"PACK" + struct.pack(">II", 2, len(objects)) + b"".join(head(kind, size) + rest for kind, size, rest in objects)
+        pack += hashlib.sha1(pack).digest()
+        commit = "1" * 40
+        (self.slot / hive.HAND_OVER_BUNDLE).write_bytes(b"# v2 git bundle\n" + commit.encode() + b" refs/heads/hive/ready\n\n" + pack)
+        (self.slot / hive.HAND_OVER_FILE).write_text(f"hive-handover 1\naction ready\nbranch hive/ready\ncommit {commit}\n")
+
+    @staticmethod
+    def sizes(*values):
+        """A difference's first bytes: sizes, 7 bits a byte, the lowest first."""
+        out = bytearray()
+        for value in values:
+            while True:
+                out.append(value & 0x7f)
+                value >>= 7
+                if not value:
+                    break
+                out[-1] |= 0x80
+        return bytes(out)
+
+    def test_each_object_is_held_to_the_projects_bounds_before_git_unpacks_it(self):
+        too_large = ("the hand-over is not one this tool writes (an object of its bundle is larger than the project lets a candidate's objects "
+                     "be): nothing may be pushed from it. Tell the user")
+        not_git = "the hand-over is not one this tool writes (its bundle's pack is not one git writes): nothing may be pushed from it. Tell the user"
+        most = CONFIG["limits"]["file_bytes"]
+        difference = self.sizes(10, max(most, hive.HISTORY_OBJECT_BYTES) + 1)  # (one byte more than any object may be, well under all of them together)
+        for name, objects, said in (
+                ("a file that declares a terabyte", [(3, 1 << 40, zlib.compress(b"x"))], too_large),
+                ("a file that declares one byte more than the project takes", [(3, most + 1, zlib.compress(b"x"))], too_large),
+                ("a folder that declares more than a folder may be", [(2, hive.HISTORY_OBJECT_BYTES + 1, zlib.compress(b"x"))], too_large),
+                ("a difference that makes one byte more than any object may be", [(7, len(difference), b"\x11" * 20 + zlib.compress(difference))], too_large),
+                ("a difference by distance that makes as much", [(3, 1, zlib.compress(b"x")), (6, len(difference), b"\x05" + zlib.compress(difference))],
+                 too_large),
+                ("a file that unpacks to less than it declares", [(3, 5, zlib.compress(b"x"))], not_git),
+                ("a file that unpacks to more than it declares", [(3, 1, zlib.compress(b"xy"))], not_git),
+                ("an object of no kind", [(5, 1, zlib.compress(b"x"))], not_git)):
+            self.empty_slot()
+            with self.subTest(name=name):
+                self.crafted(objects)
+                self.one_line(self.check(), said)
+        self.empty_slot()
+        self.ready("--hand-over", str(self.slot))
+        self.assertEqual(self.check()[0], 0, self.err)
+        with mock.patch.object(hive, "HAND_OVER_INFLATED", 100):
+            self.one_line(self.check(), too_large)
+
+    def test_what_is_checked_and_hashed_is_the_bytes_read_once(self):
+        self.ready("--hand-over", str(self.slot))
+        files, commit, real = HandingOver.handed(self), self.said()["commit"], hive.first_bytes
+
+        def then_changed(path, most):
+            data = real(path, most)
+            if os.path.dirname(path) == str(self.slot):
+                Path(path).write_bytes(data.replace(b"ready", b"other"))
+            return data
+
+        with mock.patch.object(hive, "first_bytes", then_changed):
+            self.assertEqual(self.check(), (0, self.checked(commit, files)), self.err)
+
+    def test_a_file_longer_than_the_hand_overs_and_an_action_with_more_after_it(self):
+        self.ready("--hand-over", str(self.slot))
+        text = (self.slot / hive.HAND_OVER_FILE).read_text()
+        (self.slot / hive.HAND_OVER_FILE).write_text(text + "x" * hive.HAND_OVER_FILE_BYTES)
+        self.one_line(self.check(), "the hand-over is not one this tool writes (its handover.txt is longer than that file is): nothing may be "
+                                    "pushed from it. Tell the user")
+        for action in ("readyx", "submitted", "ready ready"):
+            with self.subTest(action=action):
+                (self.slot / hive.HAND_OVER_FILE).write_text(text.replace("action ready", f"action {action}"))
+                self.one_line(self.check(), "the hand-over is not one this tool writes (a line of its handover.txt is not one of that file's): "
+                                            "nothing may be pushed from it. Tell the user")
+
     def rename_branch(self, old, new):
         """The bundle's one branch renamed in its head (git bundle create names it as the store does)."""
         path = self.slot / hive.HAND_OVER_BUNDLE
@@ -20039,7 +20172,7 @@ class TestTheHandOverCheck(HandingOver):
     def test_a_candidate_handed_over_by_submit_is_checked_and_each_structural_fault_is_refused(self):
         dealt = self.w.deal(self.alice, "toy-0002")
         good = self.handed_candidate(dealt, {"src/n.c": "int n;\n"})
-        self.assertEqual(self.check(), (0, f"CHECKED {good}\n"), self.err)
+        self.assertEqual(self.check(), (0, self.checked(good)), self.err)
         faults = [
             ({"lib.c": LIB + "int outside;\n"}, "path_outside_task"),
             ({"src/.github/workflows/x.yml": "on: push\n"}, "protected_path"),
@@ -20061,6 +20194,13 @@ class TestTheHandOverCheck(HandingOver):
         not_made = "the hand-over is not one this tool writes (its commit is not what submit makes): nothing may be pushed from it. Tell the user"
         work = self.planted_commit([self.w.tip()], {"src/n.c": "int n;\n"}, message="the work")
         for name, make in (("a marker of another member", lambda: self.handed_candidate(dealt, {"src/n.c": "int n;\n"}, marker_of="bob")),
+                           ("a work commit whose message is more than a line", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, work_message="the work\n\nHive-Action: ready")),
+                           ("a work commit whose line is a marker's", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, work_message="Hive-Action: ready")),
+                           ("a marker with a line of more", lambda: self.handed_candidate(dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Prefer: x\n")),
+                           ("a marker whose model is of no form", lambda: self.handed_candidate(dealt, {"src/n.c": "int n;\n"},
+                                                                                               marker_more="Hive-Model: a model\n")),
                            ("a marker on two commits of work", lambda: self.handed_candidate(  # (its tree, theirs: only the commits differ)
                                dealt, {"src/n.c": "int n;\n"}, parents=[self.planted_commit([work], {"src/o.c": "int o;\n"}, message="more")],
                                marker_files={"src/o.c": "int o;\n"})),
@@ -20162,12 +20302,21 @@ class TestTheHandOverCheck(HandingOver):
         for name, make, action in (
                 ("an ask with a parent", lambda: self.handed_ask(ask, parents=[self.w.tip()]), "ready"),
                 ("an ask that holds a file", lambda: self.handed_ask(ask, files={"x.txt": "x\n"}), "ready"),
+                ("an ask whose title says more", lambda: self.handed_ask(ask.replace("\n\n", "\nmore\n\n", 1)), "ready"),
+                ("an ask with a line of more", lambda: self.handed_ask(ask + "Hive-Model: claude\n"), "ready"),
+                ("an ask with no instant", lambda: self.handed_ask(ask.replace("2026-11-12T12:00:00Z", "None")), "ready"),
+                ("an ask with a header of more", lambda: self.handed(self.literal_commit(
+                    f"tree {hive.EMPTY_TREE}\nauthor alice <a@b> 1 +0000\ncommitter alice <a@b> 1 +0000\nencoding ISO-8859-1\n\n{ask}"),
+                    "ready", "hive/ready"), "ready"),
                 ("a release handed over as an ask", lambda: self.handed_ask(
-                    "Hive release: toy-0001\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: 2026-11-12T11:00:00Z\nHive-Member: alice\n"
+                    "Hive release: toy-0001 (2026-11-12T12:00:00Z)\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: 2026-11-12T11:00:00Z\nHive-Member: alice\n"
                     "Hive-Because: out_of_reach\n"), "ready"),
                 ("a release of another task", lambda: self.handed_ask(
-                    "Hive release: toy-0001\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: 2026-11-12T11:00:00Z\nHive-Member: alice\n"
-                    "Hive-Because: out_of_reach\n", action="release", branch="hive/release/toy-0002", more="task toy-0002\n"), "release")):
+                    "Hive release: toy-0001 (2026-11-12T12:00:00Z)\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: 2026-11-12T11:00:00Z\nHive-Member: alice\n"
+                    "Hive-Because: out_of_reach\n", action="release", branch="hive/release/toy-0002", more="task toy-0002\n"), "release"),
+                ("a duty's ask handed over as its release", lambda: self.handed_ask(  # (the very message duty writes for an ask)
+                    "Hive duty: cut (2026-11-12T12:00:00Z)\n\nHive-Action: duty\nHive-Member: alice\nHive-Role: cut\n", action="duty-release",
+                    branch="hive/duty"), "duty-release")):
             self.empty_slot()
             with self.subTest(name=name):
                 make()
@@ -20213,7 +20362,7 @@ class TestTheDutyHandOver(HandingOver):
         code, text = self.duty()
         asked = text.split()[1] if text else None
         self.assertEqual((code, text.splitlines()[0]), (0, f"HANDED-OVER {asked} hive/duty"), self.err)
-        self.assertEqual((self.said(), self.check()), ({"action": "duty", "branch": "hive/duty", "commit": asked}, (0, f"CHECKED {asked}\n")))
+        self.assertEqual((self.said(), self.check()), ({"action": "duty", "branch": "hive/duty", "commit": asked}, (0, self.checked(asked))))
         self.land()
         self.w.run()
         self.assertTrue(self.run_cli("duty", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "alice")[1].startswith("DUTY cut"))
@@ -20221,7 +20370,7 @@ class TestTheDutyHandOver(HandingOver):
         given = text.split()[1] if text else None
         self.assertEqual((code, text.splitlines()[0]), (0, f"HANDED-OVER {given} hive/duty"), self.err)
         self.assertNotIn("RELEASED", text)
-        self.assertEqual((self.said()["action"], self.check()), ("duty-release", (0, f"CHECKED {given}\n")))
+        self.assertEqual((self.said()["action"], self.check()), ("duty-release", (0, self.checked(given))))
         self.land()
         self.w.run()
         self.assertEqual([e["outcome"] for e in self.w.load()[2].events if e["type"] == "duty-end"], ["released"])
@@ -20236,13 +20385,21 @@ class TestTheDiskThatKeepsNamesTogether(Volunteer):
     would not help); on this disk, which keeps them apart, the proof passes."""
 
     def test_the_proof_says_why_when_the_tips_names_collide(self):
-        for one, other in (("Notes.md", "notes.md"), ("caf\u00e9.md", "cafe\u0301.md"), ("Docs/a.md", "docs/b.md")):
+        for one, other, folder in (("Notes.md", "notes.md", None), ("caf\u00e9.md", "cafe\u0301.md", None), ("Docs/a.md", "docs/b.md", ("docs", "Docs"))):
             with self.subTest(one=one):
                 tip = self.project_holds({one: "one\n", other: "other\n"})
                 sh("git", "checkout", "--quiet", "--detach", tip, cwd=self.alice.work)
                 self.assertIsNone(self.proof(tip), "a disk that keeps both")
                 os.unlink(self.alice.work / other)
-                self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
+                self.assertEqual(self.proof(tip), f"hive: {hive.NOT_THE_TIPS}\n", "a disk that keeps both, and a file of the tip missing")
+                if folder is None:  # the disk takes the two names for one: one file under both
+                    os.link(self.alice.work / one, self.alice.work / other)
+                    self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
+                    os.unlink(self.alice.work / other)
+                else:  # the disk takes the two folders' names for one: one folder under both
+                    real, (asked, found) = os.lstat, (os.fsencode(f"/{folder[0]}"), os.fsencode(f"/{folder[1]}"))
+                    with mock.patch.object(hive.os, "lstat", lambda path, *a, **k: real(os.fsencode(path).replace(asked, found), *a, **k)):
+                        self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
                 sh("git", "checkout", "--quiet", "--", other, cwd=self.alice.work)
                 self.project_holds({one: None, other: None})
         tip = self.project_holds({"single.md": "x\n"})
@@ -20252,32 +20409,99 @@ class TestTheDiskThatKeepsNamesTogether(Volunteer):
 
 
 class TestTheNeedsInTheLocalBee(NeedsVolunteer):
-    """In the local bee's container the needs' folder is where the launcher mounts the machine's own (--needs-home),
-    and a document's place is given as the machine names it (--needs-shown)."""
+    """In the local bee's container the needs' folder is where the launcher mounts the machine's own, below the home it
+    makes there (--needs-home, LOCAL_HOME alone), and a document's place is given as the machine names it
+    (--needs-shown). The container may list no user for the account the tool runs as: nothing asks the system's list
+    of users once the home is given."""
+
+    def setUp(self):
+        super().setUp()
+        self.mounted = Path(os.path.realpath(self.w.root)) / "container-home"
+        self.mounted.mkdir()
+        for name, value in (("LOCAL_HOME", str(self.mounted)), ("NEEDS_HOME", None)):
+            patch = mock.patch.object(hive, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch("pwd.getpwuid", side_effect=KeyError("getpwuid(): uid not found"))
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_the_needs_folder_and_its_name_on_the_machine(self):
-        digest = self.needs(NEED_DOCUMENT)
-        dealt = self.w.deal(self.alice, "toy-0001")
+        digest = self.needs(NEED_DOCUMENT, NEED_PROGRAM)
+        self.w.deal(self.alice, "toy-0001")
         self.w.run()
-        mounted = Path(os.path.realpath(self.w.root)) / "container-home"
-        mounted.mkdir()
         shown = "C:/Users/Rom\u00e9o/.hive/needs/bee-ruche/toy"
         code, text = self.run_cli("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-accepted", digest,
-                                  "--needs-home", str(mounted), "--needs-shown", shown)
+                                  "--needs-home", str(self.mounted), "--needs-shown", shown)
         self.assertEqual(code, 0, self.err)
         data = [json.loads(line[2:]) for line in self.spoken(text) if line.startswith('| {"needs"')]
         self.assertEqual([entry["at"] for entry in data[0]["needs"]], [f"{shown}/format.md"])
-        self.assertEqual((mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT, "fetched where the launcher mounts the folder")
+        self.assertEqual((self.mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT, "fetched where the launcher mounts the folder")
         self.assertFalse((self.home / ".hive").exists(), "not in the home of the user's account")
+        self.assertEqual([found.args[2:] for found in hive.docker_brings.call_args_list], [(str(self.mounted),)],
+                         "docker is asked with the home the launcher gives")
         self.assertNotIn("--needs-home", text, "the launcher gives it: no THEN line repeats it")
         base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice")
         self.one_line(self.run_cli(*base, "--needs-shown", shown), "--needs-shown names the folder that --needs-home holds: it goes with --needs-home")
-        self.one_line(self.run_cli(*base, "--needs-home", str(self.alice.work.resolve())), "argument --needs-home: a folder named from the root, which "
-                      "is no link and lies outside the clone (the local bee's launcher gives it)")
-        self.one_line(self.run_cli(*base, "--needs-home", str(mounted), "--needs-shown", "C:/x\n/y"), "argument --needs-shown: the needs' folder as "
-                      "the user's machine names it: one line, 300 characters at most")
-        del dealt
 
+    def test_ready_with_the_launchers_home_on_a_machine_that_lists_no_such_user(self):
+        digest = self.needs(NEED_DOCUMENT)
+        self.w.run()
+        code, text = self.ready("--needs-accepted", digest, "--needs-home", str(self.mounted), "--no-push")
+        self.assertEqual((code, text.split(" ")[0]), (0, "NEEDS-MET"), self.err)
+        self.assertIn("\nNOT-PUSHED ", text)
+        self.assertEqual((self.mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT)
+
+    def test_docker_is_asked_with_the_home_given(self):
+        clone = hive.Clone(self.alice.work.resolve(), {})
+        leads = self.w.published / "bee/sandbox"
+        leads.mkdir(parents=True)
+        (leads / "Dockerfile").write_text("FROM debian:stable\n")
+        leads_git("add", "-A", cwd=self.w.published)
+        leads_git("commit", "--quiet", "-m", "the recipe", cwd=self.w.published)
+        leads_git("push", "--quiet", "origin", f"HEAD:refs/heads/{self.w.published_branch}", cwd=self.w.published)
+        self.w.last_published = (None, None)
+        with mock.patch.object(hive, "LOCAL_REMOTES", True):
+            commit = hive.hive_project(clone, "Bee-ruche/toy", str(self.w.upstream), with_commit=True)[2]
+        self.program("docker", f"#!/bin/sh\n[ \"$1\" = info ] && [ \"$HOME\" = {shlex.quote(str(self.mounted))} ]\n")
+        self.assertTrue(REAL_DOCKER_BRINGS(clone, commit, str(self.mounted)))
+        with mock.patch.object(hive, "NEEDS_HOME", str(self.home)):
+            self.assertFalse(REAL_DOCKER_BRINGS(clone, commit), "the user's own home, when none is given")
+
+    def test_the_home_is_the_launchers_alone(self):
+        base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice")
+        refused = f"argument --needs-home: {self.mounted}, the folder of this account's that the local bee's launcher makes in its container (the " \
+                  "launcher gives it)"
+        other = Path(os.path.realpath(self.w.root)) / "other-home"
+        other.mkdir()
+        for name, given in (("the root", "/"), ("another folder", str(other)), ("the user's own home", str(self.home)),
+                            ("the clone", str(self.alice.work.resolve())), ("a name that is not its real path", str(self.mounted) + "/.")):
+            with self.subTest(name=name):
+                self.one_line(self.run_cli(*base, "--needs-home", given), refused)
+        linked = Path(os.path.realpath(self.w.root)) / "linked"
+        linked.symlink_to(os.path.realpath(self.w.root))
+        with mock.patch.object(hive, "LOCAL_HOME", str(linked / "container-home")):
+            self.one_line(self.run_cli(*base, "--needs-home", str(linked / "container-home")),
+                          f"argument --needs-home: {linked / 'container-home'}, the folder of this account's that the local bee's launcher makes in "
+                          "its container (the launcher gives it)")
+        with mock.patch.object(hive.os, "getuid", return_value=os.getuid() + 1):
+            self.one_line(self.run_cli(*base, "--needs-home", str(self.mounted)), refused)
+        with mock.patch.object(hive, "LOCAL_HOME", str(self.alice.work.resolve())):
+            self.one_line(self.run_cli(*base, "--needs-home", str(self.alice.work.resolve())),
+                          f"argument --needs-home: {self.alice.work.resolve()}, the folder of this account's that the local bee's launcher makes in "
+                          "its container (the launcher gives it)")
+
+    def test_the_place_shown_is_named_from_the_root(self):
+        base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-home", str(self.mounted))
+        refused = "argument --needs-shown: the needs' folder as the user's machine names it: named from the root (/c/Users/me or C:/Users/me, with / between its " \
+                  "parts), one line, 300 characters at most"
+        for given in ("relative/needs", "/", "C:/", "C:", "C:\\Users\\x", "/x\n/y", "/x\u200b", "/x\u2028y", "/x\u2029y", "/x\udcff", " /x", "/x ",
+                      "/" + "x" * 300):
+            with self.subTest(given=given):
+                self.one_line(self.run_cli(*base, "--needs-shown", given), refused)
+        for given in ("/c/Users/x", "C:/Users/x/", "/" + "x" * 299):
+            with self.subTest(given=given):
+                self.assertEqual(hive.needs_shown_given(given), given)
 
 
 if __name__ == "__main__":
