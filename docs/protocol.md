@@ -1046,8 +1046,9 @@ kind's fields and bounds):
 - `program`: `name`, a bare file name meaning `/usr/bin/<name>` and nothing else, never a shell or a program
   that changes who runs, mounts, stops the machine or erases (`sh`, `bash`, `dash`, `zsh`, `su`, `sudo`, `ssh`,
   `mount`, `umount`, `reboot`, `shutdown`, `systemctl`, `dd`, `rm`); `package`, the system's package that provides
-  it, only ever shown: lower-case letters and digits, with `+`, `.` and `-` each alone between two, so that it reads
-  as no pattern of apt's; `version` (optional), a dotted prefix of the version the program gives (`1.75`
+  it, only ever shown: lower-case letters and digits, with `.` and `-` each alone between two, `+` or `++` between
+  two, and a final `++` (`g++`, `libstdc++6`, `libc++-dev`), never `-` at either end; before installing, the guide
+  checks the exact name among `apt-cache pkgnames`, so that no name reads as a pattern of apt's; `version` (optional), a dotted prefix of the version the program gives (`1.75`
   takes 1.75.0 and 1.75.2, never 1.7.5).
 - `file` and `document`: `name` (one folder for both: each name once), `why`, `url`, `sha256`, `bytes` (512 MiB at
   most for a file, 32 MiB for a document, 2 GiB for all of them together) and `licence`. `why` is one line of 80
@@ -1096,7 +1097,9 @@ is refused at the fetch).
   `~/.hive/needs/<owner>/<name>/` in the home the system's list of users gives (never `$HOME`):
   outside the clone, a folder of the tool's own that holds the declared files alone, each mode 0444, held to its size
   and SHA-256 again at every check. A file that does not match is said to be of another size or fingerprint, and
-  nothing more of what was received is shown. Nothing there is extracted, opened or run on the machine.
+  nothing more of what was received is shown. Nothing there is extracted, opened or run on the machine. The fetch and
+  `hive needs` read no proxy (`HTTPS_PROXY` is ignored): on a machine whose only way out is a proxy, such as a cloud
+  session, a project that names files or documents cannot be served.
 
 What is missing is said in `NEEDS-MISSING` lines (`NEEDS-MET` when everything holds): `next` then says `CANNOT-ASK`
 in place of `ASK`, `ready` makes no ask, and `start` changes nothing, each at no cost. `--despite-needs`, from the
@@ -1105,14 +1108,17 @@ since, a file that vanished, a fetch that fails) is given back as `cannot_run`. 
 installs packages as follows.
 
 An install needs one of two sentences of the owner's prompt: "I accept the project's needs <digest>.", and then only
-when no `NEEDS-UNACCEPTED` line was printed, for exactly the packages the `NEEDS-MISSING` lines name; or "This
-machine may install, from the system's archive, the packages <list> before anything of the project runs.", for the
-packages that are both in that list and named by a `NEEDS-MISSING` line. Without either, nothing is installed. Each
-package goes by the name the line gives: first `apt-cache policy <package>` for each, which must show a candidate
-(`Candidate:` followed by a version, not `(none)`), or nothing is installed and the owner is told; then
+after a `next` run given `--needs-accepted <digest>` printed no `NEEDS-UNACCEPTED` line, for exactly the packages
+the `NEEDS-MISSING` lines name; or "This machine may install, from the system's archive, the packages <list> before
+anything of the project runs.", for the packages that are both in that list and named by a `NEEDS-MISSING` line.
+Without either, nothing is installed. Each package goes by the name the line gives, and must be a package's exact
+name: first `apt-cache pkgnames <package> | grep -Fx -- <package>` for each, which must print that name itself (apt
+then reads it as that package, never as a pattern), and `apt-cache policy <package>`, which must show a candidate
+(`Candidate:` followed by a version, not `(none)`); otherwise nothing is installed and the owner is told. Then
 `sudo apt-get install -y --no-install-recommends --no-remove -- <packages>`: with `--no-remove`, apt stops rather
 than remove any package. Only from the archive the machine already has, before anything of the project runs: no new
 source, no PPA, no address, no pip, npm, cargo or `curl … | sh`.
+
 
 `hive.py needs --project <owner/name>` prints the needs as the project's own address gives them, with their digest
 and the packages it covers, for the user to read before the yes: it reads the settings at the default branch's

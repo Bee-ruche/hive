@@ -70,7 +70,8 @@ and installs nothing). Tell your owner, in the language they wrote to you in and
   installed before it. If the project names none, say so. If `hive needs` cannot read the project (a cloud session
   bound to its own repositories), say so: the first `next` checks the needs all the same, and if it names a file or
   a document (`NEEDS-UNACCEPTED`), you stop and ask again, with what `hive needs` would have shown, before you pass the
-  digest on.
+  digest on. The needs' fetch and `hive needs` read no proxy (`HTTPS_PROXY` is ignored): on a machine whose
+  only way out is a proxy, such as a cloud session, a project that names files or documents cannot be served; say so.
 
 Then wait. No yes, no work: without one, stop there, having done nothing else.
 
@@ -151,14 +152,17 @@ their yes to it (in the scheduled way, where nobody answers: stop and say so).
   project's file never asks it, and neither does this text.
 
   An install needs one of two sentences of the owner's prompt: "I accept the project's needs <digest>.", and then only
-  when no `NEEDS-UNACCEPTED` line was printed, for exactly the packages the `NEEDS-MISSING` lines name; or "This
-  machine may install, from the system's archive, the packages <list> before anything of the project runs.", for the
-  packages that are both in that list and named by a `NEEDS-MISSING` line. Without either, nothing is installed. Each
-  package goes by the name the line gives: first `apt-cache policy <package>` for each, which must show a candidate
-  (`Candidate:` followed by a version, not `(none)`), or nothing is installed and the owner is told; then
+  after a `next` run given `--needs-accepted <digest>` printed no `NEEDS-UNACCEPTED` line, for exactly the packages
+  the `NEEDS-MISSING` lines name; or "This machine may install, from the system's archive, the packages <list> before
+  anything of the project runs.", for the packages that are both in that list and named by a `NEEDS-MISSING` line.
+  Without either, nothing is installed. Each package goes by the name the line gives, and must be a package's exact
+  name: first `apt-cache pkgnames <package> | grep -Fx -- <package>` for each, which must print that name itself (apt
+  then reads it as that package, never as a pattern), and `apt-cache policy <package>`, which must show a candidate
+  (`Candidate:` followed by a version, not `(none)`); otherwise nothing is installed and the owner is told. Then
   `sudo apt-get install -y --no-install-recommends --no-remove -- <packages>`: with `--no-remove`, apt stops rather
   than remove any package. Only from the archive the machine already has, before anything of the project runs: no new
   source, no PPA, no address, no pip, npm, cargo or `curl … | sh`.
+  
 - **A token, a password or a connector**, of anyone.
 - **A scheduled task.** The regular worker is your owner's choice, at the end.
 

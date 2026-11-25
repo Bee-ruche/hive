@@ -394,9 +394,11 @@ NEED_FIELDS = {  # each kind: (the fields it must give, those it may give)
     "resources": (set(), {*NEED_RESOURCES, "architectures"}),
 }
 NEED_PROGRAM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")  # a bare file name: /usr/bin/<name>, and nowhere else
-# A package of the system's archive (Debian's names), only ever shown, and read as no pattern of apt's: a letter or a
-# digit first and last, and « + », « . », « - » each alone between two (« x- » would ask apt to remove x).
-NEED_PACKAGE = re.compile(r"(?=[a-z0-9+.-]{2,64}\Z)[a-z0-9]+(?:[+.-][a-z0-9]+)*\Z")
+# A package of the system's archive (Debian's names), only ever shown: a letter or a digit first and last, but for a
+# final « ++ » (g++); « . » and « - » each alone between two (« x- » would ask apt to remove x), « + » or « ++ »
+# between two (libstdc++6, libc++-dev). That a name is no pattern of apt's is the worker guide's check: the exact
+# name among apt-cache pkgnames, and a candidate (apt reads a regex only when no package has that exact name).
+NEED_PACKAGE = re.compile(r"(?=[a-z0-9+.-]{2,64}\Z)[a-z0-9]+(?:\+{1,2}[a-z0-9]+)*(?:\+\+)?(?:[.-][a-z0-9]+(?:\+{1,2}[a-z0-9]+)*(?:\+\+)?)*\Z")
 # The programs a project may never name: shells, what changes who runs, what mounts, stops or erases (program_lacks
 # runs a program of the needs with --version, and the worker's guide may install its package).
 NEED_PROGRAMS_REFUSED = frozenset({"sh", "bash", "dash", "zsh", "su", "sudo", "ssh", "mount", "umount", "reboot", "shutdown", "systemctl",
@@ -955,7 +957,7 @@ def needs_of(needs, path):
                                 f"({', '.join(sorted(NEED_PROGRAMS_REFUSED))})")
             if not (isinstance(entry["package"], str) and NEED_PACKAGE.match(entry["package"])):
                 raise HiveError(f"{at}: package: the name of the system's package that provides it: lower-case letters and digits, "
-                                "« + », « . » or « - » each alone between two")
+                                "« . » or « - » each alone between two, « + » or « ++ » between two, and a final « ++ »")
             if "version" in entry and not (isinstance(entry["version"], str) and NEED_VERSION.match(entry["version"])):
                 raise HiveError(f"{at}: version: numbers and dots, as the program's own version begins (1.75 takes 1.75.0)")
             programs.add(entry["name"])
@@ -9614,23 +9616,32 @@ def global_address(address):
     return ip.is_global and not ip.is_multicast
 
 
-def resolved_address(host, port):
-    """The address a fetch connects to for `host`: the first that the system's resolver gives, once every address it
-    gives is global (global_address). One that is not refuses the host whole (HostRefused), whichever comes first: a
-    name may lead to a machine of this network (« 127.0.0.1.nip.io », « svc.cluster.local »)."""
+def resolved_addresses(host, port):
+    """The addresses a fetch may connect to for `host`, in the order the system's resolver gives them, once every
+    address it gives is global (global_address). One that is not refuses the host whole (HostRefused), whichever
+    comes first: a name may lead to a machine of this network (« 127.0.0.1.nip.io », « svc.cluster.local »)."""
     addresses = [info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)]
     if not addresses or not all(global_address(address) for address in addresses):
         raise HostRefused(f"{host} leads to an address a fetch never reaches")
-    return addresses[0]
+    return addresses
 
 
 class CheckedConnection(http.client.HTTPSConnection):
-    """An https connection to the address the name was resolved to and held to (resolved_address), made anew at each
-    connection, so at each redirection: TLS is still given the name, for the host's certificate and its check."""
+    """An https connection to the addresses the name was resolved to and held to (resolved_addresses), made anew at
+    each connection, so at each redirection: each address in turn until one answers (a machine with an IPv6 address
+    and no IPv6 route reaches the next), each within the connection's timeout. TLS is still given the name, for the
+    host's certificate and its check."""
 
     def connect(self):
-        address = resolved_address(self.host, self.port)
-        sock = socket.create_connection((address, self.port), self.timeout)
+        failed = None
+        for address in resolved_addresses(self.host, self.port):
+            try:
+                sock = socket.create_connection((address, self.port), self.timeout)
+                break
+            except OSError as error:
+                failed = error
+        else:
+            raise failed
         try:
             self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
         except BaseException:
@@ -9662,7 +9673,7 @@ def public_host(host):
     """True for a host a need's address may name: labels of letters, digits and dashes, two at least, the last of
     letters alone (so no machine's number) and not one of NEED_HOST_REFUSED; no four labels of digits in a row (a
     machine's number written into a name); never localhost. What the name leads to is held at each connection
-    (resolved_address)."""
+    (resolved_addresses)."""
     labels = host.split(".")
     return len(host) <= 253 and len(labels) >= 2 and all(NEED_LABEL.match(label) for label in labels) \
         and re.fullmatch(r"[a-z]{2,63}", labels[-1]) is not None and labels[-1] not in NEED_HOST_REFUSED and "localhost" not in labels \
@@ -10891,8 +10902,8 @@ def cmd_next(args):
             print(f"CHECK (inside the sandbox only): {SANDBOX} {check}")
         if needs_stop(args, config, clone, commit):
             print("THEN: this machine lacks what the project needs, or the user has not accepted them (the NEEDS lines above): do not "
-                  "start. If no line says NEEDS-UNACCEPTED and the user accepted the project's needs by their digest, or their own words list the "
-                  "packages those lines name, install those alone, from the system's archive, as the guide says, and run next again; "
+                  "start. If this next was given the digest the user accepted (--needs-accepted) and no line says NEEDS-UNACCEPTED, or their "
+                  "own words list the packages those lines name, install those alone, from the system's archive, as the guide says, and run next again; "
                   "otherwise give the deal back, at no cost but the first wait: hive.py release ... --because "
                   "cannot_run (the guide's \"Giving the deal back\"), and tell the user each of those lines")
             return
