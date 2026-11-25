@@ -7,8 +7,9 @@
 # (hive.py --hand-over) once it is checked twice: by hive.py hand-over-check in a fresh container that never sees the
 # clone, then here with git. The hive cannot tell the commits apart from pushed ones.
 #
-#   local.sh login   <login>             (the user, once, typed in a terminal of their own, never by an assistant:
-#                                         the GitHub account this machine works for)
+#   local.sh login   <login>             (the user, once, typed in a real terminal of their own, never by an
+#                                         assistant: the GitHub account this machine works for. On Windows, in Git
+#                                         Bash: started through local.ps1, bash may not see a terminal)
 #   local.sh check   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh refresh --project <owner/name>
@@ -119,11 +120,12 @@ sha256() {  # of a file, or of the standard input with no file
 within() {  # <seconds> <input file> <command…>: the command, its memory bounded where the system allows, killed past its time
   local seconds="$1" input="$2" pid dog code
   shift 2
-  ( ulimit -v "$GIT_MEMORY_KB" 2>/dev/null; exec "$@" ) < "$input" &
+  ( [ -z "$GIT_MEMORY_KB" ] || ulimit -v "$GIT_MEMORY_KB" 2>/dev/null; exec "$@" ) < "$input" &
   pid=$!
-  # The watchdog takes its sleep away with it when it is stopped: a reader of the command's output, which the watchdog
-  # holds too, would otherwise wait for the sleep to end.
-  ( sleep "$seconds" & sleeping=$!; trap 'kill "$sleeping" 2>/dev/null; exit 0' TERM; wait "$sleeping"; kill "$pid" 2>/dev/null ) &
+  # The watchdog holds none of the command's outputs (a reader of them would wait for it), and takes its sleep away with
+  # it when it is stopped: its trap is set before the sleep starts, so a stop that comes at once leaves no sleep behind.
+  ( sleeping=""; trap '[ -z "$sleeping" ] || kill "$sleeping" 2>/dev/null; exit 0' TERM
+    sleep "$seconds" & sleeping=$!; wait "$sleeping"; kill "$pid" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
   dog=$!
   wait "$pid"
   code=$?
@@ -145,7 +147,7 @@ if [ "$COMMAND" = login ]; then
   [ $# -eq 1 ] && [[ $1 =~ $LOGIN_RE ]] || die "local.sh login takes one word: the user's GitHub login"
   # (In a terminal of the user's own: an assistant runs its commands with no terminal. This guards against an
   # assistant's error, not against one that would pretend to be a terminal.)
-  [ -t 0 ] && [ -t 1 ] || die "local.sh login is the user's own step, typed in a terminal of their own: an assistant never runs it"
+  [ -t 0 ] && [ -t 1 ] || die "local.sh login is the user's own step, typed in a terminal of their own (on Windows, in Git Bash, which bash sees as a terminal where PowerShell's console may not be): an assistant never runs it"
   mkdir -p "$HIVE" || die "no room under $HIVE"
   if [ -f "$HIVE/login" ]; then
     [ "$(lower "$(cat "$HIVE/login")")" = "$(lower "$1")" ] \
@@ -638,7 +640,10 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   fi
 
   # The push: this machine's git and its credentials, one refspec, to the fork named by the command line.
-  if ! "$GIT" -C "$(host_path "$STORE")" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow="$FILE_PROTOCOL" \
+  # Bounded in time (a first sign-in in the credential manager's window included), never asking on a terminal, and not
+  # bounded in memory: a credential manager (.NET's, on Windows) may reserve more address space than git does.
+  if ! GIT_MEMORY_KB="" within "$GIT_SECONDS" /dev/null env GIT_TERMINAL_PROMPT=0 "$GIT" -C "$(host_path "$STORE")" -c core.hooksPath=/dev/null \
+      -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow="$FILE_PROTOCOL" \
       push --quiet --porcelain --no-verify --no-follow-tags --no-signed --recurse-submodules=no fork "$refspec" >/dev/null 2>&1; then
     die "the push to your fork did not land: nothing was pushed. Run the command again; if it fails again, stop and tell the user to check that this machine's git may push to the fork${SET_ASIDE:+ (this launcher set aside$SET_ASIDE, which git's sign-in may need: the push signs in with git's own credential helper alone)}"
   fi

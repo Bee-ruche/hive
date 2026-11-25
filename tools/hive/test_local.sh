@@ -778,6 +778,20 @@ check "refused: a lock held, and the refused run leaves nothing of its own in it
   'refused 2 "another run of local.sh is going" && [ "$(ls -A "$HOME/.hive/locks/Bee-ruche/toy")" = pid ] && [ -z "$(ls -A "$HOME/.hive/locks/Bee-ruche" | grep -v "^toy$")" ]'
 rm -rf "$HOME/.hive/locks/Bee-ruche/toy"
 
+# The fourth review: the watchdog, a guarded link late in the list.
+{
+  echo 'GIT_MEMORY_KB=4194304'
+  sed -n '/^within() {/,/^}/p' "$LAUNCHER"
+  echo 'for i in $(seq 200); do [ "$(within 600 /dev/null true; echo ok)" = ok ] || exit 1; done; echo done'
+} > "$T/watchdog.sh"
+check "the watchdog: a command that ends at once, 200 times, each read back at once" eval '[ "$(timeout 60 bash "$T/watchdog.sh")" = done ]'
+reset_world
+echo "STARTED hive/work/toy-0001 at $BASE" > "$HOME/.hive/started/Bee-ruche/toy"
+mkdir -p "$CLONE/.github" && touch "$CLONE/CLAUDE.md" && ln -s /etc "$CLONE/.devcontainer"
+launch "${SANDBOX[@]}"
+check "refused: a guarded name late in the list made a link, the earlier ones plain" eval 'refused 2 "the clone'"'"'s .devcontainer" && ! ran sandbox'
+rm "$CLONE/.devcontainer" "$HOME/.hive/started/Bee-ruche/toy"
+
 # A fork that is not the project's.
 git init -q --bare "$T/github/alice/other"
 STRAY=$(git -C "$MAKER" commit-tree "$EMPTY_TREE" -m stray)
