@@ -136,6 +136,17 @@ account's own fork. It prints lines of the list above: DUTY and DEAL (the duty i
 duty, or a duty whose time is up), ASKED (the ask is pushed), RELEASED (--release: the duty is given back), WITHDRAWN
 (--withdraw: the ask is taken back), NOT-PUSHED (--no-push), THEN.
 
+The local bee's side (same file, run in the containers of the local bee's launcher, tools/hive/local.sh, on a machine
+whose git pushes): ready, submit, release and duty take --hand-over <folder>, an empty folder outside the clone. The
+commit is made and checked as for a push, and the push is handed over to the launcher: the folder receives a bundle of
+the one branch (handover.bundle) and a file that says what it is (handover.txt), and the command prints, in place of
+ASKED, PUSHED, RELEASED or WITHDRAWN, « HANDED-OVER <commit> <branch> » (« HANDED-OVER delete <branch> » to take an
+ask back), then its THEN line. submit --hand-over refuses besides, in one line, a file whose lines end in CR LF where
+the project's commit has none. hand-over-check holds such a folder to the checks the command ran, in a store of its
+own and with no clone, and prints « CHECKED <commit> » (« CHECKED delete <branch> »), or REFUSED as submit does. Only the
+launcher reads these two lines. next, ready and start take --needs-home and --needs-shown: where the needs' folder lies
+in the container, and how the user's machine names it.
+
 Standard library only: the job that holds the write token installs nothing.
 """
 
@@ -165,6 +176,7 @@ import tempfile
 import threading
 import time
 import traceback
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -8802,6 +8814,10 @@ NOT_THE_TIPS = ("STOP: the work tree of this clone is not what the project's tip
 CONVERTED_ON_THE_HOST = ("STOP: the project's own rules convert (line ends, an encoding) a file that is run or obeyed on the host: its "
                          "sandbox's launcher, a coding tool's settings, an agent's instructions. This tool takes such a file only as the "
                          "very bytes the project's tip holds. Run nothing from this clone, not even its sandbox: tell the user")
+CANNOT_KEEP_APART = ("STOP: the project's tip holds names that this machine's disk cannot keep apart (two that differ only by their case, "
+                     "or by the Unicode form of a letter): no clone on this disk holds that tip as it is, a fresh one neither. Run "
+                     "nothing from this clone, not even its sandbox, and do not commit or push from it: tell the user that this project "
+                     "cannot be worked from this machine's disk")
 TIP_TOO_LARGE = "the project is larger than this tool reads ({found}). The task is not started: stop, and tell the user"
 
 
@@ -9308,6 +9324,7 @@ VERSION_SAID = 40  # a version longer than this is not repeated
 MEMINFO, CPU_MAX, MEMORY_MAX = "/proc/meminfo", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/memory.max"
 NEEDS_HOME = None  # tests only: the home the needs' folder is in (None: the user's own, from the system's list of users)
 NEEDS_PLACE = (".hive", "needs")  # the needs' folder, in that home: one folder of its own for each project, <owner>/<name>
+NEEDS_SHOWN_MOST = 300  # the most characters of the needs' folder as the user's machine names it (--needs-shown)
 DOCKERFILE = "bee/sandbox/Dockerfile"  # a project whose sandbox has a Docker form keeps its image's recipe there
 NEED_FETCH_SECONDS = 900  # the longest one file's fetch may take (512 MiB at about 600 kB/s)
 NEEDS_FETCH_SECONDS = 1800  # the longest all the fetches of one check may take together (needs_hold)
@@ -9359,6 +9376,28 @@ def needs_accepted(text):
     """--needs-accepted: a digest as « hive.py needs » printed it (NEEDS-DIGEST)."""
     if not NEEDS_DIGEST.match(text):
         raise argparse.ArgumentTypeError("the digest of the project's needs the user accepted: 64 hexadecimal digits, as hive.py needs printed it")
+    return text
+
+
+def needs_home_given(text):
+    """--needs-home: a folder named from the root, which is no link and has none on the way to it, and lies outside
+    the clone (the folder a worker's command runs in): the needs' folder is made below it, and what that folder holds
+    besides the project's files is removed (needs_folder)."""
+    try:
+        plain = os.path.realpath(text) == os.path.normpath(text) and stat.S_ISDIR(os.lstat(text).st_mode)  # (a relative name is not its real path)
+    except OSError:
+        plain = False
+    if not plain or of_the_clone(text):
+        raise argparse.ArgumentTypeError("a folder named from the root, which is no link and lies outside the clone (the local bee's "
+                                         "launcher gives it)")
+    return os.path.normpath(text)
+
+
+def needs_shown_given(text):
+    """--needs-shown: a place as the user's machine names it, printed in the task's data: one line, of no control
+    character, NEEDS_SHOWN_MOST characters at most."""
+    if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,%d}" % NEEDS_SHOWN_MOST, text):
+        raise argparse.ArgumentTypeError(f"the needs' folder as the user's machine names it: one line, {NEEDS_SHOWN_MOST} characters at most")
     return text
 
 
@@ -9539,26 +9578,29 @@ def resources_lack(entry, root):
     return lacking
 
 
-def needs_home():
-    """The home of the user's account, as the system's list of users gives it (never $HOME)."""
+def needs_home(given=None):
+    """The home of the user's account, as the system's list of users gives it (never $HOME); or the one the local bee's
+    launcher gives (--needs-home), in the container where this tool runs and which may list no such user."""
+    if given is not None:
+        return given
     import pwd  # (a worker's command runs on Linux alone: main)
     return NEEDS_HOME or pwd.getpwuid(os.getuid()).pw_dir
 
 
-def needs_place(config):
+def needs_place(config, home=None):
     """The needs' folder of the project: ~/.hive/needs/<owner>/<name>, its repository's name in lower case, in the
     home the system's list of users gives the user's account (never $HOME): the place the sandbox's launcher shows
     at /needs, which finds it the same way (docs/hosting.md)."""
-    return os.path.join(needs_home(), *NEEDS_PLACE, *config["repo"].lower().split("/"))
+    return os.path.join(needs_home(home), *NEEDS_PLACE, *config["repo"].lower().split("/"))
 
 
-def needs_folder(config, declared):
+def needs_folder(config, declared, home=None):
     """The needs' folder of the project (needs_place), made if it is not there, every folder of it from ~/.hive down
     a plain folder (lstat: never a link, which this tool would otherwise write through), and holding the files of
     `declared` alone: anything else in it is removed (a file or a link by its own name, a folder with what it holds,
     never through a link), and so is a file that a fetch left half-written (.partial-*). It is the tool's own
     folder, outside the clone: nothing a command does in the clone reaches it, and « submit » never sends it."""
-    place, walked = needs_place(config), needs_home()
+    place, walked = needs_place(config, home), needs_home(home)
     for part in (*NEEDS_PLACE, *config["repo"].lower().split("/")):
         walked = os.path.join(walked, part)
         try:
@@ -9771,7 +9813,7 @@ def keep_need(entry, folder, answer, host, deadline, late):
     return "wrong", f"{host} gave another size or fingerprint than the project names"
 
 
-def needs_hold(config, clone, commit, accepted):
+def needs_hold(config, clone, commit, accepted, home=None):
     """What this machine lacks of what the project needs (NeedsHeld). A program: program_lacks; one this machine
     lacks is met all the same when the project's Docker image brings its own (docker_brings, asked once). Resources:
     resources_lack. The digest: a digest the user gave that is not the project's (its needs changed since their yes)
@@ -9797,7 +9839,7 @@ def needs_hold(config, clone, commit, accepted):
     if accepted != needs_digest(config) and (accepted is not None or files):
         held.unaccepted = needs_digest(config)
     elif files:
-        folder, until = needs_folder(config, {entry["name"] for entry in files}), time.monotonic() + NEEDS_FETCH_SECONDS
+        folder, until = needs_folder(config, {entry["name"] for entry in files}, home), time.monotonic() + NEEDS_FETCH_SECONDS
         for entry in files:
             place = os.path.join(folder, entry["name"])
             if os.path.lexists(place) and file_held(place, entry):
@@ -9830,18 +9872,20 @@ def needs_stop(args, config, clone, commit):
     say to go on (--despite-needs)."""
     if not config["needs"]:
         return False
-    held = needs_hold(config, clone, commit, args.needs_accepted)
+    held = needs_hold(config, clone, commit, args.needs_accepted, getattr(args, "needs_home", None))
     say_needs(held)
     return not held.held and not args.despite_needs
 
 
-def needs_data(config):
+def needs_data(config, home=None, shown=None):
     """The task data's « needs »: the project's files and documents, where each is (a document in the needs' folder,
     for the assistant to read as data; a file at /needs/<name> in the sandbox), why and under which licence. None
-    for a project that names none."""
-    place = needs_place(config)
+    for a project that names none. shown: the needs' folder as the user's machine names it, when this tool runs in
+    the local bee's container, where the folder has another name (--needs-shown): a document's place is then given
+    as the assistant, on the machine, reads it."""
+    place = needs_place(config, home) if shown is None else shown.rstrip("/")
     listed = [{"kind": entry["kind"], "name": entry["name"],
-               "at": os.path.join(place, entry["name"]) if entry["kind"] == "document" else f"/needs/{entry['name']}",
+               "at": (os.path.join(place, entry["name"]) if shown is None else f"{place}/{entry['name']}") if entry["kind"] == "document" else f"/needs/{entry['name']}",
                "why": entry["why"], "licence": entry["licence"]} for entry in config["needs"] if entry["kind"] in ("file", "document")]
     return listed or None
 
@@ -10350,9 +10394,11 @@ def work_tree_proof(clone, tip):
     work tree is not the tip's, or cannot be read; HiveError when the project is larger than this tool reads
     (TIP_ENTRIES entries, PROOF_SECONDS seconds)."""
     deadline, root = time.monotonic() + PROOF_SECONDS, os.fsencode(clone.root)
+    tip_names = None
     try:
         with Objects(clone) as objects:
             entries, folders = tip_entries(objects, tip, deadline)
+            tip_names = (entries, folders)
             rules = {path: entry for path, entry in entries.items()
                      if path.rpartition(b"/")[2] == b".gitattributes" and entry[0] != SUBMODULE_MODE}
             missing = sum(1 for kind, _, _ in entries.values() if kind != SUBMODULE_MODE)
@@ -10395,7 +10441,22 @@ def work_tree_proof(clone, tip):
         raise NotPlain(NOT_THE_TIPS) from None  # what cannot be listed or read cannot be shown to be the tip's
     except NotPlain as error:
         # An object of the tip that is not what its name says: what git wrote from it is not the tip's either.
-        raise NotPlain(NOT_THE_TIPS if str(error) == NOT_AS_NAMED else str(error)) from None
+        raise NotPlain(kept_apart(tip_names) if str(error) in (NOT_AS_NAMED, NOT_THE_TIPS) else str(error)) from None
+
+
+def kept_apart(listed):
+    """What « start » stops on when the work tree is not the tip's: NOT_THE_TIPS, whose advice is a fresh clone; or,
+    when the tip holds two names that a disk which keeps no case apart, or stores a name in another Unicode form
+    (Windows, macOS), takes for one, CANNOT_KEEP_APART, since a fresh clone on that disk would not hold the tip
+    either. listed: the tip's (entries, folders), as tip_entries gave them, or None if they were not read. On a disk
+    that keeps them apart such a tip is held, and the proof passes: this is read only once it has failed."""
+    seen = set()
+    for path in ([*listed[0], *listed[1]] if listed else []):
+        name = unicodedata.normalize("NFC", path.decode("utf-8", errors="surrogateescape").rstrip("/")).casefold()
+        if name in seen:
+            return CANNOT_KEEP_APART
+        seen.add(name)
+    return NOT_THE_TIPS
 
 
 def said_again(args):
@@ -10555,6 +10616,240 @@ def push(clone, url, source, branch):
         raise HiveError(f"the push to your fork did not land ({error}). Nothing else was pushed: run the command again; if it "
                         "fails again, stop and tell the user to check that this machine may push to the fork, and if it may, to "
                         "take a fresh clone of the fork") from None
+
+
+# The local bee (tools/hive/local.sh, its launcher): on a machine where this tool runs in a container that holds no
+# credential, a command that pushes (ready, submit, release, duty) hands the push over instead (--hand-over <folder>).
+# The commit is made and checked as for a push, in the same store of the tool's own; what would be pushed is written
+# into a folder that the launcher alone reads, outside the clone and never shown to the project's sandbox: a bundle of
+# one branch, and a file that says what it is. The launcher checks both with the machine's own git, has hand-over-check
+# hold them to the command's own checks again in a container that never sees the clone, and only then pushes, to the
+# address and the branch it works out from its own command line. The hive cannot tell the commits apart from pushed ones.
+HAND_OVER_BUNDLE, HAND_OVER_FILE, HAND_OVER_VERSION = "handover.bundle", "handover.txt", "hive-handover 1"
+HAND_OVER_FILE_BYTES = 1024  # the file's few lines, with room to spare
+BUNDLE_HEAD_BYTES = 1 << 16  # a bundle's head: its version, one line for each commit it rests on, one for each branch, a blank line
+# What each action writes beyond « action », « branch » and « commit » (a deletion writes no commit).
+HAND_OVER_MORE = {"ready": (), "duty": (), "duty-release": (), "release": ("task",), "submit": ("base", "project-branch", "task"),
+                  "withdraw": None}
+HAND_OVER_VALUE = {"action": re.compile("|".join(HAND_OVER_MORE) + r"\Z"), "branch": re.compile(r"hive/[a-z0-9/-]{1,120}\Z"),
+                   "commit": re.compile(r"[0-9a-f]{40}\Z"), "base": re.compile(r"[0-9a-f]{40}\Z"), "project-branch": REVISION,
+                   "task": TASK_ID}
+SLOT_NOT_EMPTY = ("the folder given to --hand-over is not empty: it holds one hand-over at a time, and the launcher empties it once it has "
+                  "pushed or refused. Nothing was handed over: stop, and tell the user")
+NOT_A_HAND_OVER = "the hand-over is not one this tool writes ({what}): nothing may be pushed from it. Tell the user"
+
+
+def hand_over_slot(args):
+    """The folder --hand-over names, or None without it: named from the root, a folder (no link to one, nor on the way
+    to it), outside the clone, whose files project code may write, and empty: one hand-over at a time, never one that
+    an earlier command left. Asked before anything is made, so that a command that cannot hand over makes nothing."""
+    folder = getattr(args, "hand_over", None)
+    if folder is None:
+        return None
+    if getattr(args, "no_push", False):
+        raise HiveError("--hand-over hands the push to the local bee's launcher: it does not go with --no-push")
+    try:
+        plain = os.path.realpath(folder) == os.path.normpath(folder) and stat.S_ISDIR(os.lstat(folder).st_mode)  # (a relative name is not its real path)
+    except OSError:
+        plain = False
+    if not plain or of_the_clone(folder):
+        raise HiveError("--hand-over: a folder named from the root, which is no link and lies outside the clone (the local bee's launcher "
+                        "gives it). Nothing was handed over")
+    if os.listdir(folder):
+        raise HiveError(SLOT_NOT_EMPTY)
+    return folder
+
+
+def hand_over(store, fork, folder, action, branch, commit, base=None, more=()):
+    """In place of a push (push): writes into the hand-over's folder what the launcher is to push, then says so
+    (HANDED-OVER). As a push would, it first asks the fork whether a branch there leaves no room for this one
+    (in_the_way): the launcher's push could not tell that cause from the others. Then, in the store the commit was made
+    in, the bundle of the one branch: the commit and what it reaches, but for what `base` reaches (a candidate rests on
+    the project's commit, which the launcher fetches from the project itself); an ask, a release or a duty has no
+    history and rests on nothing. Then the file of lines, the bundle's description, last: the launcher reads a
+    hand-over only once that file is there. A deletion (commit None) writes the file alone."""
+    if commit is not None:
+        said = in_the_way(store, fork, branch)
+        if said:
+            raise HiveError(said)
+    if os.listdir(folder):
+        raise HiveError(SLOT_NOT_EMPTY)
+    lines = [HAND_OVER_VERSION, f"action {action}", f"branch {branch}"]
+    if commit is not None:
+        store.git("update-ref", f"refs/heads/{branch}", need_sha(commit))
+        store.git("bundle", "create", "--quiet", os.path.join(folder, HAND_OVER_BUNDLE), f"refs/heads/{branch}",
+                  *([f"^{need_sha(base)}"] if base is not None else []))
+        lines.append(f"commit {commit}")
+    lines += [f"{key} {value}" for key, value in more]
+    assert all(HAND_OVER_VALUE[line.partition(" ")[0]].match(line.partition(" ")[2]) for line in lines[1:])
+    with open(os.path.join(folder, HAND_OVER_FILE), "x", encoding="ascii") as written:
+        written.write("".join(f"{line}\n" for line in lines))
+    print(f"HANDED-OVER {commit if commit is not None else 'delete'} {branch}", flush=True)
+
+
+def crlf_guard(store, base_tree, tree):
+    """A candidate handed over from a machine whose editors may write CR LF line ends (the local bee, on Windows):
+    an error, said in one line, when a text file the candidate changes (no NUL in its first 8000 bytes, as git tells
+    one) holds a CR LF and the project's commit holds none at that path (nothing there, or a file without one). The bytes are the work, and nobody converts them; the worker
+    writes the file again with the project's line ends. A path is named only if the project's commit holds it
+    (named_paths). (Read in the store of the tool's own the candidate was made in, after check_structure: within the
+    project's bounds.)"""
+    listed = store.git("diff-tree", "-r", "-z", "--no-renames", need_sha(base_tree), need_sha(tree), raw=True).stdout.split(b"\0")
+    found = []
+    for head, path in zip(listed[0::2], listed[1::2]):
+        old_mode, new_mode, old, new, _ = head.decode("ascii").lstrip(":").split(" ")  # « :<old mode> <new mode> <old> <new> <status> », then the path
+        if new_mode not in ("100644", "100755"):
+            continue
+        data = store.git("cat-file", "blob", need_sha(new), raw=True).stdout
+        if b"\r\n" not in data or b"\0" in data[:8000]:  # (a NUL in its first 8000 bytes: a binary file, as git tells one, has no lines)
+            continue
+        if old_mode in ("100644", "100755") and b"\r\n" in store.git("cat-file", "blob", need_sha(old), raw=True).stdout:
+            continue
+        found.append(path.decode("utf-8", errors="surrogateescape"))
+    if found:
+        with Objects(store) as objects:
+            detail = named_paths(objects, base_tree, found)
+        raise HiveError(f"the candidate's lines end in CR LF where the project's commit has none {json.dumps(detail)}: nothing was handed over. "
+                        "Write those files again with the line ends the project's commit has (LF), then run submit again")
+
+
+def read_hand_over(folder):
+    """What a hand-over says ({key: value}), once its folder is shown to hold its file and its bundle and nothing
+    else (its file alone for a deletion), each a plain file, and every line of the file to be one of its own: the
+    version first, then each key once, each value of its key's form, the keys its action writes and no other, and
+    the branch the one that action pushes to."""
+    names = sorted(os.listdir(folder))
+    raw = first_bytes(os.path.join(folder, HAND_OVER_FILE), HAND_OVER_FILE_BYTES)  # (its lines, each key once, hold fewer bytes)
+    lines = raw.split(b"\n")
+    if lines[0] != HAND_OVER_VERSION.encode() or lines[-1] != b"":
+        raise HiveError(NOT_A_HAND_OVER.format(what=f"its {HAND_OVER_FILE} is missing, or is not that file"))
+    said = {}
+    for line in lines[1:-1]:
+        key, _, value = line.decode("ascii", errors="replace").partition(" ")
+        if key not in HAND_OVER_VALUE or key in said or not HAND_OVER_VALUE[key].match(value):
+            raise HiveError(NOT_A_HAND_OVER.format(what=f"a line of its {HAND_OVER_FILE} is not one of that file's"))
+        said[key] = value
+    more = HAND_OVER_MORE.get(said.get("action"), ())
+    keys = {"action", "branch"} | (set() if more is None else {"commit", *more})
+    if set(said) != keys:
+        raise HiveError(NOT_A_HAND_OVER.format(what=f"its {HAND_OVER_FILE} does not hold the lines its action writes"))
+    action, task = said["action"], said.get("task")
+    branches = {"ready": (READY_BRANCH,), "duty": (DUTY_BRANCH,), "duty-release": (DUTY_BRANCH,), "withdraw": (READY_BRANCH, DUTY_BRANCH),
+                "release": (RELEASE_BRANCH.format(task=task),), "submit": (SUBMIT_BRANCH.format(task=task),)}[action]
+    if said["branch"] not in branches:
+        raise HiveError(NOT_A_HAND_OVER.format(what=f"its branch is not the one {action} pushes to"))
+    if names != sorted([HAND_OVER_FILE] + ([] if more is None else [HAND_OVER_BUNDLE])) \
+            or not all(stat.S_ISREG(os.lstat(os.path.join(folder, name)).st_mode) for name in names):
+        raise HiveError(NOT_A_HAND_OVER.format(what="its folder holds another file than the hand-over's own"))
+    return said
+
+
+def bundle_head(path):
+    """(branches, prerequisites, where its pack begins) of a bundle, from the head git writes at its start:
+    [(commit, reference)], the commits it rests on, and the length of that head with its blank line."""
+    raw = first_bytes(path, BUNDLE_HEAD_BYTES)
+    head, ended, _ = raw.partition(b"\n\n")
+    lines = head.split(b"\n")
+    if not ended or lines[0] != b"# v2 git bundle":
+        raise HiveError(NOT_A_HAND_OVER.format(what="its bundle is not one git writes, or its head is longer than a hand-over's"))
+    branches, rests_on_ = [], []
+    for line in lines[1:]:
+        found = re.fullmatch(rb"(-?)([0-9a-f]{40})(?: (.*))?", line)
+        if found is None:
+            raise HiveError(NOT_A_HAND_OVER.format(what="a line of its bundle's head is not one git writes"))
+        if found.group(1):
+            rests_on_.append(found.group(2).decode())
+        else:
+            branches.append((found.group(2).decode(), (found.group(3) or b"").decode("ascii", errors="replace")))
+    return branches, rests_on_, len(head) + len(ended)
+
+
+def cmd_hand_over_check(args):
+    """The local bee's launcher, before it pushes: holds a hand-over to the checks the command that wrote it ran, in
+    a store of this tool's own made now, with no clone anywhere (the launcher runs it in a container that never sees
+    the clone, whose .git project code may have written). The project's settings and tasks are read from the project's
+    own address (hive_project), as the command read them. The hand-over's file and its bundle's head must say one
+    branch, the one its action pushes to (read_hand_over, bundle_head); git unpacks the bundle's pack (index-pack
+    --strict): every object hashed and held to git's own checks, and every object it names held, the project's commit
+    it rests on included. Then the commit, as bytes this tool hashes:
+      - an ask, a release, a duty's ask or release: no parent, the empty tree, and the marker its command writes, for
+        this login (read_marker, read_duty), a release for an open task of the project;
+      - a candidate: the marker for this login and the task, on the work commit (or on the project's commit itself
+        when the work changed nothing), which rests on the project's commit the file names, the one prerequisite of
+        the bundle, the marker's tree the work's; then candidate_proof and check_structure, as submit ran them.
+    It prints CHECKED <commit> (CHECKED delete <branch> for a deletion, which the launcher checks alone), or REFUSED
+    as submit does, or one line that says why the hand-over is not one this tool writes."""
+    if not LOGIN.match(args.login):
+        raise HiveError("--login: your GitHub login")
+    folder = args.hand_over
+    try:
+        plain = os.path.realpath(folder) == os.path.normpath(folder) and stat.S_ISDIR(os.lstat(folder).st_mode)
+    except OSError:
+        plain = False
+    if not plain:
+        raise HiveError("--hand-over: the folder of the hand-over, named from the root (the local bee's launcher gives it)")
+    said = read_hand_over(folder)
+    if said["action"] == "withdraw":
+        print(f"CHECKED delete {said['branch']}")
+        return
+    login, action, commit, branch = args.login, said["action"], said["commit"], said["branch"]
+    bundle = os.path.join(folder, HAND_OVER_BUNDLE)
+    branches, prerequisites, begins = bundle_head(bundle)
+    if branches != [(commit, f"refs/heads/{branch}")]:
+        raise HiveError(NOT_A_HAND_OVER.format(what="its bundle does not hold the one branch its file names, at the commit it names"))
+    if prerequisites != ([said["base"]] if action == "submit" else []):
+        raise HiveError(NOT_A_HAND_OVER.format(what="its bundle rests on another commit than the project's one its file names"
+                                                    if action == "submit" else "an ask, a release or a duty rests on no commit"))
+    not_made = NOT_A_HAND_OVER.format(what=f"its commit is not what {action} makes")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as place:
+        store = own_store(None, place)
+        config, tasks = hive_project(store, args.project, args.upstream_url)
+        task = tasks.get(said["task"]) if "task" in said else None
+        if "task" in said and (task is None or task.get("closed")):
+            raise HiveError(f"task {said['task']} is not an open task of the project: nothing may be pushed from this hand-over")
+        if action == "submit":
+            if said["project-branch"] != config["branch"]:
+                raise HiveError(NOT_A_HAND_OVER.format(what="its project's branch is not the one the project's settings name"))
+            tip = project_tip(store, project_address(config["repo"], args.upstream_url), config["branch"])
+        # The bundle's pack, unpacked by git into the store: each object hashed, checked as git's own checks (fsck)
+        # hold it, and each object it names held, in the pack or in the store (the project's commit it rests on).
+        most = config["limits"]["history_bytes"]  # (the most a candidate's commits may weigh: a ceiling for their pack too)
+        pack = first_bytes(bundle, begins + most + 1)[begins:]
+        if len(pack) > most:
+            raise HiveError(NOT_A_HAND_OVER.format(what="its bundle weighs more than the project lets a candidate's commits weigh"))
+        if store.git("index-pack", "--stdin", "--fix-thin", "--strict", stdin=pack, raw=True, check=False, timeout=COPY_SECONDS).returncode != 0:
+            raise HiveError(NOT_A_HAND_OVER.format(what="git could not take its bundle: the commit it rests on is not the project's, or an object is not one git writes"))
+        with Objects(store) as objects:
+            raw = objects.held("commit", commit)
+            tree, parents = commit_header(raw)
+            message = raw.partition(b"\n\n")[2].decode("utf-8", errors="replace")
+            if action != "submit":
+                marker = read_duty(message) if action.startswith("duty") else read_marker(message)
+                wanted = {"ready": "ready", "release": "release", "duty": "duty", "duty-release": "release"}[action]
+                if parents or tree != EMPTY_TREE or marker is None or marker["action"] != wanted or marker["member"].lower() != login.lower() \
+                        or (action == "release" and marker["task"] != said["task"]):
+                    raise HiveError(not_made)
+                print(f"CHECKED {commit}")
+                return
+            marker = read_marker(message)
+            if marker is None or marker["action"] != "submit" or marker["task"] != task["id"] or marker["member"].lower() != login.lower() \
+                    or len(parents) != 1:
+                raise HiveError(not_made)
+            work = parents[0]
+            if work != said["base"]:
+                work_tree, below = commit_header(objects.held("commit", work))
+                if below != [said["base"]] or work_tree != tree:
+                    raise HiveError(not_made)
+            elif tree != commit_header(objects.held("commit", work))[0]:
+                raise HiveError(not_made)
+        own = str(store.root)
+        try:
+            candidate_proof(store, tip, commit, task, config["limits"])
+            check_structure(own, tree_of(own, tip), merge_tree(own, tip, work, config["limits"]), task, config)
+        except Refusal as refusal:
+            print(f"REFUSED ({refusal.reason}): {REASONS[refusal.reason]} {json.dumps(refusal.detail)}")
+            sys.exit(1)
+    print(f"CHECKED {commit}")
 
 
 def cmd_setup(args):
@@ -10890,7 +11185,7 @@ def cmd_next(args):
                 **({"kind": "probe"} if task.get("kind") == "probe" and probe_in_feed(feed, task["id"]) else {}),
                 **feed_counts(feed, task["id"])}
         if needs_data(config):  # (the project's files and documents, where each is: data, as the task's text is)
-            data["needs"] = needs_data(config)
+            data["needs"] = needs_data(config, args.needs_home, args.needs_shown)
         print(f"TASK {task['id']}")
         print(f"DEAL {deal['at']}")
         print(f"UNTIL {deal['until']}")
@@ -11315,10 +11610,14 @@ def cmd_ready(args):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
     fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    slot = hand_over_slot(args)
     if args.withdraw:
         if args.no_push:
             raise HiveError("--withdraw is a push: it does not go with --no-push")
         if listed_tip(clone, fork, READY_BRANCH) is not None:
+            if slot is not None:
+                hand_over(clone, fork, slot, "withdraw", READY_BRANCH, None)
+                return
             push(clone, fork, "", READY_BRANCH)
         print("WITHDRAWN")
         return
@@ -11352,8 +11651,12 @@ def cmd_ready(args):
             print(f"NOT-PUSHED {commit}: the ask is made and nothing was pushed; run the same command again without --no-push to "
                   "make the ask anew and push it")
             return
-        push(store, fork, commit, READY_BRANCH)
-    print(f"ASKED {commit}")
+        if slot is not None:
+            hand_over(store, fork, slot, "ready", READY_BRANCH, commit)
+        else:
+            push(store, fork, commit, READY_BRANCH)
+    if slot is None:
+        print(f"ASKED {commit}")
     print("THEN: stop here. The hive deals at its next run (about an hour): the next run of this worker finds the task. If this "
           f"worker will not run again, take the ask back so that no task waits for it: hive.py ready --project {config['repo']} "
           f"{said_again(args)} --withdraw")
@@ -11386,6 +11689,7 @@ def cmd_submit(args):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
     fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    slot = hand_over_slot(args)
     config, tasks = hive_project(clone, args.project, args.upstream_url)
     task = tasks.get(args.task)
     if task is None:
@@ -11456,7 +11760,11 @@ def cmd_submit(args):
         # moved to it: the branch HEAD names, by its own name, and HEAD itself when it names a commit: never a
         # reference that another one would lead to. (The branch's log names who moved it.)
         # (The push goes first: nothing the clone's own branch is, or cannot be made, holds a checked candidate back.)
-        if not args.no_push:
+        if slot is not None:
+            crlf_guard(store, base_tree, tree)
+            hand_over(store, fork, slot, "submit", branch, marker, base=base,
+                      more=(("base", base), ("project-branch", config["branch"]), ("task", task["id"])))
+        elif not args.no_push:
             push(store, fork, marker, branch)
             print(f"PUSHED {marker}", flush=True)  # (said at once, and not kept back: whatever the clone then does, the candidate is with the hive)
         try:
@@ -11516,6 +11824,7 @@ def cmd_release(args):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
     fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    slot = hand_over_slot(args)
     config, tasks = hive_project(clone, args.project, args.upstream_url)
     task = tasks.get(args.task)
     if task is None:
@@ -11557,8 +11866,12 @@ def cmd_release(args):
             print(f"NOT-PUSHED {commit}: the release is made and nothing was pushed; run the same command again without --no-push to "
                   "make the release anew and push it")
             return
-        push(store, fork, commit, RELEASE_BRANCH.format(task=task["id"]))
-    print(f"RELEASED {commit}")
+        if slot is not None:
+            hand_over(store, fork, slot, "release", RELEASE_BRANCH.format(task=task["id"]), commit, more=(("task", task["id"]),))
+        else:
+            push(store, fork, commit, RELEASE_BRANCH.format(task=task["id"]))
+    if slot is None:
+        print(f"RELEASED {commit}")
     if args.because == "cannot_run":
         print("THEN: stop here, and ask for no task: this machine cannot run the project's sandbox. The hive ends the deal at its next "
               "run (about an hour). Tell the user, and ask again only from a machine that runs it")
@@ -11602,10 +11915,14 @@ def cmd_duty(args):
         raise HiveError("--login: your GitHub login")
     clone = plain_clone()
     fork, login = own_fork(clone, args.project, args.login, args.fork), args.login
+    slot = hand_over_slot(args)
     if args.withdraw:
         if args.no_push or args.release:
             raise HiveError("--withdraw takes the ask back, and is a push: it goes with neither --no-push nor --release")
         if listed_tip(clone, fork, DUTY_BRANCH) is not None:
+            if slot is not None:
+                hand_over(clone, fork, slot, "withdraw", DUTY_BRANCH, None)
+                return
             push(clone, fork, "", DUTY_BRANCH)
         print("WITHDRAWN")
         return
@@ -11680,15 +11997,20 @@ def cmd_duty(args):
             print(f"NOT-PUSHED {commit}: the {'release' if args.release else 'ask'} is made and nothing was pushed; run the same command again "
                   "without --no-push to make it anew and push it")
             return
-        push(store, fork, commit, DUTY_BRANCH)
+        if slot is not None:
+            hand_over(store, fork, slot, "duty-release" if args.release else "duty", DUTY_BRANCH, commit)
+        else:
+            push(store, fork, commit, DUTY_BRANCH)
     if args.release:
-        print(f"RELEASED {commit}")
+        if slot is None:
+            print(f"RELEASED {commit}")
         # The wait Ledger.duty_wait will count: the first wait from the release's line, never doubled; a wait of an earlier
         # duty that ran out was over when this duty was dealt, and is longer only if the project's backoff_hours grew since.
         print(f"THEN: stop here. The hive ends the duty at its next run (about an hour), then deals you no duty for {config['backoff_hours']} "
               "hour(s) from then, the first wait (longer only if a wait of an earlier duty of yours ends later)")
     else:
-        print(f"ASKED {commit}")
+        if slot is None:
+            print(f"ASKED {commit}")
         print(f"THEN: stop here. The hive deals one duty of this role at a time, at its pace, to the least loaded account that asked: run "
               f"this again after its next run to see whether it is yours. The hive reads the ask only if the project's settings trust your "
               f"account with this role. To take the ask back: hive.py duty --project {config['repo']} {said_again(args)} --withdraw")
@@ -11960,11 +12282,19 @@ def main(argv=None):
         if pushes:
             p.add_argument("--no-push", action="store_true", help="make the commit without pushing it")
 
+    def hands_over(p):
+        p.add_argument("--hand-over", help="the local bee's launcher only: write what would be pushed into this empty folder, for the "
+                                           "launcher to push, in place of the push")
+
     def needs_flags(p):
         p.add_argument("--needs-accepted", type=needs_accepted, help="the digest of the project's needs your user accepted, as hive.py needs "
                                                                      "printed it (NEEDS-DIGEST): its files and documents may then be fetched, and its packages installed")
         p.add_argument("--despite-needs", action="store_true", help="go on though this machine lacks what the project needs: only when your "
                                                                     "user's own words say so")
+        p.add_argument("--needs-home", type=needs_home_given, help="the local bee's launcher only: the home in which the needs' folder "
+                                                                    "(.hive/needs/<owner>/<name>) lies in its container")
+        p.add_argument("--needs-shown", type=needs_shown_given, help="the local bee's launcher only: that folder as the user's machine "
+                                                                      "names it, for the task data's places (with --needs-home)")
 
     p = sub.add_parser("needs", help="volunteer, before the yes: what the project needs of a worker's machine, as its own address gives it "
                                      "(no clone, no login: run anywhere)")
@@ -11989,6 +12319,7 @@ def main(argv=None):
     p.set_defaults(run=cmd_start)
     p = sub.add_parser("ready", help="volunteer: ask the hive for a task (pushes the ask to your fork)")
     worker_side(p, pushes=True)
+    hands_over(p)
     needs_flags(p)
     p.add_argument("--tier", type=int, default=3, help="the hardest tier this worker takes (1, 2 or 3)")
     p.add_argument("--prefer", help="the part of the project your user's prompt prefers: one of the files its tasks name, as the project's "
@@ -11998,6 +12329,7 @@ def main(argv=None):
     p = sub.add_parser("submit", help="volunteer: commit the task's files, check them as the hive will, mark the candidate of your "
                                       "deal and push it to your fork")
     worker_side(p, pushes=True)
+    hands_over(p)
     p.add_argument("--task", required=True)
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
     p.add_argument("--message", help="one plain line that says what you changed (the work commit's title)")
@@ -12006,6 +12338,7 @@ def main(argv=None):
     p = sub.add_parser("release", help="volunteer: give back the deal you hold, when the task is out of your reach or this machine cannot "
                                        "run the project's sandbox (pushes the release to your fork)")
     worker_side(p, pushes=True)
+    hands_over(p)
     p.add_argument("--state", required=True, help="a clone of the project's branch hive-state (the hive's state for it)")
     p.add_argument("--task", required=True)
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
@@ -12024,12 +12357,21 @@ def main(argv=None):
     p = sub.add_parser("duty", help="trusted account: ask the hive for a duty of a role, see the duty you hold, or give it back (pushes to "
                                     "your fork)")
     worker_side(p, pushes=True)
+    hands_over(p)
     p.add_argument("--state", help="a clone of the project's branch hive-state (the hive's state for it); needed but with --withdraw")
     p.add_argument("--role", default="cut", choices=ROLES, help="the role of the duty (cut: the project's cutting)")
     p.add_argument("--release", choices=RELEASES, help="give back the duty you hold: out_of_reach (you cannot do it) or cannot_run (this "
                                                        "machine cannot run what it needs)")
     p.add_argument("--withdraw", action="store_true", help="take the ask back instead")
     p.set_defaults(run=cmd_duty)
+    p = sub.add_parser("hand-over-check", help="the local bee's launcher only: hold a hand-over to the checks the command that wrote it "
+                                             "ran, in a store of this tool's own, with no clone")
+    p.set_defaults(volunteer=True)
+    p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name")
+    p.add_argument("--login", required=True, help="the GitHub login the hand-over is for")
+    p.add_argument("--hand-over", required=True, help="the folder of the hand-over: its handover.txt and its handover.bundle")
+    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
+    p.set_defaults(run=cmd_hand_over_check)
     args = parser.parse_args(argv)
     # A volunteer-side command, and a quiet one (the publisher), whichever function runs git for it, repeats nothing git
     # said (VOLUNTEER_SIDE), and ends on one line whatever happens.
@@ -12044,6 +12386,8 @@ def main(argv=None):
             searched = [entry for name in ("PATH", "GIT_EXEC_PATH") if name in os.environ for entry in os.environ[name].split(os.pathsep)]
             if any(not os.path.isabs(entry) or of_the_clone(entry) for entry in searched):
                 raise HiveError(RELATIVE_PATH)
+            if getattr(args, "needs_shown", None) is not None and getattr(args, "needs_home", None) is None:
+                raise HiveError("--needs-shown names the folder that --needs-home holds: it goes with --needs-home")
         else:
             whole_paths(args)
         args.run(args)
