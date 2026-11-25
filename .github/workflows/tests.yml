@@ -1,7 +1,7 @@
 # Tests of the hive's tooling, in three jobs, each on a machine of its own: the judges' meta-tests build images and
 # run containers, and need a machine's disk of their own. The hive protocol's (docs/protocol.md): tools/hive/test_hive.py,
 # test_schedule.py, test_page.py and test_artifact.py, on local git repositories and archives the tests make, without
-# network. The judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project and
+# network; and the local bee's network gate (test_egress.py), on the loopback, the network beyond stood in for. The judges' (tools/judge/): the common judge's unit tests and meta-tests against the honest toy project and
 # its malicious variants (test_judge.py), and the judge's second kind on its own toy project, alone and through the
 # hive's own judging (test_reference.py). The third kind's, on its own toy project (test_relay.py). The variants' code
 # runs only in the judge's containers (without network, read-only). Read-only: no secret, no write, nothing of a pull
@@ -38,6 +38,8 @@ jobs:
         run: python3 tools/hive/test_page.py
       - name: What a job takes from an earlier job's archive
         run: python3 tools/hive/test_artifact.py
+      - name: The local bee's network gate (on the loopback only)
+        run: python3 tools/hive/test_egress.py
 
   judges:
     name: The judges
