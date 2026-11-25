@@ -145,8 +145,10 @@ ask back), then its THEN line. submit --hand-over refuses besides, in one line, 
 the project's commit has none. hand-over-check holds such a folder to the checks the command ran, in a store of its
 own and with no clone, and prints « CHECKED <commit> <SHA-256 of handover.txt> <SHA-256 of handover.bundle> » (« CHECKED
 delete <branch> <SHA-256 of handover.txt> »), or REFUSED as submit does: the launcher pushes only the bytes so hashed.
-Only the launcher reads these two lines. next, ready and start take --needs-home /hive/home and --needs-shown: where
-the needs' folder lies in the container, and how the user's machine names it.
+names, at the launcher's check, prints « NAMES-HELD <how many> » when a disk of the machine's system can hold the
+project's tip, or one line that says it cannot. Only the launcher reads these three lines. next, ready and start take
+--needs-home /hive/home and --needs-shown: where the needs' folder lies in the container, and how the user's machine
+names it.
 
 Standard library only: the job that holds the write token installs nothing.
 """
@@ -10491,10 +10493,14 @@ def kept_apart(root, listed):
 
 
 def folded(root, one, other):
-    """True if the disk finds one and the same entry under the two names (of the work tree `root`, as bytes), each
-    looked at without following a link."""
+    """True if the disk takes the two names (of the work tree `root`, as bytes) for one: it finds one and the same
+    entry under both, each looked at without following a link, and its folders do not list both names as they are
+    written. Two names of one file that the folder lists both (hard links, which project code can make on any disk)
+    are two entries the disk keeps apart; a disk that folds case or Unicode forms lists the one name it stores."""
     try:
-        return os.path.samestat(os.lstat(os.path.join(root, one)), os.lstat(os.path.join(root, other)))
+        if not os.path.samestat(os.lstat(os.path.join(root, one)), os.lstat(os.path.join(root, other))):
+            return False
+        return not all(os.path.basename(path) in os.listdir(os.path.join(root, os.path.dirname(path))) for path in (one, other))
     except OSError:
         return False
 
@@ -10672,6 +10678,7 @@ BUNDLE_HEAD_BYTES = 1 << 16  # a bundle's head: its version, one line for each c
 # CHANGED_BYTES_MOST together at most, and its folders and commits are few. Unpacked by this tool to find where each
 # object ends, at about 100 MB a second: ten seconds at most.
 HAND_OVER_INFLATED = 1 << 30
+COMMIT_HEADER_BYTES = 300  # a line of a handed-over commit's head: « author <login> <<login>@users.noreply.github.com> <instant> +0000 » is under 150
 # What each action writes beyond « action », « branch » and « commit » (a deletion writes no commit).
 HAND_OVER_MORE = {"ready": (), "duty": (), "duty-release": (), "release": ("task",), "submit": ("base", "project-branch", "task"),
                   "withdraw": None}
@@ -10712,12 +10719,17 @@ def duty_message(role, at, login, deal=None, because=None):
 def made_here(raw, action, marker=None):
     """True if a commit's bytes (as Objects holds them) are those its command writes: its head says its tree, its
     parents, its author and its committer, in that order, and nothing else (no signature, no encoding, no other
-    header); and its message is, byte for byte, the one the command writes with the marker's own values (marker:
-    read_marker's, or read_duty's), its instant taken from its title. action « work »: a candidate's work commit, whose
-    message is one plain line (ONE_LINE) that is no marker's line (MARKER_LINE), as submit's --message is."""
+    header), each line of it COMMIT_HEADER_BYTES at most (in the local bee's container no name is passed to git: the
+    author and the committer are the login and its address at GitHub, Clone.identity; a NUL in a header is git's own
+    to refuse, index-pack --strict, nulInHeader); and its message is, byte for byte, the one the command writes with
+    the marker's own values (marker: read_marker's, or read_duty's), its instant taken from its title. action « work »:
+    a candidate's work commit, whose message is one plain line (ONE_LINE) that is no marker's line (MARKER_LINE), as
+    submit's --message is."""
     head, _, body = raw.partition(b"\n\n")
-    keys = [line.partition(b" ")[0] for line in head.split(b"\n")]
-    if keys != [b"tree"] + [b"parent"] * keys.count(b"parent") + [b"author", b"committer"]:
+    lines = head.split(b"\n")
+    keys = [line.partition(b" ")[0] for line in lines]
+    if keys != [b"tree"] + [b"parent"] * keys.count(b"parent") + [b"author", b"committer"] \
+            or any(len(line) > COMMIT_HEADER_BYTES for line in lines):
         return False
     message = body.decode("utf-8", errors="replace")
     if action == "work":
@@ -10879,47 +10891,64 @@ def bundle_head(data):
 
 
 def pack_bounds(pack, limits):
-    """Raises unless each object of a bundle's pack is no larger than the project lets a candidate's objects be (a
-    file: limits.file_bytes; a folder, a commit, a tag: HISTORY_OBJECT_BYTES; what a difference from another object
-    makes: the larger of the two), and all of them together unpack to HAND_OVER_INFLATED at most. Read before git
-    unpacks the pack (index-pack --strict unpacks every object whole to hash it): a few bytes of a pack can declare an
-    object of gigabytes. Each object's size is read as its head declares it, before anything of it is unpacked, and
-    so is the size a difference makes, from the difference's own first bytes; each is then unpacked no further than
-    its size, to find where the next object begins, and never kept. What this reader cannot follow is not a pack git
-    writes; the rest of the pack's form is git's to check."""
+    """Raises unless each object of a bundle's pack is no larger than the project lets a candidate's objects be, and
+    all of them together unpack to HAND_OVER_INFLATED at most. A file may be limits.file_bytes; a folder, a commit, a
+    tag HISTORY_OBJECT_BYTES. A difference makes an object of the kind of the one it applies to: by its distance, an
+    object earlier in the pack, whose kind is known here (followed through the differences it rests on), and the
+    bound is that kind's; by its id, an object of the pack or of the project's history, whose kind is not known here,
+    and the bound is the larger of the two (limits.file_bytes, which a project's file holds to LIMITS_MOST, is never
+    above HISTORY_OBJECT_BYTES). Read before git unpacks the pack (index-pack --strict unpacks every object whole to
+    hash it): a few bytes of a pack can declare an object of gigabytes. Each object's size is read as its head
+    declares it, before anything of it is unpacked, and so is the size a difference makes, from the difference's own
+    first bytes; each is then unpacked no further than its size, to find where the next object begins, and never
+    kept. pack: bytes, or a memoryview of them. What this reader cannot follow is not a pack git writes; the rest of
+    the pack's form is git's to check."""
     not_git = HiveError(NOT_A_HAND_OVER.format(what="its bundle's pack is not one git writes"))
     too_large = HiveError(NOT_A_HAND_OVER.format(what="an object of its bundle is larger than the project lets a candidate's objects be"))
-    if len(pack) < 32 or pack[:4] != b"PACK" or int.from_bytes(pack[4:8], "big") not in (2, 3):
+    view = memoryview(pack)
+    if len(view) < 32 or view[:4] != b"PACK" or int.from_bytes(view[4:8], "big") not in (2, 3):
         raise not_git
-    view, count, at, total = memoryview(pack), int.from_bytes(pack[8:12], "big"), 12, 0
+    count, at, total, kinds = int.from_bytes(view[8:12], "big"), 12, 0, {}
+    largest = max(limits["file_bytes"], HISTORY_OBJECT_BYTES)
 
-    def number(at, shift):  # (a size, 7 bits a byte, the lowest first: its value and where it ends)
-        value = 0
-        while True:
-            if at >= len(pack) or shift > 70:
-                raise not_git
-            value |= (pack[at] & 0x7f) << shift
-            at, shift = at + 1, shift + 7
-            if not pack[at - 1] & 0x80:
-                return value, at
+    def bound(kind):
+        return limits["file_bytes"] if kind == 3 else HISTORY_OBJECT_BYTES if kind in (1, 2, 4) else largest
+
+    def byte(at):
+        if at >= len(view):
+            raise not_git
+        return view[at]
 
     for _ in range(count):
-        if at >= len(pack):
-            raise not_git
-        kind, size = (pack[at] >> 4) & 7, pack[at] & 15
-        if pack[at] & 0x80:
-            more, at = number(at + 1, 0)
-            size |= more << 4
-        else:
+        begins = at
+        kind, size, shift = (byte(at) >> 4) & 7, byte(at) & 15, 4
+        while byte(at) & 0x80:  # (a size, 7 bits a byte after the first's 4, the lowest first)
             at += 1
-        if kind == 6:  # a difference from an object earlier in the pack, named by its distance
-            while at < len(pack) and pack[at] & 0x80:
+            if shift > 64:
+                raise not_git
+            size |= (byte(at) & 0x7f) << shift
+            shift += 7
+        at += 1
+        if kind == 6:  # a difference from an object earlier in the pack, named by its distance back (git's own form of number)
+            distance = byte(at) & 0x7f
+            while byte(at) & 0x80:  # (as long as the pack's bytes run: byte() ends it)
                 at += 1
+                distance = ((distance + 1) << 7) | (byte(at) & 0x7f)
             at += 1
+            if not 0 < distance <= begins - 12 or begins - distance not in kinds:
+                raise not_git
+            kinds[begins] = kinds[begins - distance]
         elif kind == 7:  # a difference from an object named by its id
+            if at + 20 > len(view):
+                raise not_git
             at += 20
-        elif kind not in (1, 2, 3, 4) or size > (limits["file_bytes"] if kind == 3 else HISTORY_OBJECT_BYTES):
-            raise not_git if kind not in (1, 2, 3, 4) else too_large
+            kinds[begins] = None
+        elif kind in (1, 2, 3, 4):
+            if size > bound(kind):
+                raise too_large
+            kinds[begins] = kind
+        else:
+            raise not_git
         total += size
         if total > HAND_OVER_INFLATED:
             raise too_large
@@ -10946,12 +10975,12 @@ def pack_bounds(pack, limits):
             made = difference_made(first)
             if made is None:
                 raise not_git
-            if made > max(limits["file_bytes"], HISTORY_OBJECT_BYTES):
+            if made > bound(kinds[begins]):
                 raise too_large
             total += made
             if total > HAND_OVER_INFLATED:
                 raise too_large
-    if len(pack) - at != 20:  # (the pack's own checksum, which git checks)
+    if len(view) - at != 20:  # (the pack's own checksum, which git checks)
         raise not_git
 
 
@@ -11034,7 +11063,7 @@ def cmd_hand_over_check(args):
         if prerequisites != ([said["base"]] if action == "submit" else []):
             raise HiveError(NOT_A_HAND_OVER.format(what="its bundle rests on another commit than the project's one its file names"
                                                         if action == "submit" else "an ask, a release or a duty rests on no commit"))
-        pack = bundle[begins:]
+        pack = memoryview(bundle)[begins:]  # (no copy: index-pack and pack_bounds read the bundle's own bytes)
         if len(pack) > most:
             raise HiveError(NOT_A_HAND_OVER.format(what="its bundle weighs more than the project lets a candidate's commits weigh"))
         pack_bounds(pack, config["limits"])
@@ -11074,6 +11103,55 @@ def cmd_hand_over_check(args):
                 print(f"REFUSED ({refusal.reason}): {REASONS[refusal.reason]} {json.dumps(refusal.detail)}")
                 sys.exit(1)
     print(f"CHECKED {commit} {hashlib.sha256(written).hexdigest()} {hashlib.sha256(bundle).hexdigest()}")
+
+
+# What a disk of each system the local bee runs on cannot hold (cmd_names): on Windows and macOS, as their disks
+# commonly come, two names that differ only by their case or by the Unicode form of a letter; on Windows besides, a
+# name of a device (CON, NUL, COM1…, with any extension), one that ends in a dot or a space, or that holds a character
+# its disks refuse. A Linux disk holds them all.
+DISK_SYSTEMS = ("linux", "macos", "windows")
+WINDOWS_DEVICE = re.compile(r"(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?\Z", re.IGNORECASE | re.DOTALL)
+WINDOWS_REFUSED = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]\Z')
+
+
+def names_not_held(paths, system):
+    """The first path, or the first two, of these (bytes, folders without their last « / ») that a disk of this
+    system cannot hold, or []: a name of a path that Windows refuses (WINDOWS_DEVICE, WINDOWS_REFUSED), or two paths
+    that are one under NFC and casefold (as kept_apart reads them)."""
+    if system == "linux":
+        return []
+    seen = {}
+    for path in paths:
+        text = path.decode("utf-8", errors="surrogateescape")
+        if system == "windows" and any(WINDOWS_DEVICE.match(part) or WINDOWS_REFUSED.search(part) for part in text.split("/")):
+            return [path]
+        name = unicodedata.normalize("NFC", text).casefold()
+        if name in seen:
+            return [seen[name], path]
+        seen[name] = path
+    return []
+
+
+def cmd_names(args):
+    """The local bee's launcher, at its check, before any ask: whether a disk of the machine's system (--system) can
+    hold the project's tip as it is (names_not_held). Read with no clone, in a store of this tool's own: the project's
+    settings from its own address (hive_project), its tip (project_tip), and the tip's entries and folders from their
+    own bytes (tip_entries). NAMES-HELD <how many>, or one line that names what the disk cannot hold: the project's
+    own paths, which the tip holds."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as place:
+        store = own_store(None, place)
+        config, _ = hive_project(store, args.project, args.upstream_url)
+        tip = project_tip(store, project_address(config["repo"], args.upstream_url), config["branch"])
+        with Objects(store) as objects:
+            entries, folders = tip_entries(objects, tip, time.monotonic() + PROOF_SECONDS)
+    paths = [*entries, *sorted(folder.rstrip(b"/") for folder in folders)]
+    found = names_not_held(paths, args.system)
+    if found:
+        shown = json.dumps([path.decode("utf-8", errors="replace")[:200] for path in found])
+        raise HiveError(f"the project's tip holds {'two names' if len(found) == 2 else 'a name'} that a disk of this machine ({args.system}) cannot "
+                        f"hold {shown}: no clone on this disk would hold the tip. Ask for no task: tell the user that this project cannot be "
+                        "worked from this machine")
+    print(f"NAMES-HELD {len(paths)}")
 
 
 def cmd_setup(args):
@@ -12593,6 +12671,13 @@ def main(argv=None):
     p.add_argument("--hand-over", required=True, help="the folder of the hand-over: its handover.txt and its handover.bundle")
     p.add_argument("--upstream-url", help=argparse.SUPPRESS)
     p.set_defaults(run=cmd_hand_over_check)
+    p = sub.add_parser("names", help="the local bee's launcher only: whether a disk of this machine's system can hold the project's tip, "
+                                   "before any ask")
+    p.set_defaults(volunteer=True)
+    p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name")
+    p.add_argument("--system", required=True, choices=sorted(DISK_SYSTEMS), help="the machine's system, as the launcher tells it")
+    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
+    p.set_defaults(run=cmd_names)
     args = parser.parse_args(argv)
     # A volunteer-side command, and a quiet one (the publisher), whichever function runs git for it, repeats nothing git
     # said (VOLUNTEER_SIDE), and ends on one line whatever happens.

@@ -13477,7 +13477,7 @@ class TestTheSettingsList(unittest.TestCase):
             self.assertFalse(self.loads(self.laid(self.MINIMAL, "members.per_guardian", covered)), "and do not load where it names none")
 
 
-LAUNCHER_LINES = {"HANDED-OVER", "CHECKED"}  # what hand-overs print, for the local bee's launcher alone (docs: the module's own)
+LAUNCHER_LINES = {"HANDED-OVER", "CHECKED", "NAMES-HELD"}  # what hand-overs print, for the local bee's launcher alone (docs: the module's own)
 
 
 class TestTheWorkersGuide(unittest.TestCase):
@@ -20082,9 +20082,10 @@ class TestTheHandOverCheck(HandingOver):
         """A commit of these very bytes, written into the clone under its id."""
         return sh("git", "hash-object", "-t", "commit", "--literally", "-w", "--stdin", cwd=self.alice.work, stdin=raw).stdout.strip()
 
-    def crafted(self, objects):
-        """An ask's hand-over whose bundle's pack holds these objects and nothing git wrote ([(kind, the size its head
-        declares, the bytes after its head)]), under a commit it does not hold."""
+    def crafted(self, objects, count=None):
+        """An ask's hand-over whose bundle's pack holds these objects and nothing git wrote, under a commit it does not
+        hold: each (kind, the size its head declares, the bytes after its head), or bytes laid as they are. count: what
+        the pack's head says it holds (by default, as many as there are)."""
         def head(kind, size):
             rest, out = size >> 4, bytearray([(kind << 4) | (size & 15)])
             while rest:
@@ -20093,7 +20094,8 @@ class TestTheHandOverCheck(HandingOver):
                 rest >>= 7
             return bytes(out)
 
-        pack = b"PACK" + struct.pack(">II", 2, len(objects)) + b"".join(head(kind, size) + rest for kind, size, rest in objects)
+        laid = [entry if isinstance(entry, bytes) else head(entry[0], entry[1]) + entry[2] for entry in objects]
+        pack = b"PACK" + struct.pack(">II", 2, len(objects) if count is None else count) + b"".join(laid)
         pack += hashlib.sha1(pack).digest()
         commit = "1" * 40
         (self.slot / hive.HAND_OVER_BUNDLE).write_bytes(b"# v2 git bundle\n" + commit.encode() + b" refs/heads/hive/ready\n\n" + pack)
@@ -20112,22 +20114,38 @@ class TestTheHandOverCheck(HandingOver):
                 out[-1] |= 0x80
         return bytes(out)
 
+    TOO_LARGE = ("the hand-over is not one this tool writes (an object of its bundle is larger than the project lets a candidate's objects "
+                 "be): nothing may be pushed from it. Tell the user")
+    NOT_GIT = "the hand-over is not one this tool writes (its bundle's pack is not one git writes): nothing may be pushed from it. Tell the user"
+    GIT_REFUSES = ("the hand-over is not one this tool writes (git could not take its bundle: the commit it rests on is not the project's, or an "
+                   "object is not one git writes): nothing may be pushed from it. Tell the user")
+
     def test_each_object_is_held_to_the_projects_bounds_before_git_unpacks_it(self):
-        too_large = ("the hand-over is not one this tool writes (an object of its bundle is larger than the project lets a candidate's objects "
-                     "be): nothing may be pushed from it. Tell the user")
-        not_git = "the hand-over is not one this tool writes (its bundle's pack is not one git writes): nothing may be pushed from it. Tell the user"
-        most = CONFIG["limits"]["file_bytes"]
-        difference = self.sizes(10, max(most, hive.HISTORY_OBJECT_BYTES) + 1)  # (one byte more than any object may be, well under all of them together)
+        most, folder = CONFIG["limits"]["file_bytes"], hive.HISTORY_OBJECT_BYTES
+        x = zlib.compress(b"x")
+        after_x = bytes([len(x) + 1])  # (the distance back to an object of one byte laid first: its head, then its stream)
+
+        def difference(makes):
+            data = self.sizes(1, makes)
+            return zlib.compress(data), len(data)
+
         for name, objects, said in (
-                ("a file that declares a terabyte", [(3, 1 << 40, zlib.compress(b"x"))], too_large),
-                ("a file that declares one byte more than the project takes", [(3, most + 1, zlib.compress(b"x"))], too_large),
-                ("a folder that declares more than a folder may be", [(2, hive.HISTORY_OBJECT_BYTES + 1, zlib.compress(b"x"))], too_large),
-                ("a difference that makes one byte more than any object may be", [(7, len(difference), b"\x11" * 20 + zlib.compress(difference))], too_large),
-                ("a difference by distance that makes as much", [(3, 1, zlib.compress(b"x")), (6, len(difference), b"\x05" + zlib.compress(difference))],
-                 too_large),
-                ("a file that unpacks to less than it declares", [(3, 5, zlib.compress(b"x"))], not_git),
-                ("a file that unpacks to more than it declares", [(3, 1, zlib.compress(b"xy"))], not_git),
-                ("an object of no kind", [(5, 1, zlib.compress(b"x"))], not_git)):
+                ("a file that declares a terabyte", [(3, 1 << 40, x)], self.TOO_LARGE),
+                ("a file that declares one byte more than the project takes", [(3, most + 1, x)], self.TOO_LARGE),
+                ("a folder that declares more than a folder may be", [(2, folder + 1, x)], self.TOO_LARGE),
+                ("a difference by id that makes one byte more than any object may be",
+                 [(7, difference(max(most, folder) + 1)[1], b"\x11" * 20 + difference(max(most, folder) + 1)[0])], self.TOO_LARGE),
+                # A difference makes an object of its base's kind: from a file by distance, a file's bound; by id, the
+                # base's kind is not known here, and the bound is the larger one (git then finds no such base).
+                ("a difference from a file, by distance, that makes one byte more than a file may be",
+                 [(3, 1, x), (6, difference(most + 1)[1], after_x + difference(most + 1)[0])], self.TOO_LARGE),
+                ("a difference from a folder, by distance, that makes one byte more than a folder may be",
+                 [(2, 1, x), (6, difference(folder + 1)[1], after_x + difference(folder + 1)[0])], self.TOO_LARGE),
+                ("a difference by id that makes one byte more than a file may be, its base's kind unknown",
+                 [(7, difference(most + 1)[1], b"\x11" * 20 + difference(most + 1)[0])], self.GIT_REFUSES),
+                ("a file that unpacks to less than it declares", [(3, 5, x)], self.NOT_GIT),
+                ("a file that unpacks to more than it declares", [(3, 1, zlib.compress(b"xy"))], self.NOT_GIT),
+                ("an object of no kind", [(5, 1, x)], self.NOT_GIT)):
             self.empty_slot()
             with self.subTest(name=name):
                 self.crafted(objects)
@@ -20136,7 +20154,37 @@ class TestTheHandOverCheck(HandingOver):
         self.ready("--hand-over", str(self.slot))
         self.assertEqual(self.check()[0], 0, self.err)
         with mock.patch.object(hive, "HAND_OVER_INFLATED", 100):
-            self.one_line(self.check(), too_large)
+            self.one_line(self.check(), self.TOO_LARGE)
+
+    def test_a_pack_this_reader_cannot_follow_is_refused(self):
+        x = zlib.compress(b"x")
+        one_size = self.sizes(5)
+        for name, objects, count in (
+                ("a count above the objects present", [(3, 1, x)], 2),
+                ("a count below the objects present", [(3, 1, x), (3, 1, x)], 1),
+                ("a stream cut short", [(3, 5, zlib.compress(b"hello")[:-4])], None),
+                ("a size over the shift limit", [b"\xb1" + b"\x80" * 10 + b"\x01" + x], None),
+                ("a distance running to the end", [(3, 1, x), b"\x60" + b"\x80" * 40], None),
+                ("a distance to no object's start", [(3, 1, x), (6, len(self.sizes(1, 1)), b"\x03" + zlib.compress(self.sizes(1, 1)))], None),
+                ("a difference with one size", [(7, len(one_size), b"\x11" * 20 + zlib.compress(one_size))], None)):
+            self.empty_slot()
+            with self.subTest(name=name):
+                self.crafted(objects, count)
+                result = self.check()
+                self.assertIn((result, self.err.strip()), [((2, ""), f"hive: {self.NOT_GIT}")]
+                              + ([((2, ""), f"hive: {self.TOO_LARGE}")] if count == 2 else []),
+                              "refused by this reader (what follows the last object is the pack's checksum, read as an object's head)")
+        self.empty_slot()
+        self.crafted([(3, 1 << 30, zlib.compress(bytes(1 << 20)))])
+        began = time.monotonic()
+        self.one_line(self.check(), self.TOO_LARGE)
+        self.assertLess(time.monotonic() - began, 30, "a small pack of zeros that declares a file of a gibibyte: refused before it is unpacked")
+        began = time.monotonic()
+        with mock.patch.object(hive, "HAND_OVER_INFLATED", 1 << 40):
+            self.assertRaises(hive.HiveError, hive.pack_bounds, b"PACK" + struct.pack(">II", 2, 1) + bytes([0xb0, 0x80, 0x80, 0x80, 0x04])
+                              + zlib.compress(bytes(1 << 20)) + bytes(20), {"file_bytes": 1 << 40})
+        self.assertLess(time.monotonic() - began, 5, "and one that declares more than it holds is unpacked no further than what it holds")
+
 
     def test_what_is_checked_and_hashed_is_the_bytes_read_once(self):
         self.ready("--hand-over", str(self.slot))
@@ -20308,6 +20356,8 @@ class TestTheHandOverCheck(HandingOver):
                 ("an ask with a header of more", lambda: self.handed(self.literal_commit(
                     f"tree {hive.EMPTY_TREE}\nauthor alice <a@b> 1 +0000\ncommitter alice <a@b> 1 +0000\nencoding ISO-8859-1\n\n{ask}"),
                     "ready", "hive/ready"), "ready"),
+                ("an ask whose author's line is longer than a head's line may be", lambda: self.handed(self.literal_commit(
+                    f"tree {hive.EMPTY_TREE}\nauthor {'a' * 280} <a@b> 1 +0000\ncommitter alice <a@b> 1 +0000\n\n{ask}"), "ready", "hive/ready"), "ready"),
                 ("a release handed over as an ask", lambda: self.handed_ask(
                     "Hive release: toy-0001 (2026-11-12T12:00:00Z)\n\nHive-Task: toy-0001\nHive-Action: release\nHive-Deal: 2026-11-12T11:00:00Z\nHive-Member: alice\n"
                     "Hive-Because: out_of_reach\n"), "ready"),
@@ -20326,8 +20376,12 @@ class TestTheHandOverCheck(HandingOver):
         raw = f"tree {hive.EMPTY_TREE}\nauthor alice 1 +0000\ncommitter alice 1 +0000\n\n{ask}"
         odd = sh("git", "hash-object", "-t", "commit", "--literally", "-w", "--stdin", cwd=self.alice.work, stdin=raw).stdout.strip()
         self.handed(odd, "ready", "hive/ready")
-        self.one_line(self.check(), "the hand-over is not one this tool writes (git could not take its bundle: the commit it rests on is not the "
-                                    "project's, or an object is not one git writes): nothing may be pushed from it. Tell the user")
+        self.one_line(self.check(), self.GIT_REFUSES)
+        # A NUL in an author's line: git's own to refuse (nulInHeader), before the tool reads the head.
+        self.empty_slot()
+        self.handed(self.literal_commit(f"tree {hive.EMPTY_TREE}\nauthor ali{chr(0)}ce <a@b> 1 +0000\ncommitter alice <a@b> 1 +0000\n\n{ask}"),
+                    "ready", "hive/ready")
+        self.one_line(self.check(), self.GIT_REFUSES)
 
     def test_an_ask_or_a_duty_must_be_what_their_commands_make(self):
         self.ready("--hand-over", str(self.slot))
@@ -20379,6 +20433,50 @@ class TestTheDutyHandOver(HandingOver):
         self.assertIsNone(self.fork_branch(hive.DUTY_BRANCH))
 
 
+class TestTheNamesADiskHolds(Volunteer):
+    """names, at the local bee's check: whether a disk of the machine's system holds the project's tip, read from the
+    project's own address with no clone. Linux holds every name; macOS and Windows not two that differ only by case or
+    by Unicode form; Windows not a device's name, a last dot or space, nor a character its disks refuse."""
+
+    def names(self, system):
+        return self.run_cli("names", "--project", "Bee-ruche/toy", "--system", system, "--upstream-url", str(self.w.upstream), cwd=self.w.root)
+
+    def refused(self, system, paths):
+        return (f"the project's tip holds {'two names' if len(paths) == 2 else 'a name'} that a disk of this machine ({system}) cannot hold "
+                f"{json.dumps(paths)}: no clone on this disk would hold the tip. Ask for no task: tell the user that this project cannot be "
+                "worked from this machine")
+
+    def test_a_tip_every_disk_holds(self):
+        for system in hive.DISK_SYSTEMS:
+            code, text = self.names(system)
+            self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), self.err)
+
+    def held_or_not(self, files, system, paths):
+        """The project moves on to a commit that holds these files (one commit, on a project of the case's own):
+        names refuses them on that system, a Linux disk holds them, and so does macOS a name only Windows refuses."""
+        self.project_holds(files)
+        self.one_line(self.names(system), self.refused(system, paths))
+        self.assertEqual(self.names("linux")[0], 0, "a Linux disk holds them")
+        if system == "windows" and len(paths) == 1:
+            self.assertEqual(self.names("macos")[0], 0, "a name only Windows refuses")
+
+
+CAFE_NFC, CAFE_NFD = "café.md", "café.md"
+for number, (files, system, paths) in enumerate((
+        ({"Notes.md": "a\n", "notes.md": "b\n"}, "macos", ["Notes.md", "notes.md"]),
+        ({CAFE_NFC: "a\n", CAFE_NFD: "b\n"}, "windows", [CAFE_NFD, CAFE_NFC]),  # (the tip's order, by their bytes)
+        ({"Docs/a.md": "a\n", "docs/b.md": "b\n"}, "macos", ["Docs", "docs"]),
+        ({"src/aux.c": "a\n"}, "windows", ["src/aux.c"]),
+        ({"COM1": "a\n"}, "windows", ["COM1"]),
+        ({"note.": "a\n"}, "windows", ["note."]),
+        ({"note ": "a\n"}, "windows", ["note "]),
+        ({"a:b": "a\n"}, "windows", ["a:b"]),
+        ({"a?b": "a\n"}, "windows", ["a?b"]))):
+    setattr(TestTheNamesADiskHolds, f"test_what_a_disk_does_not_hold_{number}",
+            lambda self, files=files, system=system, paths=paths: self.held_or_not(files, system, paths))
+del number, files, system, paths
+
+
 class TestTheDiskThatKeepsNamesTogether(Volunteer):
     """start's proof on a disk that keeps no case apart, or stores a name in another Unicode form: when the tip holds
     two such names and the proof fails, the line says the project cannot be worked from this disk (a fresh clone
@@ -20392,14 +20490,20 @@ class TestTheDiskThatKeepsNamesTogether(Volunteer):
                 self.assertIsNone(self.proof(tip), "a disk that keeps both")
                 os.unlink(self.alice.work / other)
                 self.assertEqual(self.proof(tip), f"hive: {hive.NOT_THE_TIPS}\n", "a disk that keeps both, and a file of the tip missing")
-                if folder is None:  # the disk takes the two names for one: one file under both
+                listed = os.listdir
+                if folder is None:  # one file under both names (a hard link)...
                     os.link(self.alice.work / one, self.alice.work / other)
-                    self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
+                    self.assertEqual(self.proof(tip), f"hive: {hive.NOT_THE_TIPS}\n", "two names its folder lists both: a disk that keeps them apart")
+                    hidden = os.fsencode(other.rpartition("/")[2])
+                    with mock.patch.object(hive.os, "listdir", lambda path: [name for name in listed(path) if name != hidden]):
+                        self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n", "...that its folder lists once: a disk that folds them")
                     os.unlink(self.alice.work / other)
-                else:  # the disk takes the two folders' names for one: one folder under both
+                else:  # one folder under both names, listed once: a disk that folds them
                     real, (asked, found) = os.lstat, (os.fsencode(f"/{folder[0]}"), os.fsencode(f"/{folder[1]}"))
                     with mock.patch.object(hive.os, "lstat", lambda path, *a, **k: real(os.fsencode(path).replace(asked, found), *a, **k)):
-                        self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
+                        self.assertEqual(self.proof(tip), f"hive: {hive.NOT_THE_TIPS}\n", "both folders listed")
+                        with mock.patch.object(hive.os, "listdir", lambda path: [name for name in listed(path) if name != os.fsencode(folder[0])]):
+                            self.assertEqual(self.proof(tip), f"hive: {hive.CANNOT_KEEP_APART}\n")
                 sh("git", "checkout", "--quiet", "--", other, cwd=self.alice.work)
                 self.project_holds({one: None, other: None})
         tip = self.project_holds({"single.md": "x\n"})

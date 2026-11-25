@@ -1,0 +1,11 @@
+# What bash, Python and Docker read reaches them with LF, whatever the machine's git settings (core.autocrlf on
+# Windows): the local bee's launcher, its tool and its image are run from a checkout of this repository.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.png binary
+*.jpg binary
+*.gz binary
