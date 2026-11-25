@@ -74,6 +74,30 @@ assistant loads its fork's agent files before it reads its owner's words.
 If you hold tools that reach the architect's personal data or other projects (mail, calendar, documents, other
 repositories), use none of them.
 
+## First: is the hive the right tool?
+
+Ask it before the three questions of section 1, and give the answer plainly. The hive pays when the work can be cut
+into many pieces, each a task a machine judges alone; what it costs the architect comes before any task (a judge, its
+files, a measure, the repository's settings, the reading of what it accepts).
+
+- **One or two files, an hour's work, no measure to climb and nothing to explore**: say « The hive would likely
+  cost more than this change, which can be made directly. Do you want the hive for it anyway? » Stop there only if
+  the architect says no, and then write nothing for the hive. One or two files with a figure to lower (one hot
+  file, a compressor) can be what probes pay for: the architect decides.
+- **No judge can be written** (nothing to measure, no reference to match, no test the tip fails): not yet a hive
+  project. The judge is the specification: the architect writes it first, or the tests it will hold the work to
+  (section 1, "When nothing a machine can check exists"; see "3. An open goal": tests the tip fails are the
+  `reference` kind's route, held to a reference program).
+- **Several parts that need different judges, or different repositories**: propose one project per such part, each
+  its own repository with its own `hive/project.json` and its own judge; take them one at a time from section 1. A
+  project has one judge. Independent files under one judge stay one project: the cutter spreads tasks over files.
+- **An open goal** is fine, with probes, on three conditions: a probe's goal is on a figure (one of
+  `judge.metrics`), so the judge is `common` or `relay`, not `reference`, whose goals are « correct »; a floor for
+  that figure (`cutter.floors`), the least gain a probe asks; and first tasks that are ordinary `work` tasks, since a
+  probe is dealt only to members with an accepted task. See "3. An open goal".
+
+Otherwise, go on to section 1.
+
 ## 1. The conversation that comes first
 
 Before any file, three questions, in the architect's own words, one at a time. Write the answers down: they are
