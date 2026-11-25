@@ -244,15 +244,17 @@ All of it in the project's own repository. Copies of the first test project's ar
    `~/.hive/needs/<owner>/<name>/` (the repository's name in lower case). Project code sees those files only if the
    project's own sandbox shows them: the hive cannot, since the launcher is the project's file. The tested model is
    cjsonRustBee's: its two launchers,
-   [sans-docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256/bee/sandbox/sans-docker.sh) and
-   [docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256/bee/sandbox/docker.sh), and their tests,
-   [test_sandbox.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256/bee/sandbox/test_sandbox.sh) (its
-   section n) and [test_docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256/bee/sandbox/test_docker.sh).
+   [sans-docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256fff1848d80327d0734d321aa587263530/bee/sandbox/sans-docker.sh)
+   and [docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256fff1848d80327d0734d321aa587263530/bee/sandbox/docker.sh),
+   and their tests,
+   [test_sandbox.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256fff1848d80327d0734d321aa587263530/bee/sandbox/test_sandbox.sh)
+   (its section n) and
+   [test_docker.sh](https://github.com/Bee-ruche/cjsonRustBee/blob/28b6256fff1848d80327d0734d321aa587263530/bee/sandbox/test_docker.sh).
    Both forms show the folder at `/needs`, read-only, and nothing else of the home; no folder, no `/needs`. Both
    refuse to run (status 125, the reason on stderr) when the folder is reached through a link (there or above it), is
    not a folder, or when it or the folder above it is not the user's own or may be written by a group or others (the
-   tool makes them 0755). The lines, `<owner>/<name>` in lower case:
-   - in `sans-docker.sh`'s outer part, after the checks of `.git`:
+   tool makes them 0755). The lines of `sans-docker.sh`, `<owner>/<name>` in lower case:
+   - in the outer part, after the checks of `.git`:
 
      ```bash
      # The project's needs (hive/project.json, « needs »): the files the hive's tool fetched and held to their
@@ -272,17 +274,31 @@ All of it in the project's own repository. Copies of the first test project's ar
        needs_id=$(stat -c %d:%i -- "$needs")
      else needs=; fi
      ```
-   - `$needs` and `$needs_id` given to `inside` as two more arguments, and in `inside`, after `/tmp` is made: the
-     folder bound, the bind held to the device and inode seen outside (a folder swapped for a link since then is
-     refused), then every mount at `/needs` and below it made read-only, `nosuid` and `nodev`:
+   - `"$needs" "$needs_id"` given to `inside` after `"$given"`, in the line that starts it:
+
+     ```bash
+     setpriv --pdeathsig KILL "${spaces[@]}" -- env -i TERM="${TERM:-dumb}" bash --norc --noprofile -c \
+       "$(declare -f refuse readonly_tree inside); inside \"\$@\"" bee-sandbox "$repo" "$new" "${guarded[*]}" "$given" "$needs" "$needs_id" "$@" <&0 &
+     ```
+   - in `inside`, its arguments taken with two more (`shift 6`), and its tools, `stat` and `findmnt` among them:
+
+     ```bash
+     local repo=$1 new=$2 guarded=$3 given=$4 needs=$5 needs_id=$6 d rest mode drop; shift 6
+     for d in mount umount findmnt pivot_root setsid setpriv prlimit stat readlink unshare sed dd; do
+     ```
+   - in `inside`, after `/tmp` is made: the folder bound, the bind held to the device and inode seen outside (a folder
+     swapped for a link since then is refused), then every mount at `/needs` and below it made read-only, `nosuid`
+     and `nodev`:
 
      ```bash
      if [ -n "$needs" ]; then mkdir "$new/needs"; mount --rbind "$needs" "$new/needs"
        [ "$(stat -c %d:%i "$new/needs")" = "$needs_id" ] || refuse "the needs' folder changed while the sandbox was being built"
        readonly_tree "$new/needs" nosuid,nodev; fi
      ```
-   - `readonly_tree`, which takes those flags as a second argument and gives each mount's own flags again (the
-     kernel refuses a remount that would drop a flag it has locked: `nosuid`, `nodev`, `noexec`, `noatime`…):
+   - `readonly_tree`, which takes those flags as a second argument and gives each mount's own flags again. The kernel
+     locks some flags of a mount copied into a user namespace (`nosuid`, `nodev`, `noexec`, `noatime`…), and a
+     remount through mount(2) that would drop one is refused; the `mount` of util-linux 2.39 keeps a mount's flags
+     itself, and the launcher does not count on that:
 
      ```bash
      readonly_tree() {
@@ -295,47 +311,20 @@ All of it in the project's own repository. Copies of the first test project's ar
    - `/needs` added to the paths the launcher checks are not writable inside the sandbox:
      `for d in / /usr /etc /proc/sys ${needs:+/needs} $guarded; do`.
 
-   The Docker form is a launcher of its own (`docker.sh`, `#!/bin/bash -p`, `set -euo pipefail`), which runs the
-   command in the project's image as user 65534, without network or capabilities, the work tree read-only at `/work`.
-   Its own tools are the system's; docker is the caller's, found on the caller's `PATH` and run with it, less its
-   relative folders and those in the work tree (Docker Desktop's `docker` is a script that runs `docker.exe` from the
-   `PATH`). It finds the needs' folder and checks it as above (without `needs_id`: docker binds it itself), and
-   refuses besides a path with a comma, a quote or a control character, since docker reads `--mount` as
-   comma-separated values, and, since the command runs as another user, a folder of the needs that others cannot read
-   and search or a file that others cannot read. Docker refuses a bind whose source is missing: no folder, no
-   `--mount`. The lines (`$repo`, the work tree, from the launcher's own path):
-
-   ```bash
-   caller_path=$PATH
-   PATH=/usr/sbin:/usr/bin:/sbin:/bin
-   refuse() { echo "bee-sandbox: $*: the command was NOT run." >&2; exit 125; }
-   plain() { [[ $1 != *[,\"[:cntrl:]]* ]] || refuse "$2 ($1) holds a comma, a quote or a control character, which docker's --mount cannot take"; }
-   plain "$repo" "the work tree's path"
-   docker_path=
-   IFS=: read -r -a parts <<<"$caller_path"
-   for part in ${parts[@]+"${parts[@]}"}; do
-     if [[ $part == /* && $part != "$repo" && $part != "$repo"/* ]]; then docker_path+=${docker_path:+:}$part; fi
-   done
-   docker=$(PATH=$docker_path command -v docker) && [[ $docker == /* ]] \
-     || refuse "no docker on your PATH (its folders that are absolute and outside the work tree: ${docker_path:-none})"
-   needs=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || needs=
-   needs=${needs:+${needs%/}/.hive/needs/<owner>/<name>}
-   mounts=()
-   if [ -n "$needs" ] && { [ -e "$needs" ] || [ -L "$needs" ]; }; then
-     # … the link and the owner and mode checks of the outer part above, then:
-     plain "$needs" "the needs' folder"
-     unread=$(find "$needs" \( \( -type d ! -perm -005 \) -o \( ! -type d ! -perm -004 \) \) -print -quit 2>&1) || unread=$needs
-     [ -z "$unread" ] || refuse "${unread%%$'\n'*} cannot be read by others, and the command runs as another user (folders 0755, files 0444)"
-     mounts=(--mount "type=bind,source=$needs,target=/needs,readonly")
-   fi
-   exec env PATH="$docker_path" MSYS_NO_PATHCONV=1 "$docker" run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
-     --tmpfs /tmp:rw,exec,size=512m -e HOME=/tmp ${mounts[@]+"${mounts[@]}"} \
-     --mount "type=bind,source=$repo,target=/work,readonly" -w /work <the project's image> "$@"
-   ```
-
-   Without `getent` (macOS, Git Bash for Windows) the Docker form shows no `/needs` and runs as before.
-   `MSYS_NO_PATHCONV=1` keeps Git Bash from rewriting `/work` and the other paths into Windows paths on their way to
-   `docker.exe`; nothing else reads it.
+   The Docker form is cjsonRustBee's `docker.sh` (linked above), copied whole to `<work tree>/bee/sandbox/docker.sh`
+   (it finds the work tree from its own path), with only the image's name changed (`bee-cjson`, its lines 2, 8 and
+   64) and `bee-ruche/cjsonrustbee` (its lines 5 and 46). It runs the command in the project's image as user 65534,
+   without network or capabilities, the work tree read-only at `/work`, and the needs' folder, found and checked as
+   above (without `needs_id`: docker binds it itself), read-only at `/needs`; no folder, no `--mount` (docker refuses
+   a bind whose source is missing). Its own tools are the system's; docker is the caller's, found on the caller's
+   `PATH` and run with it, less its relative folders and those in the work tree (Docker Desktop's `docker` is a
+   script that runs `docker.exe` from the `PATH`), and so are docker's own settings (`DOCKER_HOST`, `DOCKER_CONTEXT`,
+   `DOCKER_CONFIG`): with a daemon on another host, the paths it binds are that host's. It refuses besides a path
+   with a comma, a quote or a control character, since docker reads `--mount` as comma-separated values, and, since
+   the command runs as another user, a folder of the needs that others cannot read and search or a file that others
+   cannot read: the hive's tool makes them 0755 and 0444, so what it wrote passes. Without `getent` (macOS, Git Bash
+   for Windows) it shows no `/needs` and runs as before. `MSYS_NO_PATHCONV=1`, given to docker, keeps Git Bash from
+   rewriting `/work` and the other paths into Windows paths on their way to `docker.exe`; nothing else reads it.
 
    The sandbox's own tests then show, on throwaway homes they make:
    - `/needs` holds the project's folder of the home the system names (not `$HOME`'s, not the rest of `.hive`), and
@@ -345,7 +334,7 @@ All of it in the project's own repository. Copies of the first test project's ar
    - every mount at `/needs` and below it is read-only, `nosuid` and `nodev`, and nothing in the mounts below it can
      be written, removed, renamed or unmounted;
    - a home mounted with flags the kernel locks (`noexec`, `noatime`, `nodiratime`) still gives `/needs`, read-only,
-     `nosuid` and `nodev`;
+     `nosuid` and `nodev` (a check that can fail only with a `mount` that passes the flags it is given alone);
    - no folder: no `/needs`, and the command runs;
    - no run, and a reason, for: a link there (to a folder, or dangling) or above it; a file in place of the folder;
      the folder swapped for a link between the check and the bind; a read-only remount of `/needs` that did nothing;
