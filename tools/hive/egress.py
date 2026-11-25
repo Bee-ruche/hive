@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The local bee's network gate: an HTTP proxy that opens a tunnel to github.com:443 and to nothing else.
+"""The local bee's network gate: an HTTP proxy that opens a tunnel to github.com:443 and to nothing else, and never
+reads the bytes that pass through it.
 
 On a volunteer's machine the hive's tool runs in a container on a Docker network created `--internal` (no route out).
 This gate runs in a second container, on that network and on an ordinary one, and is the tool's only way out: git
@@ -15,10 +16,13 @@ one has a test in test_egress.py that fails without it):
   follow the head before the gate answers: a second request cannot ride behind the first.
 - The gate resolves github.com itself and connects to an address, never to a name, so nothing is resolved twice.
   Every answer must be a global unicast address: one private, loopback, link-local, shared, multicast, reserved or
-  unspecified answer (or an IPv4 address dressed as IPv6: mapped, 6to4, Teredo, NAT64) refuses the whole request, so a DNS answer cannot point the
-  tunnel at the machine, Docker's own host, or a cloud's metadata address.
-- Once the tunnel is up the gate copies bytes and reads none of them; TLS runs end to end between git and GitHub.
-  A tunnel idle for IDLE_SECONDS is closed. At most MAX_PER_CLIENT tunnels per client address and MAX_TUNNELS in all.
+  unspecified answer refuses the whole request, and an IPv6 answer must lie in 2000::/3 and not be 6to4 or Teredo
+  (so no IPv4-compatible, mapped or NAT64 form either). A DNS answer cannot point the tunnel at the machine,
+  Docker's own host, or a cloud's metadata address.
+- Once the tunnel is up the gate copies bytes both ways and reads none of them: what the client sends reaches
+  github.com:443 as it is, and the gate neither checks nor needs that it is TLS. A tunnel idle for IDLE_SECONDS is
+  closed, and any tunnel TUNNEL_SECONDS old. At most MAX_PER_CLIENT tunnels per client address and MAX_TUNNELS in all.
+- A failing accept() or a thread that cannot start costs one connection, not the gate.
 - One line per request on stderr, from a fixed vocabulary and the client's address: the request's own bytes are
   never written anywhere.
 
@@ -40,13 +44,20 @@ MAX_HEAD = 4096
 HEAD_SECONDS = 10
 CONNECT_SECONDS = 10
 IDLE_SECONDS = 300
+# A tunnel's whole life, however busy. The tool's fetches are a project's history (at most PROJECT_COMMITS commits in
+# hive.py) and the owner's fork: the pilots' are tens of megabytes. Two hours carry a full gigabyte at 1.2 Mbit/s,
+# far beyond any of them on the slowest line a volunteer would work on; a fetch cut short fails, and the next command
+# fetches again.
+TUNNEL_SECONDS = 7200
+ACCEPT_PAUSE = 0.1  # after accept() fails (no file descriptor left, a connection aborted): a pause, not a busy loop
 MAX_PER_CLIENT = 4
 MAX_TUNNELS = 16
 CHUNK = 65536
 
-# IPv6 prefixes that carry an IPv4 address to be translated (NAT64, RFC 6052 and 8215): the IPv4 address inside could
-# be a private one, and Python does not count every one of them as not global.
-TRANSLATED = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+# The only IPv6 addresses a tunnel may reach: global unicast (RFC 4291), so that no change in Python's `is_global` can
+# widen the rule. Everything outside it is refused whatever Python says: the IPv4-compatible `::/96` and mapped
+# `::ffff:0:0/96` forms, NAT64's `64:ff9b::/96` and `64:ff9b:1::/48`, link-local, unique local, multicast.
+GLOBAL_UNICAST6 = ipaddress.ip_network("2000::/3")
 
 END_OF_HEAD = b"\r\n\r\n"
 REQUEST_LINE = re.compile(rb"CONNECT ([!-~]+) HTTP/1\.[01]\Z")
@@ -66,6 +77,7 @@ STATUS = {
     "dns": b"502 Bad Gateway",
     "upstream": b"502 Bad Gateway",
     "busy": b"503 Service Unavailable",
+    "thread": b"503 Service Unavailable",
 }
 
 
@@ -101,9 +113,8 @@ def public(address):
         ip = ipaddress.ip_address(address)
     except ValueError:
         return False
-    if ip.version == 6 and (ip.ipv4_mapped is not None or ip.sixtofour is not None or ip.teredo is not None
-                            or any(ip in network for network in TRANSLATED)):
-        return False
+    if ip.version == 6 and (ip not in GLOBAL_UNICAST6 or ip.sixtofour is not None or ip.teredo is not None):
+        return False  # inside 2000::/3, 6to4 and Teredo still carry an IPv4 address that could be a private one
     return ip.is_global and not ip.is_multicast
 
 
@@ -144,15 +155,20 @@ def read_head(client):
 
 
 def relay(client, upstream):
-    """Copy bytes both ways until both sides have closed, or until nothing moves for IDLE_SECONDS."""
+    """Copy bytes both ways until both sides have closed, until nothing moves for IDLE_SECONDS, or until the tunnel
+    is TUNNEL_SECONDS old, however busy."""
+    deadline = time.monotonic() + TUNNEL_SECONDS
     for one in (client, upstream):
         one.settimeout(IDLE_SECONDS)
     other = {client: upstream, upstream: client}
     open_ = [client, upstream]
     while open_:
-        ready, _, _ = select.select(open_, [], [], IDLE_SECONDS)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return "expired"
+        ready, _, _ = select.select(open_, [], [], min(IDLE_SECONDS, left))
         if not ready:
-            return "idle"
+            return "idle" if deadline - time.monotonic() > 0 else "expired"
         for one in ready:
             data = one.recv(CHUNK)
             if data:
@@ -167,11 +183,13 @@ def relay(client, upstream):
 
 
 class Gate:
-    """The rules of one gate; resolve and dial are attributes so that the tests can stand in for the network."""
+    """The rules of one gate; resolve, dial and start are attributes so that the tests can stand in for the network
+    and for a machine out of threads."""
 
     def __init__(self, resolve=resolve, dial=dial, log=None):
         self.resolve = resolve
         self.dial = dial
+        self.start = start
         self.log = log or (lambda line: print(line, file=sys.stderr, flush=True))
         self.lock = threading.Lock()
         self.per_client = {}
@@ -234,15 +252,34 @@ class Gate:
             self.leave(client_address)
 
     def serve(self, listener):
+        """Accept for ever. A failing accept() or a thread that cannot start costs one connection, never the gate;
+        the loop ends only when the listener itself is closed."""
         while True:
-            client, peer = listener.accept()
+            try:
+                client, peer = listener.accept()
+            except OSError:
+                if listener.fileno() < 0:
+                    return
+                self.log("egress: accept failed")
+                time.sleep(ACCEPT_PAUSE)
+                continue
             client_address = peer[0]
             if not self.admit(client_address):
                 self.say(client_address, "refused busy")
                 answer(client, STATUS["busy"])
                 client.close()
                 continue
-            threading.Thread(target=self.handle, args=(client, client_address), daemon=True).start()
+            try:
+                self.start(self.handle, (client, client_address))
+            except RuntimeError:  # "can't start new thread"
+                self.say(client_address, "refused thread")
+                answer(client, STATUS["thread"])
+                client.close()
+                self.leave(client_address)
+
+
+def start(target, args):
+    threading.Thread(target=target, args=args, daemon=True).start()
 
 
 def answer(client, status):

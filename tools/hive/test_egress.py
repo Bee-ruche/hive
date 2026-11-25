@@ -9,6 +9,7 @@ resolver and a dialer of the tests' own, so no test reaches outside the machine.
 Standard library only, no network. `python3 tools/hive/test_egress.py`
 """
 
+import errno
 import ipaddress
 import os
 import random
@@ -28,9 +29,9 @@ import egress  # noqa: E402
 GITHUB = "140.82.112.3"  # one of GitHub's addresses: global, so the gate accepts it as an answer
 ALLOWED = b"CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\nUser-Agent: git/2.43.0\r\n\r\n"
 WAIT = 5
-# Every line the gate may log: a fixed word, then the client's address.
-LOG_LINE = re.compile(r"egress: (?:tunnel|ended (?:idle|closed|broken)|refused (?:" + "|".join(
-    re.escape(reason) for reason in egress.STATUS) + r")) [0-9a-f.:]+\Z")
+# Every line the gate may log: a fixed word, then the client's address (none when accept() itself failed).
+LOG_LINE = re.compile(r"egress: (?:accept failed|(?:tunnel|ended (?:idle|expired|closed|broken)|refused (?:" + "|".join(
+    re.escape(reason) for reason in egress.STATUS) + r")) [0-9a-f.:]+)\Z")
 
 
 def connect_line(target, version=b"HTTP/1.1"):
@@ -164,6 +165,7 @@ class TestAddress(unittest.TestCase):
               "192.0.2.1", "::1", "::", "fe80::1", "fe80::1%eth0", "fc00::1", "fd12:3456::1", "ff02::1", "ff0e::1",
               "2001:db8::1", "::ffff:127.0.0.1", "::ffff:10.0.0.5", "::ffff:" + GITHUB, "2002:7f00:1::1",
               "2001:0:4136:e378:8000:63bf:3fff:fdd2", "64:ff9b::7f00:1", "64:ff9b::a00:5", "64:ff9b:1::a00:5",
+              "::7f00:1", "::a00:5", "::127.0.0.1", "::" + GITHUB,  # IPv4-compatible, ::/96
               "github.com", "", "1.2.3", "01.2.3.4"]
     OUTSIDE = [GITHUB, "20.201.28.151", "185.199.108.133", "1.1.1.1", "2606:50c0:8000::153", "2a01:111:f400::1"]
 
@@ -177,13 +179,14 @@ class TestAddress(unittest.TestCase):
             with self.subTest(address=address):
                 self.assertTrue(egress.public(address))
 
-    def test_ipv4_dressed_as_ipv6_refused_whatever_python_says(self):
-        """The gate's own rules for mapped, 6to4, Teredo and NAT64 addresses, on their own: even if this Python counted
-        them as global, each one is refused."""
+    def test_ipv6_outside_global_unicast_refused_whatever_python_says(self):
+        """The gate's own IPv6 rules, on their own: even if this Python counted every IPv6 address as global, only
+        2000::/3 passes, and in it neither 6to4 nor Teredo."""
         with mock.patch.object(ipaddress.IPv6Address, "is_global", new_callable=mock.PropertyMock, return_value=True):
             self.assertTrue(egress.public("2606:50c0:8000::153"))
-            for address in ["::ffff:127.0.0.1", "2002:7f00:1::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",
-                            "64:ff9b::7f00:1", "64:ff9b:1::a00:5"]:
+            for address in ["::7f00:1", "::" + GITHUB, "::ffff:127.0.0.1", "::1", "::", "64:ff9b::7f00:1",
+                            "64:ff9b:1::a00:5", "fe80::1", "fc00::1", "fd12:3456::1", "100::1", "4000::1", "e000::1",
+                            "2002:7f00:1::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2"]:
                 with self.subTest(address=address):
                     self.assertFalse(egress.public(address))
 
@@ -374,6 +377,27 @@ class TestTunnel(Live):
             self.assertLess(time.monotonic() - started, WAIT - 1)
             self.wait_for(lambda: "egress: ended idle 127.0.0.1" in self.logged)
 
+    def test_a_busy_tunnel_ends_at_its_lifetime(self):
+        # Bytes move every 50 ms, far inside the idle limit: the tunnel still ends when it is TUNNEL_SECONDS old.
+        with mock.patch.object(egress, "TUNNEL_SECONDS", 0.6):
+            conn = self.client()
+            conn.sendall(ALLOWED)
+            self.assertEqual(self.status(conn), b"HTTP/1.1 200 Connection established")
+            started = time.monotonic()
+            try:
+                while time.monotonic() - started < WAIT:
+                    conn.sendall(b"x")
+                    if not conn.recv(100):
+                        break
+                    time.sleep(0.05)
+            except OSError:
+                pass
+            lasted = time.monotonic() - started
+            self.assertGreater(lasted, 0.5)
+            self.assertLess(lasted, 3)
+            self.wait_for(lambda: "egress: ended expired 127.0.0.1" in self.logged)
+            self.assertNotIn("egress: ended idle 127.0.0.1", self.logged)
+
     def test_the_next_answer_is_tried_when_one_is_dead(self):
         self.answers = ["20.201.28.151", GITHUB]
         self.assertEqual(self.ask(ALLOWED), b"HTTP/1.1 200 Connection established")
@@ -506,6 +530,63 @@ class TestRefusals(Live):
             self.assertNotIn("example", line)
             self.assertNotIn("s3cr3t", line)
         # tearDown checks every line against the fixed grammar.
+
+
+class FlakyListener:
+    """A listener whose accept() first raises the errors given, in turn, then accepts for real."""
+
+    def __init__(self, listener, errors):
+        self.listener = listener
+        self.errors = list(errors)
+
+    def accept(self):
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.listener.accept()
+
+    def fileno(self):
+        return self.listener.fileno()
+
+
+class TestTheLoop(Live):
+    """What a failing accept() or thread costs: one connection, never the gate."""
+
+    def test_accept_failing_does_not_end_the_gate(self):
+        listener = socket.create_server(("127.0.0.1", 0))
+        flaky = FlakyListener(listener, [OSError(errno.EMFILE, "too many open files"),
+                                         OSError(errno.ECONNABORTED, "connection aborted")])
+        with mock.patch.object(egress, "ACCEPT_PAUSE", 0.01):
+            loop = threading.Thread(target=self.gate.serve, args=(flaky,), daemon=True)
+            loop.start()
+            conn = socket.create_connection(listener.getsockname(), timeout=WAIT)
+            self.addCleanup(conn.close)
+            conn.sendall(ALLOWED)
+            self.assertEqual(self.status(conn), b"HTTP/1.1 200 Connection established")
+            self.assertEqual(self.logged.count("egress: accept failed"), 2)
+            # Only the listener's own end stops the loop.
+            listener.shutdown(socket.SHUT_RDWR)
+            listener.close()
+            loop.join(WAIT)
+            self.assertFalse(loop.is_alive())
+
+    def test_a_thread_that_cannot_start_gives_its_place_back(self):
+        started = []
+
+        def fail_once(target, args):
+            started.append(target)
+            if len(started) == 1:
+                raise RuntimeError("can't start new thread")
+            egress.start(target, args)
+        self.gate.start = fail_once
+        with mock.patch.object(egress, "MAX_PER_CLIENT", 1):
+            self.assertEqual(self.ask(ALLOWED), b"HTTP/1.1 503 Service Unavailable")
+            self.assertIn("egress: refused thread 127.0.0.1", self.logged)
+            self.wait_for(lambda: self.gate.tunnels == 0)
+            self.assertEqual(self.gate.per_client, {})
+            self.assertEqual(self.dialed, [])
+            # The gate goes on, and the client's one place is free again.
+            self.assertEqual(self.ask(ALLOWED), b"HTTP/1.1 200 Connection established")
+        self.assertEqual(len(started), 2)
 
 
 class TestTheScript(unittest.TestCase):
