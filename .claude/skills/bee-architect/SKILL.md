@@ -74,6 +74,24 @@ assistant loads its fork's agent files before it reads its owner's words.
 If you hold tools that reach the architect's personal data or other projects (mail, calendar, documents, other
 repositories), use none of them.
 
+## First: is the hive the right tool?
+
+Ask it before the three questions of section 1, and give the answer plainly. The hive pays when the work can be cut
+into many pieces, each a task a machine judges alone; what it costs the architect comes before any task (a judge, its
+files, a measure, the repository's settings, the reading of what it accepts).
+
+- **One or two files, an hour's work** for the architect or for you: say « The hive would cost more than this
+  change: make it directly, without the hive. » and stop there. Write nothing for the hive.
+- **No judge can be written** (nothing to measure, no reference to match, no test the tip fails): not yet a hive
+  project. The judge is the specification: the architect writes it first, or the tests it will hold the work to
+  (section 1, "When nothing a machine can check exists").
+- **Several independent parts**: propose one project per part, each its own repository with its own
+  `hive/project.json` and its own judge, rather than one project for all; take them one at a time from section 1.
+- **An open goal** is fine, with probes ("3. An open goal"), as long as each answer is a figure the judge measures:
+  a probe's goal is on one of `judge.metrics`.
+
+Otherwise, go on to section 1.
+
 ## 1. The conversation that comes first
 
 Before any file, three questions, in the architect's own words, one at a time. Write the answers down: they are
