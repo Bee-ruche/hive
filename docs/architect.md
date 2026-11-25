@@ -15,17 +15,21 @@ The hive pays when the work can be cut into many pieces, each a task a machine j
 them side by side, and the judge decides each without you. What it costs you comes first, before any task: a judge,
 its files, a measure, the repository's settings, and your reading of what it accepts. So, before section 1:
 
-- **A small change.** One or two files that you, or your own assistant, can change in an hour: do it that way. The
-  hive would cost more than the work; stop here.
+- **A small change.** One or two files that you, or your own assistant, can change in an hour, with no measure to
+  climb and nothing to explore: the hive would likely cost more than the work. Your assistant says so and asks
+  whether you want the hive anyway; you decide. One or two files with a figure to lower (one hot file, a
+  compressor) can be what probes pay for.
 - **No judge can be written.** Nothing to measure, no reference to match, no test the project fails today: not yet a
   hive project. Write the judge first, or the tests it will hold the work to. The judge is the specification: a task
   can ask only what it checks (section 1).
-- **Several independent parts** (a library and its application, two formats, a server and its client): one project
-  per part, each its own repository with its own `hive/project.json` and its own judge, rather than one project for
-  all. A project has one judge, and each part needs the one that fits it.
+- **Several parts that need different judges** (a library and its application, two formats, a server and its
+  client): one project per part, each its own repository with its own `hive/project.json` and its own judge. A
+  project has one judge, and each part needs the one that fits it. Independent files one judge decides stay one
+  project: the cutter spreads tasks over files.
 - **An open goal**, where nobody knows yet what will help, is fine: the cutter cuts probes, one named thing to try
-  each (section 3), as long as each answer is a figure the judge measures. A probe's goal is on one of the judge's
-  figures (`judge.metrics`); an answer a person would have to weigh is none.
+  each, as long as each answer is a figure the judge measures. So a `common` or `relay` judge (a `reference` judge
+  measures nothing), a floor for that figure (`cutter.floors`), and first tasks that are ordinary work tasks: probes
+  go only to members with an accepted task (section 3).
 - **Many pieces, each judged by a machine**: go on.
 
 ## With your own AI
