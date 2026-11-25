@@ -329,7 +329,10 @@ The project's run holds a trusted account's cut to the same gate ([protocol.md](
 their duties"): the proposal that account pushes for its cut duty, against the commit the run reads, with the
 inputs `cut-check` gathers, and with the judge's answers alone for the tasks « correct »: the run takes no account's
 word that a task fails at the tip, the architect's included. Its marker names the digests `CHECKED` prints. The run
-records whether it stands and publishes nothing.
+records whether it stands and publishes nothing. `hive.py publish-cut`, run with the project's own account, publishes
+the cut that stands: it holds it again to its account's fork, its marker, its form and this gate, against the
+published branch and the state as they are when it runs, and pushes its two files as one commit of its own on the
+published commit ([protocol.md](protocol.md), "Publishing a cut").
 
 ## The proof at the tip
 

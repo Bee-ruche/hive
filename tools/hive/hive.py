@@ -17,8 +17,9 @@ account asks for a DUTY of its role in its own fork; the hive deals one duty of 
 account that asked. A cut duty's work is a PROPOSAL, one commit in the account's own fork that changes the tasks file
 (and perhaps the backlog) on the published commit; the hive holds it to the cutter's gate and records whether it
 stands. A duty also ends when its time is up or when its account gives it back. A duty is counted apart from
-everything a member does: no member's wait, day's limit or place reads it. Nothing here publishes a proposal: the
-published branch is the project's own to move.
+everything a member does: no member's wait, day's limit or place reads it. No run publishes a proposal: the
+published branch is the project's own to move, and publish-cut, run by the project with its own account, publishes
+the cut that stands once it has held it again itself.
 
 Trust: everything that comes from a fork (objects, ref names, commit messages, logins) is hostile data. This file
 never checks a fork's tree out with git, never runs a hook or a filter, and never passes a fork's string to a
@@ -47,7 +48,10 @@ may read it: files, functions and sizes, with no comment and no string); for a p
 judged a few times by the project's own judge, with Docker, and proposals for the step and the bounds). For those who
 build the hive: health (what the public state of the projects this repository lists says of the hive, in numbers,
 read with no account) and report (an issue template with its numbers filled from health, printed for a project's
-architect, who posts it or not: the hive posts nothing).
+architect, who posts it or not: the hive posts nothing). One more writes to the project, and is run by the project
+with its own account, never by a run: publish-cut, the project's publisher, which pushes the cut a trusted account's
+duty ended on as one commit on the published branch, once it has held it again to its fork, its marker, its form and
+the gate.
 
 Volunteer side (same file, run at the root of the fork's clone): setup, next, start, ready, submit, release. Each is
 told the project by its repository (--project owner/name, as the user's prompt names it) and reads the project's
@@ -232,7 +236,8 @@ ACTIONS = ("ready", "submit", "release")
 # commit it was cut against, that changes the tasks file and perhaps the backlog, at one branch of the account's fork
 # (CUT_BRANCH). The plan holds it to the duty, to the published commit and to the cutter's gate (proposal_end), and the
 # duty's end says which proposal stands (« cut »), that there was nothing to cut (« nothing »), or why it was refused.
-# Nothing here publishes it: the published branch is the project's own to move.
+# No run publishes it: the published branch is the project's own to move, and the project's publisher (publish_cut),
+# run with the project's own account, publishes the cut that stands once it has held it again itself.
 ROLES = ("cut",)
 TRUSTED_MOST = 32  # the most accounts a project's file may trust (trusted.accounts)
 DUTY_BRANCH = "hive/duty"
@@ -521,8 +526,8 @@ def isolated_environment():
     return environment
 
 
-# True while a volunteer-side command runs (main sets it, for each of them): what such a command prints is read by an
-# agent, and git quotes the files it reads (a reference's name, a line of a file of .git). git() then keeps what git
+# True while a volunteer-side command runs, or a quiet one, the publisher (main sets it, for each of them): what such a
+# command prints is read by an agent, and git quotes the files it reads (a reference's name, a line of a file of .git). git() then keeps what git
 # wrote on its standard error to itself: its error names the git command and its exit code, and the result it hands
 # back holds none of git's words, so that no function that calls it can repeat them either.
 VOLUNTEER_SIDE = False
@@ -1710,6 +1715,14 @@ class GhApi:
         if not LOGIN.match(login):
             raise HiveError("login unreadable")
         answer = self._json_lines(f"users/{login}", "--jq", "{id, created_at, type}")
+        return answer[0] if answer else None
+
+    def repository(self, repo_id):
+        """The repository GitHub numbers `repo_id` (a fork's number, as a ledger line names it): its name, its
+        owner's login and number, and the name of the repository it is a fork of (null for none), as GitHub says them now."""
+        if type(repo_id) is not int or repo_id <= 0:
+            raise HiveError("a repository's number unreadable")
+        answer = self._json_lines(f"repositories/{repo_id}", "--jq", "{full_name, login: .owner.login, id: .owner.id, parent: .parent.full_name}")
         return answer[0] if answer else None
 
     def url(self, full_name):
@@ -2933,7 +2946,7 @@ def check_duties(plan_, config, tasks, read, counted):
     (a « malformed » or an « unchecked » one, decided before or without that commit, may name any);
     no two ends name one release or one proposal. What the plan step alone read stays its word: that the account's fork
     held that release or that proposal, what the proposal holds and what the cutter's gate said of it (proposal_end;
-    whoever publishes it holds it to the gate again), that the fork was read whole for a duty it says ran out at its
+    the publisher holds it to all of that again: publish_cut), that the fork was read whole for a duty it says ran out at its
     account's cost, and that the published branch shows a pause for one it says ran out at no cost within that day
     (paused_between).
 
@@ -3451,56 +3464,63 @@ def proposal_end(repo, entry, config, tasks, settings, tip, state_folder, dealt,
                 "reason": "unchecked"}
 
 
-def proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt, done, integrated, since):
+def proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt, done, integrated, since, why=None):
     """proposal_end's own work, in the order it says. What fails on the hive's side (its clone, the project's own
-    files, the state) ends « unchecked », at no cost; what fails on the fork's commit is « malformed »."""
+    files, the state) ends « unchecked », at no cost; what fails on the fork's commit is « malformed ». `why`: a list
+    the caller gives to be told which check an end other than « cut » came from (one of PROPOSAL_CHECKS), as the
+    publisher says it (publish_cut); the end itself is the same either way."""
     base = {"proposal": entry["sha"], "published": entry["published"], "repo_id": entry["repo_id"]}
     sha, published = entry["sha"], entry["published"]
     malformed = {**base, "outcome": "refused", "fault": False, "reason": "malformed"}
     unchecked = {**base, "outcome": "refused", "fault": True, "reason": "unchecked"}
+
+    def end(outcome, check):
+        if why is not None:
+            why.append(check)
+        return outcome
     try:  # the hive's own commits, read first: the plan's, and the one the duty was dealt at
         if published != settings:
             # Stale, and at no cost, only when it names a commit the published branch was at during the duty: one that
             # descends from the commit the duty was dealt at (its line's « settings ») and that this plan's descends
             # from. Any other commit, or a duty whose line names no commit, was never what the account was given to cut.
             if not is_sha(since):
-                return malformed
+                return end(malformed, "published")
             for own in (since, settings):
                 git(repo, "cat-file", "-e", f"{need_sha(own)}^{{commit}}")
             moved = ancestor(repo, since, published) and ancestor(repo, published, settings)
-            return {**base, "outcome": "refused", "fault": True, "reason": "stale"} if moved else malformed
+            return end({**base, "outcome": "refused", "fault": True, "reason": "stale"} if moved else malformed, "published")
         # Each of the two files keeps the mode the published commit gives it (a new backlog, a plain file's): what is
         # published is a file's bytes, never a change of its mode.
         before = file_modes(repo, settings)
     except HiveError:
         log("a proposal could not be held: the hive's clone could not read its own commits; the duty ends at no cost")
-        return unchecked
+        return end(unchecked, "clone")
     try:  # the fork's commit and its files
         listed = git(repo, "rev-list", "--parents", "--no-walk", need_sha(sha), check=False)
         if listed.returncode != 0 or listed.stdout.split() != [sha, settings]:
-            return malformed
+            return end(malformed, "parent")
         changed = git_raw(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", need_sha(settings), sha)
         paths = {name for name in changed.stdout.split(b"\0") if name} if changed.returncode == 0 else None
         if paths is None or not paths <= {TASKS_FILE.encode(), BACKLOG_FILE.encode()}:
-            return malformed
+            return end(malformed, "paths")
         after = file_modes(repo, sha)
         if any(mode != before.get(path, b"100644") for path, mode in after.items()):
-            return malformed
+            return end(malformed, "modes")
         proposed, planned = blob_at(repo, sha, TASKS_FILE), blob_at(repo, sha, BACKLOG_FILE)
     except HiveError:
         # A git that failed, or ran out of time, on the fork's commit or its files (a link, a folder, a file too large
         # are no plain files): what that commit is, is its account's doing.
-        return malformed
+        return end(malformed, "files")
     if proposed is None or hashlib.sha256(proposed).hexdigest() != entry["tasks"]:
-        return malformed
+        return end(malformed, "digests")
     if entry["backlog"] is None and BACKLOG_FILE.encode() in paths:
-        return malformed  # a backlog changed with no digest of it
+        return end(malformed, "digests")  # a backlog changed with no digest of it
     if entry["backlog"] is not None and (planned is None or hashlib.sha256(planned).hexdigest() != entry["backlog"]):
-        return malformed
+        return end(malformed, "digests")
     digests = {"tasks": entry["tasks"], **({"backlog": entry["backlog"]} if entry["backlog"] else {})}
     nothing = {**base, "outcome": "nothing", "fault": False, "digests": digests}
     if not paths:
-        return nothing
+        return end(nothing, "nothing")
     refused = {**base, "outcome": "refused", "fault": False, "reason": "gate"}
     try:  # the proposal's own files, read as a task file is read: what cannot be read so is refused
         proposal = tasks_of(proposed.decode("utf-8").split("\n"), TASKS_FILE)
@@ -3513,7 +3533,7 @@ def proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt
             check_links({**backlog, **proposal})
     except (HiveError, ValueError, TypeError, RecursionError):
         log("a proposal is refused: its files cannot be read as task files")
-        return refused
+        return end(refused, "task files")
     new = {task_id: task for task_id, task in proposal.items() if task_id not in tasks}
     try:  # what the hive itself reads for the gate: the project's own files and the state, never the account's doing
         published_backlog = {}
@@ -3524,18 +3544,35 @@ def proposal_held(repo, entry, config, tasks, settings, tip, state_folder, dealt
     except (HiveError, ValueError, TypeError, RecursionError, OSError):
         log("a proposal could not be held to the gate: the project's published backlog, its tip or the state cannot be read; "
             "the duty ends at no cost")
-        return unchecked
+        return end(unchecked, "gate inputs")
     failing, passing = ({task_id for task_id, answer in shown.items() if answer == word} for word in ("failing", "passing"))
     refusals = cut_check(config, tasks, proposal, dealt, done, paths_at_tip, failing, passing) \
         + (backlog_check(config, published_backlog, backlog, proposal) if backlog is not None else [])
     if refusals:
         log(f"a proposal is refused by the cutter's gate ({len(refusals)} reason(s)): its account's own cut-check says which")
-        return refused
+        return end(refused, "gate")
     # A cut adds a task, closes one or plans one; files whose bytes changed and whose tasks did not cut nothing.
     if not (new or any(task_json(proposal[task_id]) != task_json(task) for task_id, task in tasks.items())
             or (backlog is not None and set(backlog) - set(published_backlog))):
-        return nothing
+        return end(nothing, "nothing")
     return {**base, "outcome": "cut", "fault": False, "digests": digests}
+
+
+# The checks a proposal is held to, by the names the publisher says them (proposal_held's `why`), each with what it
+# means when it fails.
+PROPOSAL_CHECKS = {
+    "published": "the proposal names another published commit than the branch's tip",
+    "clone": "this clone could not read the project's own commits",
+    "parent": "the proposal's commit is not one commit whose one parent is the published commit",
+    "paths": "the proposal changes another file than the tasks file and the backlog",
+    "modes": "the proposal changes a file's mode",
+    "files": "the proposal's files are not plain files git can read within the hive's bounds",
+    "digests": "the proposal's files are not those the cut line's digests name",
+    "nothing": "the proposal adds, closes and plans no task: nothing to publish",
+    "task files": "the proposal's files cannot be read as task files",
+    "gate inputs": "the project's published backlog, the tip of the branch the hive writes, or the state, cannot be read",
+    "gate": "the cutter's gate refuses the proposal now (hive.py cut-check says why)",
+}
 
 
 def ancestor(repo, older, newer):
@@ -4384,11 +4421,13 @@ def push_said(repo, pushed):
     return said + ([f"and {more} line(s) more, left out"] if more else [])
 
 
-def guarded_push(repo, remote, branch, expected, new, allow_local=False):
+def guarded_push(repo, remote, branch, expected, new, allow_local=False, isolated=True):
     """Moves the project's branch from the tip that was judged to the new commit, and only that: the new commit must
     descend from the expected tip (checked here, so that the lease below can never rewrite history), and the branch
     must still be at the expected tip when the push lands (the lease), so that a branch someone moved meanwhile, a
-    maintainer taking a commit back for instance, is left as they put it.
+    maintainer taking a commit back for instance, is left as they put it. isolated=False: the push alone runs with the
+    machine's own git settings, those of the account that runs it (publish_cut: the project's own account, whose
+    settings hold what lets it push); it never asks anything on a terminal.
 
     Returns True when the push landed, False when the project's repository itself declined this commit (a rule
     or a hook on what may be pushed); raises HiveError for anything else (the branch moved, a lock, the network).
@@ -4398,7 +4437,8 @@ def guarded_push(repo, remote, branch, expected, new, allow_local=False):
     if git(repo, "merge-base", "--is-ancestor", expected, new, check=False).returncode != 0:
         raise HiveError("the commit to push does not descend from the judged tip: nothing is pushed")
     pushed = git(repo, "push", "--porcelain", f"--force-with-lease=refs/heads/{branch}:{expected}", remote,
-                 f"{new}:refs/heads/{branch}", check=False, timeout=180, env=transport(allow_local))
+                 f"{new}:refs/heads/{branch}", check=False, timeout=180, env={**transport(allow_local), "GIT_TERMINAL_PROMPT": "0"},
+                 isolated=isolated)
     if pushed.returncode == 0:
         return True
     said = push_said(repo, pushed)
@@ -5474,6 +5514,9 @@ def cmd_plan(args):
         print(f"{len(made['queue'])} candidate(s), {len(made['deals'])} deal(s), {len(made['conditional'])} kept for after "
               f"the judging, {sum('released' not in e for e in made['expiries'])} deal(s) whose time is up or whose task is closed, "
               f"{sum('released' in e for e in made['expiries'])} given back{duties_said(made)}", file=sys.stderr)
+        alarm = unchecked_alarm(made)
+        if alarm:
+            print(alarm, file=sys.stderr)
     print(f"plan_sha256={file_sha256(args.out)}")
 
 
@@ -5481,7 +5524,29 @@ def duties_said(made):
     """What a step says of the plan's duties, after its own figures: nothing where the plan holds none (a project that
     trusts nobody reads as before)."""
     dealt, ended = len(made.get("duties", ())), len(made.get("duty_ends", ()))
-    return f", {dealt} duty(ies) dealt, {ended} ended" if dealt or ended else ""
+    held, unchecked = proposals_unchecked(made)
+    return (f", {dealt} duty(ies) dealt, {ended} ended" if dealt or ended else "") \
+        + (f" ({held} on a proposal, {unchecked} of them unchecked)" if held else "")
+
+
+def proposals_unchecked(made):
+    """(how many duties the plan ended on a proposal, how many of those ended « unchecked »): a count, which is all a
+    step says of it. Every proposal « unchecked », run after run, is a fault of the hive's own side that turns them all
+    into free ends (ALL_UNCHECKED)."""
+    held = [end for end in made.get("duty_ends", ()) if isinstance(end, dict) and "proposal" in end]
+    return len(held), sum(1 for end in held if end.get("reason") == "unchecked")
+
+
+def unchecked_alarm(made):
+    """The line a plan's job says on a line of its own when every proposal the plan held ended « unchecked » (one at
+    least), or None."""
+    held, unchecked = proposals_unchecked(made)
+    return ALL_UNCHECKED.format(held=held) if held and unchecked == held else None
+
+
+ALL_UNCHECKED = ("every proposal this plan held ({held}) ended « unchecked », at no cost to its account: the hive could not hold it. "
+                 "Once may be a moment's fault; run after run, the hive's own side needs mending (the log above says what could not be "
+                 "read, or the error's type)")
 
 
 def published_plan(args):
@@ -5936,6 +6001,220 @@ def cmd_cut_check(args):
           + (f"; shown to fail at the tip by the judge: {', '.join(sorted(judged))}" if judged else "")
           + (f"; shown to fail at the tip, by the cutter's word: "
           f"{', '.join(sorted(t for t in failing if t in proposal))}" if failing else ""))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The publisher: the cut a trusted account's duty ended on, on the published branch (docs/protocol.md, "Publishing a cut")
+
+
+PUBLISHED_BY = ("Published by hive.py publish-cut, once held again to its account's fork, its marker, its form and\n"
+                "the cutter's gate: its files are the proposal's, and nothing else of it is carried.")
+
+
+def publication_message(end):
+    """The message of the commit publish_cut makes for the cut a ledger line says stands (`end`): the tool's own words,
+    the duty's instant and the proposal's commit id, and nothing the account wrote. It is the record of the publication:
+    a commit of the published branch whose one parent is the cut's published commit and whose message is this one is
+    that cut, published (published_already)."""
+    return f"The cut of the duty at {end['duty']}\n\n{PUBLISHED_BY}\n\nHive-Cut: {end['proposal']}\nHive-Deal: {end['duty']}\n"
+
+
+def cut_line(end):
+    """True if a ledger line is a « cut » line of the shape a run writes (duty_end_line, read_plan): the publisher reads
+    nothing else of it."""
+    digests = end.get("digests")
+    return (stamp(end.get("at")) and stamp(end.get("duty")) and type(end.get("member_id")) is int and type(end.get("repo_id")) is int
+            and end["repo_id"] > 0 and is_sha(end.get("proposal")) and is_sha(end.get("published")) and isinstance(digests, dict)
+            and "tasks" in digests and set(digests) <= {"tasks", "backlog"}
+            and all(isinstance(digest, str) and bool(DIGEST.match(digest)) for digest in digests.values()))
+
+
+def published_already(repo, tip, end):
+    """True if the published branch's tip is the publication of that cut: a commit whose one parent is the cut's
+    published commit and whose message is the one publish_cut writes for it. What a commit says can only keep the
+    publisher from publishing, never make it publish."""
+    listed = git(repo, "rev-list", "--parents", "--no-walk", need_sha(tip), check=False)
+    return listed.returncode == 0 and listed.stdout.split() == [tip, end["published"]] and commit_message(repo, tip) == publication_message(end)
+
+
+def state_copied(repo, folder, allow_local=False):
+    """Copies into `folder` the files of the project's state the publisher reads (the ledger, the judge's answers about
+    the tip), as the branch hive-state of the project's repository holds them now, and never a clone of it that may be
+    behind: a deal made since would be missed by the gate. Of that branch, its latest commit alone is fetched, within a
+    bound in bytes (fetch_bounded). False when the project has no such branch yet."""
+    ref = f"refs/heads/{STATE_BRANCH}"
+    listed = git(repo, "ls-remote", "origin", ref, timeout=60, env=transport(allow_local))
+    tips = [line.split("\t")[0] for line in listed.stdout.splitlines() if line.split("\t")[1:] == [ref]]
+    if not tips:
+        return False
+    if len(tips) != 1 or not is_sha(tips[0]):
+        raise HiveError("the project's repository lists its state's branch otherwise than git does")
+    commit = tips[0]
+    if git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0:
+        # Its latest commit alone, bounded in time and in bytes, whatever the branch's history holds.
+        scratch = "refs/hive/state-read"
+        fetched = fetch_bounded(repo, "origin", [f"+{ref}:{scratch}"], len(STATE_FILES) * STATE_BYTES + FETCH_FLOOR, allow_local, depth=1)
+        got = git(repo, "rev-parse", "--verify", "--quiet", f"{scratch}^{{commit}}", check=False).stdout.strip()
+        git(repo, "update-ref", "-d", scratch, check=False)
+        if fetched != "got" or not is_sha(got):
+            raise HiveError("the project's state could not be fetched within the hive's bounds")
+        commit = got  # (the branch's latest commit: a newer one than was listed, if it moved meanwhile)
+    for name in ("ledger.jsonl", TIP_FILE):
+        data = blob_at(repo, commit, name, most=STATE_BYTES)
+        if data is not None:
+            (Path(folder) / name).write_bytes(data)
+    return True
+
+
+def nothing_published(check, why):
+    """No cut to publish, which is no fault: said, and the command ends well."""
+    print(f"NOTHING {check}: {why}")
+
+
+def not_published(check, why):
+    """A cut the publisher does not publish, for a doubt it does not settle by guessing: the check, said, and the
+    command ends in an error. Nothing was pushed."""
+    print(f"REFUSED {check}: {why}")
+    raise HiveError(f"the cut is not published ({check}): nothing is pushed")
+
+
+def publish_cut(repo, repository, api, allow_local=False):
+    """The project's publisher: pushes to the published branch the cut that stands, as the ledger says it (the latest
+    « cut » line of a cut duty), once it has held it again itself. It trusts nothing of the line but « look at this
+    commit », and nothing of the commit but what it checks, in this order:
+      - the line: of the shape a run writes, for a cut duty the ledger dealt that account at that instant in that fork,
+        and the one line that ends that duty;
+      - the published branch: already the publication of that cut (published_already), or still at the commit the cut
+        was held against; else nothing is published, at no harm (the next cut starts from the branch as it is);
+      - the account: trusted with « cut » by the project's file as it is now;
+      - the fork: the one the line names (« repo_id »), whose owner GitHub says is that account, which GitHub says is
+        a fork of the project, and whose branch CUT_BRANCH still names the proposal's commit. A clone that lacks the
+        commit fetches that branch and keeps what comes only if it is that very commit, which is taken for nothing of
+        where it came from: the forks of a project
+        share their objects, so what binds the commit to its account is the account's own branch, which no other
+        account can move;
+      - its marker: a proposal's (read_proposal), naming that account, that duty, that published commit and the line's
+        digests;
+      - its form and the gate, as the run held it (proposal_held), against the published branch and the state as they
+        are now: one commit on the published commit, the tasks file and the backlog alone, plain files of the modes the
+        published commit gives them, the line's digests, files read as task files, and the cutter's gate with the deals
+        and the judge's answers of the state as the project's repository holds it now (state_copied).
+    Then it pushes one commit of its own, whose files are the proposal's (its tree), on the published commit: the cut's
+    account as its author, the hive's name as committer, the line's instant as its date, the tool's own message
+    (publication_message). The same line makes the same commit, and a second run finds it published. The push moves the
+    branch only from the commit the cut was held against to that commit (guarded_push), with this account's own git
+    settings, which may push the published branch: a branch moved meanwhile is left as it is. What it says names
+    commits, instants and an account's number, never a path, a token or a word the account wrote."""
+    branch, tip = published_tip(repo, "origin", allow_local)
+    config, tasks = settings_on(repo, tip, branch, repository)
+    if config.get("paused"):
+        return nothing_published("paused", "the project is paused: nothing is published while it is")
+    with tempfile.TemporaryDirectory(prefix="hive-publish-") as folder:
+        try:
+            held = state_copied(repo, folder, allow_local)
+            ledger = Ledger(folder)
+        except (HiveError, OSError):
+            return not_published("state", "the project's state (its branch hive-state) cannot be read")
+        cuts = [e for e in ledger.events if isinstance(e, dict) and e.get("type") == "duty-end" and e.get("role") == "cut" and e.get("outcome") == "cut"]
+        if not held or not cuts:
+            return nothing_published("cut", "no cut duty of the ledger ended on a cut")
+        end = cuts[-1]
+        if not cut_line(end):
+            return not_published("line", "the ledger's latest « cut » line is not of the shape a run writes")
+        duty = next((e for e in ledger.events if isinstance(e, dict) and e.get("type") == "duty" and e.get("role") == "cut"
+                     and e.get("member_id") == end["member_id"] and e.get("at") == end["duty"]), None)
+        if duty is None:
+            return not_published("duty", "the ledger dealt that account no cut duty at the instant the line names")
+        if duty.get("repo_id") != end["repo_id"]:
+            return not_published("duty", "the line names another fork than the one the duty was dealt in")
+        # A duty ends once: a second line for it (one that says « cut » after the duty ended otherwise, say) is a doubt.
+        ends = [e for e in ledger.events if isinstance(e, dict) and e.get("type") == "duty-end" and e.get("role") == "cut"
+                and e.get("member_id") == end["member_id"] and e.get("duty") == end["duty"]]
+        if ends != [end]:
+            return not_published("duty", "the ledger ends that duty on more than one line")
+        if published_already(repo, tip, end):
+            return nothing_published("published", f"the published branch is at {tip}, the cut of the duty at {end['duty']} published")
+        if end["published"] != tip:
+            return nothing_published("tip", "the published branch is no longer at the commit the latest cut was held against (that cut "
+                                            "was published, or the branch moved since): nothing to publish")
+        if end["member_id"] not in trusted_accounts(config, "cut"):
+            return not_published("trusted", "the project's file does not trust that account with « cut » now")
+        try:
+            fork = api.repository(end["repo_id"])
+        except HiveError:
+            return not_published("fork", "GitHub could not say whose the fork the line names is")
+        if not (isinstance(fork, dict) and type(fork.get("id")) is int and fork["id"] == end["member_id"] and isinstance(fork.get("login"), str)
+                and LOGIN.match(fork["login"]) and isinstance(fork.get("full_name"), str) and REPO_NAME.match(fork["full_name"])):
+            return not_published("fork", "GitHub does not say that the fork the line names is that account's own")
+        if not (isinstance(fork.get("parent"), str) and fork["parent"].casefold() == repository.casefold()):
+            return not_published("fork", "GitHub does not say that the fork the line names is a fork of the project")
+        sha, url, branches = end["proposal"], fork_url(api, fork["full_name"], allow_local), {}
+        try:
+            listed_heads(repo, url, allow_local, branches=branches)
+        except HiveError:
+            return not_published("branch", "the account's fork could not be listed")
+        if branches.get(f"refs/heads/{CUT_BRANCH}") != sha:
+            return not_published("branch", f"the account's fork does not hold the proposal at {CUT_BRANCH} now")
+        if git(repo, "cat-file", "-e", f"{sha}^{{commit}}", check=False).returncode != 0:
+            try:
+                got = fetch_heads(repo, url, [(sha, f"refs/heads/{CUT_BRANCH}")], "publish", allow_local,
+                                  max(FETCH_WEIGHTS * config["limits"]["history_bytes"], FETCH_FLOOR))
+            except HiveError:
+                got = set()
+            if sha not in got:
+                return not_published("fetch", "the proposal's commit could not be fetched from the account's fork")
+        try:
+            message = commit_message(repo, sha)
+        except HiveError:
+            message = None
+        marker = read_proposal(message) if message is not None else None
+        if marker is None:
+            return not_published("marker", "the proposal's commit carries no proposal's marker")
+        named = {"member": marker["member"].lower() == fork["login"].lower(), "deal": marker["deal"] == end["duty"],
+                 "published": marker["published"] == end["published"], "tasks": marker["tasks"] == end["digests"]["tasks"],
+                 "backlog": marker["backlog"] == end["digests"].get("backlog")}
+        if not all(named.values()):
+            return not_published("marker", "the proposal's marker does not name what the line and the fork say: "
+                                           + ", ".join(field for field, right in named.items() if not right))
+        work = work_tip(repo, config, allow_local)
+        entry = {"sha": sha, "published": end["published"], "repo_id": end["repo_id"], "tasks": end["digests"]["tasks"],
+                 "backlog": end["digests"].get("backlog")}
+        why = []
+        try:
+            live = {task_id for task_id, deal in ledger.deals().items() if deal["state"] == "live"}
+            outcome = proposal_held(repo, entry, config, tasks, tip, work, folder, live, ledger.done(), integrations(ledger),
+                                    duty.get("settings"), why)
+        except Exception as error:  # noqa: BLE001 (what is unforeseen is not guessed at, and none of its words are said: its type alone)
+            return not_published("unforeseen", f"the proposal could not be held ({type(error).__name__})")
+        if outcome["outcome"] != "cut":
+            check = why[-1] if why else "unforeseen"
+            return not_published(check, PROPOSAL_CHECKS.get(check, "the proposal is not a cut that stands"))
+    login, date = fork["login"], f"{int(parse_iso(end['at']).timestamp())} +0000"
+    env = {"GIT_AUTHOR_NAME": login, "GIT_AUTHOR_EMAIL": f"{end['member_id']}+{login}@users.noreply.github.com", "GIT_AUTHOR_DATE": date,
+           "GIT_COMMITTER_NAME": ROBOT[0], "GIT_COMMITTER_EMAIL": ROBOT[1], "GIT_COMMITTER_DATE": date}
+    commit = git(repo, "commit-tree", "--no-gpg-sign", tree_of(repo, sha), "-p", need_sha(tip), stdin=publication_message(end),
+                 env=env).stdout.strip()
+    try:
+        landed = guarded_push(repo, "origin", branch, tip, commit, allow_local, isolated=False)
+    except HiveError:
+        return not_published("push", "the push did not land (the published branch moved meanwhile, or the network failed): the next run "
+                                     "holds the cut again")
+    if not landed:
+        return not_published("push", "the project's repository declined the commit (a rule or a hook on what may be pushed)")
+    print(f"PUBLISHED {commit} on {branch}: the cut of the duty at {end['duty']}, of account {end['member_id']}, proposal {sha}")
+
+
+def cmd_publish_cut(args):
+    """The project's publisher (publish_cut), run with the project's own account, whose git settings may push its
+    published branch; GitHub is read through gh, as a run reads it. On Linux alone, as the hive's run: each git it
+    starts is bounded in a way other systems do not offer, and a message is written there as it is meant."""
+    if not sys.platform.startswith("linux"):
+        raise HiveError(ONLY_ON_LINUX_PUBLISHER)
+    publish_cut(args.repo, repository_of(args), GhApi())
+
+
+ONLY_ON_LINUX_PUBLISHER = ("the publisher runs on Linux only, as the hive's run does: on this system it does not start, and nothing is "
+                           "published. Run it on a Linux machine or in a cloud session")
 
 
 BACKLOG_FILE = "hive/backlog.jsonl"  # the tasks the project's architect plans, which its cutter publishes once what they need is done
@@ -11509,6 +11788,9 @@ RELATIVE_PATH = ("PATH (or GIT_EXEC_PATH) holds an entry that is not a folder na
 # No worker command ends in anything but one line: what this tool did not foresee is said as such, with where it was.
 UNFORESEEN = ("this command stopped on an error of the tool's own ({kind}, line {line} of hive.py): what it had done stays done. Run "
               "nothing more for this task, and tell the user")
+# The publisher's output may be read by the architect's agent, and its log kept: what it did not foresee is said in one
+# line too, with no path and no word of what it read.
+QUIET = "this command stopped on an error of the tool's own ({kind}, line {line} of hive.py): what it had done stays done"
 
 
 def of_the_clone(entry):
@@ -11597,6 +11879,15 @@ def main(argv=None):
                                                      "tip.json holds the project's own runs' answers)")
     p.add_argument("--backlog", help="the proposed hive/backlog.jsonl, when the cut changes it (a file of this machine)")
     p.set_defaults(run=cmd_cut_check)
+    p = sub.add_parser("publish-cut", help="the project's publisher: push to the published branch the cut a trusted account's duty ended "
+                                           "on, once held again to its fork, its marker, its form and the gate (docs/protocol.md); run "
+                                           "with the project's own account. A published branch reset (not reverted) to the commit the "
+                                           "latest cut was held against gets that cut published again: take a published cut back with a "
+                                           "commit that undoes it")
+    p.add_argument("--project", required=True, help="the project's repository (owner/name)")
+    p.add_argument("--repo", required=True, help="a full clone of the project, its branches under refs/remotes/origin, whose origin is "
+                                                 "the project's https address, and which this account's git settings let it push to")
+    p.set_defaults(run=cmd_publish_cut, quiet=True)  # (it repeats nothing git said, and no error's words: QUIET)
     p = sub.add_parser("cut", help="the deterministic cutter: write the task file its rules propose, held to the gate (docs/cutter.md)")
     hive_side(p)
     p.add_argument("--out", required=True, help="where to write the proposed hive/tasks.jsonl, a file of this machine")
@@ -11729,13 +12020,15 @@ def main(argv=None):
     p.add_argument("--withdraw", action="store_true", help="take the ask back instead")
     p.set_defaults(run=cmd_duty)
     args = parser.parse_args(argv)
-    # A volunteer-side command, whichever function runs git for it, repeats nothing git said (VOLUNTEER_SIDE).
+    # A volunteer-side command, and a quiet one (the publisher), whichever function runs git for it, repeats nothing git
+    # said (VOLUNTEER_SIDE), and ends on one line whatever happens.
     global VOLUNTEER_SIDE
-    before, VOLUNTEER_SIDE = VOLUNTEER_SIDE, getattr(args, "volunteer", False)
+    volunteer = getattr(args, "volunteer", False)
+    before, VOLUNTEER_SIDE = VOLUNTEER_SIDE, volunteer or getattr(args, "quiet", False)
     try:
-        if VOLUNTEER_SIDE and not sys.platform.startswith("linux"):
+        if volunteer and not sys.platform.startswith("linux"):
             raise HiveError(ONLY_ON_LINUX)
-        if VOLUNTEER_SIDE:
+        if volunteer:
             os.environ.setdefault("PATH", os.defpath)  # (no PATH at all: the system's own, written out, so that no program falls back on another)
             searched = [entry for name in ("PATH", "GIT_EXEC_PATH") if name in os.environ for entry in os.environ[name].split(os.pathsep)]
             if any(not os.path.isabs(entry) or of_the_clone(entry) for entry in searched):
@@ -11750,7 +12043,8 @@ def main(argv=None):
         if not VOLUNTEER_SIDE:  # (the hive's own runs end as they are: their log is read by its maintainers)
             raise
         lines = [frame.lineno for frame in traceback.extract_tb(error.__traceback__) if frame.filename == __file__]
-        print(f"hive: {UNFORESEEN.format(kind=type(error).__name__, line=lines[-1] if lines else 0)}", file=sys.stderr)
+        said = UNFORESEEN if volunteer else QUIET
+        print(f"hive: {said.format(kind=type(error).__name__, line=lines[-1] if lines else 0)}", file=sys.stderr)
         sys.exit(2)
     finally:
         VOLUNTEER_SIDE = before
