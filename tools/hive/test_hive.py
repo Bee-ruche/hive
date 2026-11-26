@@ -16923,6 +16923,7 @@ class TestTheMeasure(Base):
         self.w.set_config({"protected": ["tests/**", "bee/**"]})
         self.registry, self.hive_commit, self.off_main = self.hives_clone()
         self.asked = []
+        self.trials = []  # the parent folder given to each trial mount
 
     def stand_in(self, answers):
         """A judge function as judge_of gives one, answering from `answers` in turn (an exception is thrown), and noting
@@ -16945,7 +16946,8 @@ class TestTheMeasure(Base):
         out, err = io.StringIO(), io.StringIO()
         made = []
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), \
-                mock.patch.object(hive, "docker_here", return_value=docker), mock.patch.object(hive, "root_or_sudo", return_value=root), \
+                mock.patch.object(hive, "docker_here", return_value=docker), \
+                mock.patch.object(hive, "mount_trial", side_effect=lambda registry, parent: self.trials.append(parent) or (None if root else self.TRIAL_REFUSED)), \
                 mock.patch.object(hive, "make_image", side_effect=lambda registry, kind, tree: made.append((kind, sorted(os.listdir(tree)))) or image), \
                 mock.patch.object(hive, "judge_of", return_value=self.stand_in(answers)), \
                 mock.patch.object(hive, "measure_clock", side_effect=lambda: next(clock)):
@@ -17139,7 +17141,7 @@ class TestTheMeasure(Base):
         self.healthy()
         code, lines, err = self.measure([])
         self.assertEqual((code, lines, err.strip()), (2, [], f"hive: {hive.PLUGIN_HERE}"))
-        self.assertEqual((self.asked, self.made), ([], []))
+        self.assertEqual((self.asked, self.made, self.trials), ([], [], []), "nothing judged, made or mounted")
 
     def test_the_reason_the_judge_wrote_is_said_beside_a_failure(self):
         """A judge that fails writes its reason in its own report, in the judgement's folder (relay.json for a relay
@@ -17160,20 +17162,67 @@ class TestTheMeasure(Base):
         self.assertIn("; the judge said: the tip's build failed:?[31m red", failures[0])
         self.assertIn("; the judge wrote no reason (it stopped before it could)", failures[1])
 
-    def test_root_or_sudo_for_both_commands_and_none_where_sudo_is_not(self):
-        with mock.patch.object(hive.os, "geteuid", return_value=1000):
-            for answers, expected in (([0, 0], True), ([0, 1], False), ([FileNotFoundError("sudo")], False)):
-                with self.subTest(answers=answers):
-                    given = iter(answers)
+    TRIAL = "size=1m,nr_inodes=16,mode=0700,nosuid,nodev"
+    TRIAL_REFUSED = "the trial mount failed: mount of an execution's tmpfs failed (root or sudo -n required): permission denied"
 
-                    def run(command, **named):
-                        answer = next(given)
-                        if isinstance(answer, BaseException):
-                            raise answer
-                        self.assertEqual(command[:3], ["sudo", "-n", "-l"])
-                        return mock.Mock(returncode=answer)
-                    with mock.patch.object(hive.subprocess, "run", side_effect=run):
-                        self.assertIs(hive.root_or_sudo(), expected)
+    def trial(self, answers, euid, mounted=False):
+        """mount_trial in a fresh parent folder, as user `euid`, subprocess.run answering `answers` in turn ((return code,
+        stderr), or an exception thrown), os.path.ismount answering `mounted`: (its answer, the commands run, the timeouts
+        given, the folder it took, what is left in the parent)."""
+        parent = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        given, commands, timeouts = iter(answers), [], []
+
+        def run(command, **named):
+            commands.append(command)
+            timeouts.append(named.get("timeout"))
+            answer = next(given)
+            if isinstance(answer, BaseException):
+                raise answer
+            return mock.Mock(returncode=answer[0], stdout="", stderr=answer[1])
+        with mock.patch.object(hive.os, "geteuid", return_value=euid), mock.patch.object(hive.subprocess, "run", side_effect=run), \
+                mock.patch.object(hive.os.path, "ismount", return_value=mounted):
+            said = hive.mount_trial(REGISTRY, str(parent))
+        folder = commands[0][-1] if commands else None
+        if folder is not None:
+            self.assertEqual(os.path.dirname(folder), str(parent), "the trial's folder is made in the parent given")
+        return said, commands, timeouts, folder, sorted(os.listdir(parent))
+
+    def test_the_trial_mounts_and_unmounts_through_the_judges_helper_and_removes_its_folder(self):
+        said, commands, timeouts, folder, left = self.trial([(0, ""), (0, "")], 1000)
+        self.assertEqual((said, left), (None, []))
+        self.assertEqual(commands, [["sudo", "-n", "mount", "-t", "tmpfs", "-o", self.TRIAL, "tmpfs", folder], ["sudo", "-n", "umount", folder]])
+        self.assertEqual(timeouts, [hive.MOUNT_TRIAL_SECONDS] * 2)
+        said, commands, _, folder, left = self.trial([(0, ""), (0, "")], 0)
+        self.assertEqual((said, commands, left), (None, [["mount", "-t", "tmpfs", "-o", self.TRIAL, "tmpfs", folder], ["umount", folder]], []),
+                         "as root, without sudo")
+
+    def test_root_that_cannot_mount_is_refused(self):
+        """Root without the right to mount (a container without CAP_SYS_ADMIN): the mount fails, measure is told why, and
+        nothing is unmounted."""
+        said, commands, _, folder, left = self.trial([(32, "permission denied")], 0)
+        self.assertEqual((said, commands, left), (self.TRIAL_REFUSED, [["mount", "-t", "tmpfs", "-o", self.TRIAL, "tmpfs", folder]], []))
+
+    def test_sudo_that_asks_a_password_or_is_not_there_or_hangs_is_refused(self):
+        said, commands, _, _, left = self.trial([(1, "sudo: a password is required")], 1000)
+        self.assertEqual((said, len(commands), left), ("the trial mount failed: mount of an execution's tmpfs failed (root or sudo -n required): "
+                                                       "sudo: a password is required", 1, []))
+        said, commands, _, _, left = self.trial([FileNotFoundError(2, "No such file or directory", "sudo")], 1000)
+        self.assertEqual((said, len(commands), left), ("the trial mount failed: [Errno 2] No such file or directory: 'sudo'", 1, []))
+        said, commands, _, _, left = self.trial([subprocess.TimeoutExpired(["sudo"], hive.MOUNT_TRIAL_SECONDS)], 1000)
+        self.assertEqual((said, len(commands), left), (f"the trial mount took more than {hive.MOUNT_TRIAL_SECONDS} s", 1, []))
+
+    def test_a_trial_umount_that_fails_says_what_is_left_mounted_and_keeps_it(self):
+        said, commands, _, folder, left = self.trial([(0, ""), (32, "target is busy")], 1000, mounted=True)
+        self.assertEqual(said, "the trial umount failed: umount of an execution's tmpfs failed (root or sudo -n required): target is busy; "
+                               f"{folder} is left mounted")
+        self.assertEqual((len(commands), left), (2, [os.path.basename(folder)]), "a folder still mounted is not removed")
+
+    def test_the_trial_itself_on_this_machine_leaves_nothing(self):
+        """Not mocked: the trial run here (as the tests' user, root or not), whatever it answers, leaves its parent empty."""
+        parent = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        said = hive.mount_trial(REGISTRY, str(parent))
+        self.assertTrue(said is None or (isinstance(said, str) and said.startswith("the trial ")), said)
+        self.assertEqual(os.listdir(parent), [], said)
 
     def measure_kind(self, kind):
         """The project set up with a judge of `kind`, and (the words measure is given, the answers of one judgement)."""
@@ -17188,16 +17237,18 @@ class TestTheMeasure(Base):
         return (), [{"code": 0, "report": {**self.RELAY, "encode_seconds": 1.0}}]
 
     def mounting_kind_asks_for_root_or_sudo(self, kind):
-        """A kind whose judge mounts (JUDGE_MOUNTS): without root or sudo -n, measure says so, naming the kind and what its
-        judge mounts, and ends with 2, nothing made or judged; with them, it judges."""
+        """A kind whose judge mounts (JUDGE_MOUNTS): where the trial mount fails, measure says so, naming the kind, what its
+        judge mounts and why the trial failed, and ends with 2, nothing made or judged; where it holds, it judges. The
+        trial is made where the work folder will be (--workdir)."""
         words, answers = self.measure_kind(kind)
         code, lines, err = self.measure(answers, "--times", "1", *words, root=False)
         self.assertEqual((code, lines, err.strip()), (2, [], f"hive: the {kind} judge mounts {hive.JUDGE_MOUNTS[kind]}: it needs root, or sudo that "
-                                                             "asks no password (sudo -n) for mount and umount"))
-        self.assertEqual((self.asked, self.made), ([], []), "nothing judged, no image made")
-        code, lines, err = self.measure(answers, "--times", "1", *words, root=True)
+                                                             f"asks no password (sudo -n) for mount and umount ({self.TRIAL_REFUSED})"))
+        self.assertEqual((self.asked, self.made, self.trials), ([], [], [None]), "nothing judged, no image made")
+        work = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        code, lines, err = self.measure(answers, "--times", "1", *words, "--workdir", str(work), root=True)
         self.assertEqual((code, err), (0, ""), lines)
-        self.assertEqual(len(self.asked), 1, "judged once it may mount")
+        self.assertEqual((len(self.asked), self.trials[1:]), (1, [str(work)]), "judged once it may mount; the trial where the work folder goes")
 
     def test_the_common_judge_mounts_and_asks_for_root_or_sudo(self):
         self.mounting_kind_asks_for_root_or_sudo("common")
@@ -17216,43 +17267,43 @@ class TestTheMeasure(Base):
             del hive.JUDGE_MOUNTS["relay"]
             code, lines, err = self.measure(answers, "--times", "1", *words, root=False)
         self.assertEqual((code, err), (0, ""), lines)
-        self.assertEqual(len(self.asked), 1)
+        self.assertEqual((len(self.asked), self.trials), (1, []), "judged, with no trial mount")
 
-    def test_the_kinds_named_as_mounting_are_those_whose_judges_code_mounts(self):
-        """JUDGE_MOUNTS names exactly the kinds whose judge's module calls container.mount_point, directly or through a
-        function or class of the judges' code that does (read from their source, test files aside; each call taken to
-        the module that defines or imports what it names, since two modules may define the same name), so that a judge
-        that comes to mount, or stops, is seen here. Calls are read as name(…) or module.name(…), names and modules as the
-        module's top-level statements define and import them; so that a mount made some other way (subprocess, an alias,
-        an import inside a function) is not missed, the words mount and umount stand in the judges' code only as the
-        first argument of a call to mount_point."""
-        trees = {path.stem: ast.parse(path.read_text(encoding="utf-8")) for path in (REGISTRY / "tools/judge").glob("*.py")
-                 if not path.name.startswith("test_")}
+    # Strings of the judges' code that name a mount without running one: (module, the string), each a message.
+    STRINGS_NAMING_MOUNT = {("container", "invalid mount path: ")}
+
+    def judges_mounts(self, folder):
+        """What the judges' code in `folder` mounts, read from its source (test files aside): (the kinds whose judge's
+        module calls container.mount_point, directly or through a top-level function or class of the judges' code that
+        does; the strings that name mount or umount elsewhere, as (module, line); the functions and classes found to
+        mount). Each call is taken to the module that defines or imports what it names (two modules may define the same
+        name), imports read wherever they stand; a call is read as name(…) or module.name(…). A string names mount or
+        umount where the word stands in it ("/usr/bin/mount", "mount -t tmpfs …", an f-string's text; not --mount, not
+        mount_point), unless it is a docstring, a message of STRINGS_NAMING_MOUNT, or the first argument of a call to
+        container.mount_point."""
+        trees = {path.stem: ast.parse(path.read_text(encoding="utf-8")) for path in Path(folder).glob("*.py") if not path.name.startswith("test_")}
         self.assertTrue(set(hive.JUDGE_MODULES.values()) <= set(trees), sorted(trees))
-        allowed = {id(call.args[0]) for tree in trees.values() for call in ast.walk(tree) if isinstance(call, ast.Call) and call.args
-                   and (call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", None)) == "mount_point"}
-        stray = [(module, word.lineno) for module, tree in trees.items() for word in ast.walk(tree)
-                 if isinstance(word, ast.Constant) and word.value in ("mount", "umount") and id(word) not in allowed]
-        self.assertEqual(stray, [], "mount or umount named elsewhere than as mount_point's first argument")
-
-        def calls(module, node):
-            """(module, name) of each call under `node` that names a top-level function or class of the judges' code."""
-            tree, names, modules = trees[module], {}, {}
-            for statement in tree.body:
-                if isinstance(statement, (ast.FunctionDef, ast.ClassDef)):
-                    names[statement.name] = (module, statement.name)
-                elif isinstance(statement, ast.ImportFrom) and statement.module in trees:
+        scopes = {}
+        for module, tree in trees.items():
+            names = {d.name: (module, d.name) for d in tree.body if isinstance(d, (ast.FunctionDef, ast.ClassDef))}
+            modules = {}
+            for statement in ast.walk(tree):
+                if isinstance(statement, ast.ImportFrom) and statement.module in trees:
                     names.update({alias.asname or alias.name: (statement.module, alias.name) for alias in statement.names})
                 elif isinstance(statement, ast.Import):
                     modules.update({alias.asname or alias.name: alias.name for alias in statement.names if alias.name in trees})
-            found = set()
-            for call in ast.walk(node):
-                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in names:
-                    found.add(names[call.func.id])
-                elif (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
-                      and call.func.value.id in modules):
-                    found.add((modules[call.func.value.id], call.func.attr))
-            return found
+            scopes[module] = names, modules
+
+        def target(module, call):
+            names, modules = scopes[module]
+            if isinstance(call.func, ast.Name):
+                return names.get(call.func.id)
+            if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id in modules:
+                return modules[call.func.value.id], call.func.attr
+            return None
+
+        def calls(module, node):
+            return {target(module, call) for call in ast.walk(node) if isinstance(call, ast.Call)} - {None}
 
         mounting = {("container", "mount_point")}
         while True:
@@ -17261,9 +17312,58 @@ class TestTheMeasure(Base):
             if not more:
                 break
             mounting |= more
+        kinds = {kind for kind, module in hive.JUDGE_MODULES.items() if calls(module, trees[module]) & mounting}
+        allowed = set()
+        for module, tree in trees.items():
+            for node in ast.walk(tree):
+                if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body
+                        and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)):
+                    allowed.add(id(node.body[0].value))
+                if isinstance(node, ast.Call) and node.args and target(module, node) == ("container", "mount_point"):
+                    allowed.add(id(node.args[0]))
+        word = re.compile(r"(?<![-\w])u?mount\b")
+        strays = sorted((module, node.lineno) for module, tree in trees.items() for node in ast.walk(tree)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str) and word.search(node.value)
+                        and id(node) not in allowed and (module, node.value) not in self.STRINGS_NAMING_MOUNT)
+        return kinds, strays, mounting
+
+    def test_the_kinds_named_as_mounting_are_those_whose_judges_code_mounts(self):
+        """JUDGE_MOUNTS names exactly the kinds whose judge's code mounts (judges_mounts), so that a judge that comes to
+        mount, or stops, is seen here; and no string of the judges' code names mount or umount outside mount_point."""
+        kinds, strays, mounting = self.judges_mounts(REGISTRY / "tools/judge")
         self.assertTrue({("container", "Execution"), ("reference", "bounded_folder")} <= mounting, sorted(mounting))
-        self.assertEqual({kind for kind, module in hive.JUDGE_MODULES.items() if calls(module, trees[module]) & mounting}, set(hive.JUDGE_MOUNTS),
-                         sorted(mounting))
+        self.assertEqual((kinds, strays), (set(hive.JUDGE_MOUNTS), []), sorted(mounting))
+        for module, text in self.STRINGS_NAMING_MOUNT:
+            self.assertIn(json.dumps(text)[1:-1], (REGISTRY / f"tools/judge/{module}.py").read_text(encoding="utf-8"), "a message still there")
+
+    def test_a_judge_that_mounts_some_other_way_is_seen(self):
+        """On a copy of the judges' code, reference.py changed: a mount run through subprocess by the program's path, or
+        written in an f-string, is a string that names mount; mount_point imported inside a function under another name
+        still makes the kind one that mounts, with nothing stray."""
+        source = REGISTRY / "tools/judge"
+        original = (source / "reference.py").read_text(encoding="utf-8")
+        lines = original.splitlines(keepends=True)
+        at = next(n for n, text in enumerate(lines) if 'container.mount_point("mount"' in text)
+        indent = lines[at][:len(lines[at]) - len(lines[at].lstrip())]
+        variants = (
+            ("the program's path", indent + 'subprocess.run(["/usr/bin/mount", "-t", "tmpfs", "tmpfs", path], check=True)\n', None, [("reference", at + 1)]),
+            ("an f-string", indent + 'subprocess.run(f"mount -t tmpfs -o size={megabytes}m tmpfs {path}", shell=True, check=True)\n', None,
+             [("reference", at + 1)]),
+            ("an import in a function", indent + "from container import mount_point as put\n" + indent + 'put("mount", "-t", "tmpfs", "tmpfs", path)\n',
+             'put("umount", path)', []))
+        for name, line, umount, expected in variants:
+            with self.subTest(name):
+                copy = Path(tempfile.mkdtemp(dir=self.tmp.name))
+                for path in source.glob("*.py"):
+                    if not path.name.startswith("test_"):
+                        shutil.copyfile(path, copy / path.name)
+                changed = "".join(lines[:at] + [line] + lines[at + 1:])
+                if umount is not None:
+                    changed = changed.replace('container.mount_point("umount", path)', umount)
+                self.assertNotEqual(changed, original)
+                (copy / "reference.py").write_text(changed, encoding="utf-8")
+                kinds, strays, _ = self.judges_mounts(copy)
+                self.assertEqual((kinds, strays), (set(hive.JUDGE_MOUNTS), expected))
 
     def test_the_time_of_a_judgement_holds_with_the_manifests_bounds_as_they_are(self):
         """Bounds proposed below the manifest's own make a smaller worst case: the time proposed for a judgement still

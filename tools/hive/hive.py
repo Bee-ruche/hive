@@ -8263,16 +8263,35 @@ def docker_here():
     return shutil.which("docker") is not None
 
 
-def root_or_sudo():
-    """True if the judge may mount and unmount as it does (container.mount_point): as root, or through sudo -n for both
-    commands (sudo -n -l says whether it would run each without asking). False where sudo is not there."""
-    if os.geteuid() == 0:
-        return True
+MOUNT_TRIAL_SECONDS = 30  # each command of mount_trial at most
+
+
+def mount_trial(registry, parent=None):
+    """None if the judge may mount and unmount here as it does; otherwise why not, short. It does it rather than ask:
+    a small memory file system mounted on a fresh folder of `parent` (where the work folder will be) and unmounted
+    again, through the judges' own helper (container.mount_point: as root, or through sudo -n), each command at most
+    MOUNT_TRIAL_SECONDS. So root without the right to mount (a container without CAP_SYS_ADMIN, a user namespace) is
+    refused here, before the image is made, and a sudo rule that names the arguments (mount -t tmpfs *) passes as the
+    judges' own calls do. The folder is removed, unless it is still mounted, which the answer then says."""
+    container = judge_module(registry, "container")
+    folder = tempfile.mkdtemp(prefix="hive-mount-trial-", dir=parent)
+    step, reason = "mount", None
     try:
-        return all(subprocess.run(["sudo", "-n", "-l", command], capture_output=True, stdin=subprocess.DEVNULL, timeout=30).returncode == 0
-                   for command in ("mount", "umount"))
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        container.mount_point("mount", "-t", "tmpfs", "-o", "size=1m,nr_inodes=16,mode=0700,nosuid,nodev", "tmpfs", folder,
+                              timeout=MOUNT_TRIAL_SECONDS)
+        step = "umount"
+        container.mount_point("umount", folder, timeout=MOUNT_TRIAL_SECONDS)
+    except subprocess.TimeoutExpired:
+        reason = f"the trial {step} took more than {MOUNT_TRIAL_SECONDS} s"
+    except (container.JudgeError, OSError) as error:
+        reason = f"the trial {step} failed: {safe_text(error, 160)}"
+    if os.path.ismount(folder):
+        return f"{reason or 'the trial umount left it mounted'}; {folder} is left mounted"
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass
+    return reason
 
 
 def make_image(registry, kind, tree):
@@ -8453,8 +8472,8 @@ def cmd_measure(args):
     WRONG, CANNOT lines), and proposals for the step and the bounds (DECIDE), each with its rule and its numbers. Read
     from the clone (--repo, as its last fetch left it) and the hive's own tree (--registry); the judge's image is made
     first, the one step with the network. Exit code 1 when a judgement failed or a phase passed its bound; 2 when it
-    cannot start (another system than Linux, no Docker, neither root nor sudo -n for a judge that mounts (JUDGE_MOUNTS), settings
-    that do not load, the image not made)."""
+    cannot start (another system than Linux, no Docker, a judge that mounts (JUDGE_MOUNTS) and a trial mount that
+    fails (mount_trial), settings that do not load, the image not made)."""
     if not sys.platform.startswith("linux"):
         raise HiveError(ONLY_ON_LINUX_DOCTOR.replace("the doctor", "measure"))
     if not 1 <= args.times <= MEASURE_TIMES_MOST:
@@ -8486,12 +8505,14 @@ def cmd_measure(args):
             raise HiveError(f"{module.MANIFEST}: not JSON ({type(error).__name__})") from None
         except module.JudgeError as error:
             raise HiveError(f"{module.MANIFEST}: {safe_text(error, 200)}") from None
-    if kind in JUDGE_MOUNTS and not root_or_sudo():
-        raise HiveError(f"the {kind} judge mounts {JUDGE_MOUNTS[kind]}: it needs root, or sudo that asks no password (sudo -n) for mount and umount")
     if args.workdir and not os.path.isdir(args.workdir):
         raise HiveError("--workdir: no such folder")
     if kind == "common" and not args.plugin_runs_here:
         raise HiveError(PLUGIN_HERE)
+    trial = mount_trial(args.registry, args.workdir) if kind in JUDGE_MOUNTS else None  # (last of the refusals: it mounts)
+    if trial is not None:
+        raise HiveError(f"the {kind} judge mounts {JUDGE_MOUNTS[kind]}: it needs root, or sudo that asks no password (sudo -n) for mount and "
+                        f"umount ({trial})")
     saved, work = dict(os.environ), Path(tempfile.mkdtemp(prefix="hive-measure-", dir=args.workdir))
     try:
         for name in [name for name in os.environ if any(word in name.upper() for word in CREDENTIAL_WORDS)]:
