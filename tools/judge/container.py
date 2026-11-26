@@ -52,7 +52,7 @@ def fixed_times(*folders):
 
 def mount_point(*command, timeout=None):
     """mount or umount, as root or through sudo -n (a hosted runner's way); failing is an error of the environment. With
-    a timeout (seconds), subprocess.TimeoutExpired past it (hive.py measure's trial mount)."""
+    a timeout (seconds), subprocess.TimeoutExpired past it."""
     r = subprocess.run(([] if os.geteuid() == 0 else ["sudo", "-n"]) + list(command), capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise JudgeError(f"{command[0]} of an execution's tmpfs failed (root or sudo -n required): " + clean(r.stderr, 300))

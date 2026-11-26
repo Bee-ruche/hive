@@ -16923,7 +16923,7 @@ class TestTheMeasure(Base):
         self.w.set_config({"protected": ["tests/**", "bee/**"]})
         self.registry, self.hive_commit, self.off_main = self.hives_clone()
         self.asked = []
-        self.trials = []  # the parent folder given to each trial mount
+        self.trials, self.trial_environments = [], []  # the parent folder given to each trial mount, and the environment it ran in
 
     def stand_in(self, answers):
         """A judge function as judge_of gives one, answering from `answers` in turn (an exception is thrown), and noting
@@ -16947,7 +16947,8 @@ class TestTheMeasure(Base):
         made = []
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), \
                 mock.patch.object(hive, "docker_here", return_value=docker), \
-                mock.patch.object(hive, "mount_trial", side_effect=lambda registry, parent: self.trials.append(parent) or (None if root else self.TRIAL_REFUSED)), \
+                mock.patch.object(hive, "mount_trial", side_effect=lambda registry, parent: (
+                    self.trials.append(parent), self.trial_environments.append(dict(os.environ)), None if root else self.TRIAL_REFUSED)[-1]), \
                 mock.patch.object(hive, "make_image", side_effect=lambda registry, kind, tree: made.append((kind, sorted(os.listdir(tree)))) or image), \
                 mock.patch.object(hive, "judge_of", return_value=self.stand_in(answers)), \
                 mock.patch.object(hive, "measure_clock", side_effect=lambda: next(clock)):
@@ -17118,8 +17119,9 @@ class TestTheMeasure(Base):
             code, lines, _ = self.measure([{"code": 0, "report": {**self.RELAY, "encode_seconds": 1.0}}], "--times", "1", "--workdir", str(work))
             self.assertEqual((os.environ["GITHUB_TOKEN"], os.environ["KEEP_ME"]), ("x", "k"), "the environment is put back")
         self.assertEqual(code, 0, lines)
-        seen = self.asked[0]["environment"]
-        self.assertEqual(([name for name in ("GITHUB_TOKEN", "GH_TOKEN", "MY_API_KEY") if name in seen], seen.get("KEEP_ME")), ([], "k"))
+        for seen in (self.asked[0]["environment"], self.trial_environments[0]):
+            self.assertEqual(([name for name in ("GITHUB_TOKEN", "GH_TOKEN", "MY_API_KEY") if name in seen], seen.get("KEEP_ME")), ([], "k"),
+                             "neither the judge nor the trial mount")
         self.assertEqual(os.listdir(work), [], "the trees, the image's tree and the judge's work are removed")
         self.assertFalse(self.asked[0]["base"].exists())
 
@@ -17162,15 +17164,16 @@ class TestTheMeasure(Base):
         self.assertIn("; the judge said: the tip's build failed:?[31m red", failures[0])
         self.assertIn("; the judge wrote no reason (it stopped before it could)", failures[1])
 
-    TRIAL = "size=1m,nr_inodes=16,mode=0700,nosuid,nodev"
+    TRIAL = f"size=1m,nr_inodes=16,mode=0700,nosuid,nodev,uid={os.getuid()},gid={os.getgid()}"
     TRIAL_REFUSED = "the trial mount failed: mount of an execution's tmpfs failed (root or sudo -n required): permission denied"
 
-    def trial(self, answers, euid, mounted=False):
+    def trial(self, answers, euid, mounted=()):
         """mount_trial in a fresh parent folder, as user `euid`, subprocess.run answering `answers` in turn ((return code,
-        stderr), or an exception thrown), os.path.ismount answering `mounted`: (its answer, the commands run, the timeouts
-        given, the folder it took, what is left in the parent)."""
+        stderr), or an exception thrown), os.path.ismount answering `mounted` in turn (then False), and asked of the
+        trial's folder only: (its answer, the commands run, the timeouts given, the folder it took, what is left in the
+        parent). An exception mount_trial lets through is thrown, once what is left was noted (self.left)."""
         parent = Path(tempfile.mkdtemp(dir=self.tmp.name))
-        given, commands, timeouts = iter(answers), [], []
+        given, said_mounted, commands, timeouts, asked = iter(answers), iter(mounted), [], [], []
 
         def run(command, **named):
             commands.append(command)
@@ -17179,13 +17182,21 @@ class TestTheMeasure(Base):
             if isinstance(answer, BaseException):
                 raise answer
             return mock.Mock(returncode=answer[0], stdout="", stderr=answer[1])
-        with mock.patch.object(hive.os, "geteuid", return_value=euid), mock.patch.object(hive.subprocess, "run", side_effect=run), \
-                mock.patch.object(hive.os.path, "ismount", return_value=mounted):
-            said = hive.mount_trial(REGISTRY, str(parent))
+
+        def ismount(path):
+            asked.append(path)
+            return next(said_mounted, False)
+        try:
+            with mock.patch.object(hive.os, "geteuid", return_value=euid), mock.patch.object(hive.subprocess, "run", side_effect=run), \
+                    mock.patch.object(hive.os.path, "ismount", side_effect=ismount):
+                said = hive.mount_trial(REGISTRY, str(parent))
+        finally:
+            self.left = sorted(os.listdir(parent))
         folder = commands[0][-1] if commands else None
         if folder is not None:
             self.assertEqual(os.path.dirname(folder), str(parent), "the trial's folder is made in the parent given")
-        return said, commands, timeouts, folder, sorted(os.listdir(parent))
+            self.assertTrue(asked and set(asked) == {folder}, asked)
+        return said, commands, timeouts, folder, self.left
 
     def test_the_trial_mounts_and_unmounts_through_the_judges_helper_and_removes_its_folder(self):
         said, commands, timeouts, folder, left = self.trial([(0, ""), (0, "")], 1000)
@@ -17211,11 +17222,28 @@ class TestTheMeasure(Base):
         said, commands, _, _, left = self.trial([subprocess.TimeoutExpired(["sudo"], hive.MOUNT_TRIAL_SECONDS)], 1000)
         self.assertEqual((said, len(commands), left), (f"the trial mount took more than {hive.MOUNT_TRIAL_SECONDS} s", 1, []))
 
-    def test_a_trial_umount_that_fails_says_what_is_left_mounted_and_keeps_it(self):
-        said, commands, _, folder, left = self.trial([(0, ""), (32, "target is busy")], 1000, mounted=True)
+    def test_a_mount_done_after_its_timeout_is_unmounted_and_still_refused(self):
+        """sudo killed at the timeout, the mount it started done after all: unmounted once more, the folder removed, and
+        the trial still a refusal."""
+        said, commands, _, folder, left = self.trial([subprocess.TimeoutExpired(["sudo"], hive.MOUNT_TRIAL_SECONDS), (0, "")], 1000, mounted=[True])
+        self.assertEqual((said, commands[1:], left), (f"the trial mount took more than {hive.MOUNT_TRIAL_SECONDS} s", [["sudo", "-n", "umount", folder]], []))
+
+    def test_a_trial_umount_that_fails_twice_says_what_is_left_mounted_and_keeps_it(self):
+        said, commands, _, folder, left = self.trial([(0, ""), (32, "target is busy"), (32, "target is busy")], 1000, mounted=[True, True])
         self.assertEqual(said, "the trial umount failed: umount of an execution's tmpfs failed (root or sudo -n required): target is busy; "
                                f"{folder} is left mounted")
-        self.assertEqual((len(commands), left), (2, [os.path.basename(folder)]), "a folder still mounted is not removed")
+        self.assertEqual((len(commands), left), (3, [os.path.basename(folder)]), "unmounted once more; a folder still mounted is not removed")
+
+    def test_an_interruption_after_the_mount_still_unmounts_and_removes_the_folder(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.trial([(0, ""), KeyboardInterrupt(), (0, "")], 1000, mounted=[True])
+        self.assertEqual(self.left, [], "unmounted and removed before the interruption goes on")
+
+    def test_a_parent_where_no_folder_can_be_made_is_said(self):
+        nowhere = Path(self.tmp.name) / "nowhere"
+        with self.assertRaises(hive.HiveError) as raised:
+            hive.mount_trial(REGISTRY, str(nowhere))
+        self.assertTrue(str(raised.exception).startswith(f"{nowhere}: no folder can be made there for the trial mount ("), raised.exception)
 
     def test_the_trial_itself_on_this_machine_leaves_nothing(self):
         """Not mocked: the trial run here (as the tests' user, root or not), whatever it answers, leaves its parent empty."""
