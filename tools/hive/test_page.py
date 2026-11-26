@@ -14,8 +14,10 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from html.parser import HTMLParser
@@ -2898,6 +2900,476 @@ class TestMap(Case):
         seen = self.harmless(files)
         self.assertNotIn("<script", files["index.html"])
         self.assertIn('<script>alert(1)</script>"x', seen.said, "shown as text")
+
+
+class TestThePageWorkflow(unittest.TestCase):
+    """The page made again after each run (.github/workflows/page.yml; docs/hosting.md, "The project's page, after each
+    run"): a reusable workflow that a project calls from its own workflow, after the hive's run, at the same commit
+    (examples/page/.github/workflows/hive.yml). Two jobs, held whole, word for word: build makes the page from the
+    project's state with the hive's page.py at the workflow's own commit, with a token that reads and is written
+    nowhere; deploy hands what build uploaded to GitHub Pages, and does nothing else. No job writes a branch, fetches
+    a fork or a candidate, or runs anything but the hive's own code and three actions pinned to a commit. The steps
+    that make the page also run here, with bash, as the runner runs them."""
+
+    RUN = test_hive.TestTheRunWorkflow
+    ROOT = RUN.ROOT
+    DEPLOY = "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346"  # v5.0.1: hands the run's upload github-pages to Pages
+    PAGES_SOURCE = {"name": "The repository's GitHub Pages take the site from a workflow (Settings, Pages, Source GitHub Actions), or nothing is made",
+                    "env": {"REPOSITORY": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}"},
+                    "run": 'source="$(timeout 60 gh api "repos/$REPOSITORY/pages" --jq .build_type)" || source="no Pages site, or no answer"\n'
+                           '[[ "$source" == workflow ]] || { echo "page: this repository\'s GitHub Pages do not take the site from a workflow ($source): in '
+                           'Settings, Pages, choose the source GitHub Actions (docs/hosting.md of Bee-ruche/hive, \\"The project\'s page, after each run\\"); '
+                           'nothing is made" >&2; exit 1; }\n'}
+    # The most page.py and the hive read of each of the project's two files (test_the_two_files_are_held_to_what_page_py_and_the_hive_read).
+    BOUNDS = {"tasks.jsonl": hive.SETTINGS_BYTES, "project.json": page.PROJECT_BYTES}
+    PUBLISHED = {"name": "The project's tasks and settings, as its published branch holds them (two files, each held to its size and written as data; "
+                         "no tree is checked out)",
+                 "env": {"REPOSITORY": "${{ github.repository }}"},
+                 "run": 'git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project\n'
+                        "mkdir published\n"
+                        "for file in tasks.jsonl:16777216 project.json:1048576; do\n"
+                        '  name="${file%%:*}" most="${file##*:}"\n'
+                        '  read -r mode type object path <<< "$(git -C project ls-tree HEAD -- "hive/$name")"\n'
+                        '  [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == "hive/$name" ]] || { echo "page: hive/$name is not a file of the '
+                        'published branch: nothing is made" >&2; exit 1; }\n'
+                        '  size="$(git -C project cat-file -s "$object")"\n'
+                        '  [[ "$size" =~ ^[0-9]+$ ]] && (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }\n'
+                        '  git -C project cat-file blob "$object" > "published/$name"\n'
+                        "done\n"}
+    PAGE = {"name": "The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages",
+            "env": {"REPOSITORY": "${{ github.repository }}", "TITLE": "${{ inputs.title }}", "SITE_URL": "${{ inputs.site_url }}"},
+            "run": "site=()\n"
+                   '[[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")\n'
+                   'python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\\n'
+                   '  --tasks published/tasks.jsonl --project published/project.json "${site[@]}"\n'
+                   r'odd="$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)"' "\n"
+                   '[[ -z "$odd" ]] || { echo "page: the page\'s folder holds a link or a file of several names ($odd): nothing is packed" >&2; exit 1; }\n'
+                   "tar --create --file artifact.tar --directory page .\n"}
+    CONCURRENCY = {"group": "pages", "cancel-in-progress": False}  # one deploy at a time, whatever the caller says
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (cls.ROOT / ".github/workflows/page.yml").read_text(encoding="utf-8")
+        cls.stream = test_hive.read_workflow(cls.text)
+        cls.jobs = cls.stream["jobs"]
+        cls.caller_text = (cls.ROOT / "examples/page/.github/workflows/hive.yml").read_text(encoding="utf-8")
+        cls.caller = test_hive.read_workflow(cls.caller_text)
+        cls.plain_caller = test_hive.read_workflow((cls.ROOT / "examples/project/.github/workflows/hive.yml").read_text(encoding="utf-8"))
+        cls.uncommented = re.sub(r"(?m)#.*$", "", cls.text)
+
+    def test_the_two_jobs_are_exactly_these(self):
+        """build: the protocol's check and the hive's code at the workflow's own commit (the run's own first two
+        steps), the repository's Pages asked where they take the site from, the state read without keeping the token,
+        the project's two files of its published branch, each held to its size, the page held to plain files and
+        folders and packed, uploaded under the one name Pages takes. deploy: after build, one at a time, Pages' own
+        action and nothing else."""
+        self.maxDiff = None
+        self.assertEqual(self.jobs, {
+            "build": {"runs-on": "ubuntu-24.04", "timeout-minutes": 10, "permissions": {"contents": "read", "pages": "read"},
+                      "steps": [self.RUN.PROTOCOL, self.RUN.CODE, self.PAGES_SOURCE, self.RUN.STATE_READ, self.PUBLISHED, self.PAGE,
+                                {"uses": self.RUN.UPLOAD, "with": {"name": "github-pages", "path": "artifact.tar", "retention-days": 1}}]},
+            "deploy": {"needs": "build", "runs-on": "ubuntu-24.04", "timeout-minutes": 15, "permissions": {"pages": "write", "id-token": "write"},
+                       "environment": "github-pages", "concurrency": self.CONCURRENCY, "steps": [{"uses": self.DEPLOY}]}})
+
+    def test_it_is_called_with_two_texts_and_nothing_else(self):
+        """It runs when a project's workflow calls it, on no event of its own, and takes two texts and no secret: the
+        line under the project's name and the address the site is served at, each empty unless the caller gives it.
+        Nothing is set above a step but what is listed here; no step has a condition of its own. The deploying job
+        has a concurrency group of its own: one deploy at a time, never cancelled by a newer one, whatever the caller's
+        workflow says."""
+        self.assertEqual(set(self.stream), {"name", "on", "permissions", "jobs"})
+        self.assertEqual(self.stream["name"], "Hive page")
+        self.assertEqual(self.stream["on"], {"workflow_call": {"inputs": {"title": {"type": "string", "default": ""},
+                                                                         "site_url": {"type": "string", "default": ""}}}})
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertLessEqual(set(job), {"needs", "runs-on", "timeout-minutes", "permissions", "environment", "concurrency", "steps"})
+                for step in job["steps"]:
+                    self.assertLessEqual(set(step), {"name", "id", "uses", "with", "env", "run"}, step)
+        self.assertEqual({name: job.get("concurrency") for name, job in self.jobs.items()}, {"build": None, "deploy": self.CONCURRENCY})
+        self.assertIs(self.jobs["deploy"]["concurrency"]["cancel-in-progress"], False)
+        for word in ("pull_request", "push:", "workflow_dispatch", "schedule", "secrets", "vars.", "container", "services"):
+            self.assertNotIn(word, self.uncommented)
+        self.assertEqual(self.uncommented.count("concurrency"), 1)
+        self.assertEqual(re.findall(r"\$\{\{ inputs\.(\w+) \}\}", self.uncommented), ["title", "site_url"], "each read once, by the page's step")
+
+    def test_what_each_job_may_do_with_the_projects_token(self):
+        """Nothing for the workflow as a whole. build may read the repository and its Pages settings, and nothing more:
+        its token goes to the protocol's check and to the question of where the Pages take the site from, and no
+        checkout keeps it. deploy may create a Pages deployment and ask for the token that proves where it comes from,
+        which is all Pages' action needs; it names the environment Pages deploys to, and no other. Neither may write the
+        repository's contents: no branch is written."""
+        self.assertEqual(self.stream["permissions"], {})
+        self.assertEqual({name: job["permissions"] for name, job in self.jobs.items()},
+                         {"build": {"contents": "read", "pages": "read"}, "deploy": {"pages": "write", "id-token": "write"}})
+        self.assertEqual([(name, job.get("environment")) for name, job in self.jobs.items()], [("build", None), ("deploy", "github-pages")])
+        self.assertEqual(len(re.findall(r"github\.token", self.uncommented)), 2, "the protocol's check and the Pages' source, and nothing else")
+        self.assertEqual([index for index, step in enumerate(self.jobs["build"]["steps"]) if "github.token" in json.dumps(step)], [0, 2])
+        self.assertEqual(self.jobs["build"]["steps"][2], self.PAGES_SOURCE)
+        self.assertEqual(re.findall(r"gh api \"([^\"]*)\"", self.uncommented), ["repos/Bee-ruche/hive/compare/main...$COMMIT", "repos/$REPOSITORY/pages"],
+                         "two questions, each a read")
+        self.assertEqual([step["with"].get("persist-credentials") for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.CHECKOUT],
+                         [False, False], "no checkout keeps the token")
+        self.assertNotIn("contents: write", self.uncommented)
+        for word in ("create-github-app-token", "private-key", "extraheader", "git config", "credential.helper"):
+            self.assertNotIn(word, self.uncommented, word)
+        self.assertEqual([key for job in self.jobs.values() for step in job["steps"] for key in {**step.get("env", {}), **step.get("with", {})}
+                          if "token" in key.lower()], ["GH_TOKEN", "GH_TOKEN"], "no step is given a token but the two questions")
+
+    def test_the_hives_code_runs_at_this_workflows_own_commit_and_reads_the_state_and_two_files_as_data(self):
+        """The one program build runs is the hive's page.py, from the tree the protocol's check checked out; the other
+        checkout is the project's branch hive-state. The project's published branch gives two files, written out from
+        git's objects (no tree is checked out, so no link of the tree is followed), and nothing is fetched from a fork,
+        a candidate or the hive's own branch: nothing of a contributor's is on the machine, let alone run."""
+        build = self.jobs["build"]["steps"]
+        self.assertEqual(build[:2], [self.RUN.PROTOCOL, self.RUN.CODE])
+        self.assertEqual([step["with"] for step in build[2:] if step.get("uses") == self.RUN.CHECKOUT], [self.RUN.STATE_READ["with"]])
+        runs = "\n".join(step.get("run", "") for job in self.jobs.values() for step in job["steps"])
+        self.assertEqual([line.strip() for line in runs.splitlines() if "python3" in line],
+                         ['python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\'])
+        self.assertEqual(re.findall(r"git clone[^\n]*", runs), ['git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project'])
+        self.assertEqual(re.findall(r"git -C project (\S+) (\S+)", runs), [("ls-tree", "HEAD"), ("cat-file", "-s"), ("cat-file", "blob")])
+        for word in ("hive.py", "artifact.py", "fetch", "forks", "bundle", "candidate", "push", "git checkout", "curl", "wget", "pip ", "npm ", "docker",
+                     "sudo", "eval"):
+            self.assertNotIn(word, runs, word)
+        self.assertNotRegex(runs, r"(?m)(?:^|[;&|(`\"']|\$\()\s*(?:source|\.)\s", "no file sourced, wherever a command starts")
+        self.assertEqual(self.text.count("${{ job.workflow_sha }}"), 1)
+        self.assertEqual(self.text.count("${{ job.workflow_repository }}"), 1)
+        self.assertEqual(len(re.findall(r"\bref\b\s*:", self.text)), 2, "the protocol's commit and the state's branch: no other ref")
+
+    def test_no_text_becomes_code_and_every_action_is_pinned(self):
+        """No expression in a run line (a value reaches a step through its env); each step runs a command or uses an
+        action, which is one of three, pinned to a commit: the run's checkout and upload, and Pages' own deploy."""
+        for name, job in self.jobs.items():
+            for step in job["steps"]:
+                with self.subTest(job=name, step=step.get("name") or step.get("uses")):
+                    self.assertNotIn("${{", step.get("run", ""))
+                    self.assertEqual("uses" in step, "run" not in step)
+        self.assertEqual({name: sorted({step["uses"] for step in job["steps"] if "uses" in step}) for name, job in self.jobs.items()},
+                         {"build": sorted([self.RUN.CHECKOUT, self.RUN.UPLOAD]), "deploy": [self.DEPLOY]})
+        self.assertEqual(sorted(set(re.findall(r"uses: (\S+)", self.uncommented))), sorted([self.RUN.CHECKOUT, self.RUN.UPLOAD, self.DEPLOY]))
+        for action in re.findall(r"uses: (\S+)", self.uncommented):
+            self.assertRegex(action, r"\Aactions/[a-z-]+@[0-9a-f]{40}\Z")
+
+    def test_deploy_follows_build_and_each_jobs_time(self):
+        """deploy after build, and only once it succeeded (nothing to deploy otherwise), each on GitHub's own machine
+        as the run's jobs are; each job's time; and one upload, of the archive the page's step packs, under the one name
+        Pages' action looks for, kept a day: Pages takes it at once, and the next run makes another."""
+        self.assertEqual({name: (job.get("needs"), job.get("if")) for name, job in self.jobs.items()}, {"build": (None, None), "deploy": ("build", None)})
+        self.assertEqual({name: job["runs-on"] for name, job in self.jobs.items()}, {"build": "ubuntu-24.04", "deploy": "ubuntu-24.04"})
+        self.assertEqual({name: job["timeout-minutes"] for name, job in self.jobs.items()}, {"build": 10, "deploy": 15})
+        self.assertEqual([step["with"] for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.UPLOAD],
+                         [{"name": "github-pages", "path": "artifact.tar", "retention-days": 1}])
+        self.assertIn("tar --create --file artifact.tar --directory page .\n", self.making()[1]["run"])
+        self.assertEqual(self.jobs["deploy"]["concurrency"], self.CONCURRENCY)
+
+    def pages_source(self, answer, code=0):
+        """The step that asks where the repository's Pages take the site from, run with bash as the runner runs it, gh
+        replaced by a stand-in that answers `answer` or fails with `code`: (exit code, what it said, the stand-in's
+        calls)."""
+        folder = Path(tempfile.mkdtemp(prefix="pages-source-"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "bin").mkdir()
+        (folder / "bin/gh").write_text('#!/bin/sh\necho "$@" >> "$FAKE_GH_LOG"\n[ "$FAKE_GH_CODE" = 0 ] || exit "$FAKE_GH_CODE"\necho "$FAKE_GH_ANSWER"\n')
+        os.chmod(folder / "bin/gh", 0o755)
+        environment = {"PATH": f"{folder / 'bin'}:{os.environ['PATH']}", "REPOSITORY": "Bee-ruche/toy", "GH_TOKEN": "t", "FAKE_GH_LOG": str(folder / "log"),
+                       "FAKE_GH_ANSWER": answer, "FAKE_GH_CODE": str(code)}
+        ran = subprocess.run(["bash", "-e", "-c", self.jobs["build"]["steps"][2]["run"]], env=environment, capture_output=True, text=True, timeout=120)
+        return ran.returncode, ran.stdout + ran.stderr, (folder / "log").read_text() if (folder / "log").exists() else ""
+
+    def test_nothing_is_made_unless_the_repositorys_pages_take_the_site_from_a_workflow(self):
+        """Before anything is built, build asks GitHub (a read, with its own token) where the repository's Pages take
+        the site from: a workflow (Source: GitHub Actions) goes on; a branch (legacy), no Pages site, any other answer,
+        or no answer stops the job with a sentence of the hive's that says what to set, and where the docs say it."""
+        self.assertEqual(self.pages_source("workflow"), (0, "", "api repos/Bee-ruche/toy/pages --jq .build_type\n"))
+        for answer, code in (("legacy", 0), ("", 0), ("null", 0), ("workflow ", 0), ("Workflow", 0), ("workflow", 1), ("workflow", 124)):
+            with self.subTest(answer=answer, code=code):
+                stopped, said, _ = self.pages_source(answer, code)
+                self.assertEqual(stopped, 1)
+                self.assertIn("page: this repository's GitHub Pages do not take the site from a workflow", said)
+                self.assertIn("choose the source GitHub Actions", said)
+                self.assertIn("\"The project's page, after each run\"", said)
+
+    def test_the_two_files_are_held_to_what_page_py_and_the_hive_read(self):
+        """Each of the project's two files is written out only if it is a file of the published branch (a blob, as
+        git keeps a plain or an executable file: not a link, a folder or a submodule) no larger than what is read of it
+        anyway: the hive reads neither of its settings' two files beyond SETTINGS_BYTES, and page.py reads no more of
+        the project's file than PROJECT_BYTES. Its size is asked of git before a byte of it is written."""
+        self.assertEqual(re.findall(r"for file in (\S+):(\d+) (\S+):(\d+); do", self.making()[0]["run"]),
+                         [("tasks.jsonl", str(self.BOUNDS["tasks.jsonl"]), "project.json", str(self.BOUNDS["project.json"]))])
+        run = self.making()[0]["run"]
+        self.assertLess(run.index("cat-file -s"), run.index("cat-file blob"))
+        for name, most in self.BOUNDS.items():
+            for size, stops in ((most, False), (most + 1, True)):
+                with self.subTest(file=name, size=size):
+                    folder, environment = self.world()
+                    path = self.origin / "hive" / name
+                    with open(path, "ab") as f:  # the example's own lines, then spaces to the size
+                        f.write(b" " * (size - path.stat().st_size))
+                    self.git("commit", "-q", "-am", f"{name} of {size} bytes")
+                    code, said = self.run_steps(folder, environment, self.making()[0])
+                    if stops:
+                        self.assertNotEqual(code, 0, said)
+                        self.assertIn(f"page: hive/{name} of the published branch is larger than {most} bytes", said)
+                        self.assertFalse((folder / "published" / name).exists(), "nothing of it is written")
+                    else:
+                        self.assertEqual((code, (folder / "published" / name).stat().st_size), (0, most), said)
+
+    def test_a_link_a_folder_or_a_submodule_in_place_of_a_file_stops_the_step(self):
+        """In place of either file: a link (git keeps its target, which would be written out as the file), a folder,
+        or a submodule: the step stops, saying which file, and writes nothing of it. An executable file is a file."""
+        for name in ("tasks.jsonl", "project.json"):
+            for kind in ("link", "folder", "submodule", "executable"):
+                with self.subTest(file=name, kind=kind):
+                    folder, environment = self.world()
+                    path = self.origin / "hive" / name
+                    if kind == "executable":
+                        self.git("update-index", "--chmod=+x", f"hive/{name}")
+                    elif kind == "submodule":
+                        self.git("rm", "-q", "--cached", f"hive/{name}")
+                        self.git("update-index", "--add", "--cacheinfo", f"160000,{sha(7)},hive/{name}")
+                    else:
+                        path.unlink()
+                        if kind == "link":
+                            path.symlink_to("../elsewhere")
+                        else:
+                            path.mkdir()
+                            (path / "inside").write_text("x\n")
+                        self.git("add", "-A")
+                    self.git("commit", "-q", "-m", f"{name} as a {kind}")
+                    code, said = self.run_steps(folder, environment, self.making()[0])
+                    if kind == "executable":
+                        self.assertEqual(code, 0, said)
+                    else:
+                        self.assertNotEqual(code, 0, said)
+                        self.assertIn(f"page: hive/{name} is not a file of the published branch", said)
+                        self.assertFalse((folder / "published" / name).exists())
+
+    def test_a_link_or_a_file_of_several_names_in_the_pages_folder_is_never_packed(self):
+        """Pages takes plain files and folders. The page's folder is checked after page.py wrote it and before it is
+        packed: a link there (to a file of the machine, or dangling), a file with a second name, or a pipe stops the
+        step, saying what it found, and nothing is packed. (python3 is replaced, in the step's shell, by a function
+        that runs page.py and then plants the thing in what it wrote.)"""
+        run = self.making()[1]["run"]
+        self.assertLess(run.index("page.py"), run.index("find page"))
+        self.assertLess(run.index("find page"), run.index("tar --create"))
+        plant = ('() { command python3 "$@" || return $?; case "$PLANT" in link) ln -s /etc/passwd page/wins/planted;; dangling) ln -s nowhere page/planted;; '
+                 "second) ln page/index.html page/planted;; pipe) mkfifo page/planted;; fail) return 3;; esac; }")
+        for kind, found in (("link", "page/wins/planted"), ("dangling", "page/planted"), ("second", "page/"), ("pipe", "page/planted")):
+            with self.subTest(kind=kind):
+                folder, environment = self.world()
+                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": kind, "BASH_FUNC_python3%%": plant},
+                                            *self.making())
+                self.assertNotEqual(code, 0, said)
+                self.assertIn(f"page: the page's folder holds a link or a file of several names ({found}", said)
+                self.assertIn("): nothing is packed", said)
+                self.assertTrue((folder / "page/index.html").is_file(), "page.py wrote the page before the check")
+                self.assertFalse((folder / "artifact.tar").exists())
+        folder, environment = self.world()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": "none", "BASH_FUNC_python3%%": plant}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertTrue((folder / "artifact.tar").is_file(), "the function runs page.py as it is")
+        # page.py that wrote the site and then failed (as when a file could not take its name, "the site is not whole"):
+        # the step stops there, and what it left is not packed.
+        folder, environment = self.world()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": "fail", "BASH_FUNC_python3%%": plant}, *self.making())
+        self.assertEqual(code, 3, said)
+        self.assertTrue((folder / "page/index.html").is_file())
+        self.assertFalse((folder / "artifact.tar").exists(), "a page.py that failed is not packed, whatever it left")
+
+    def making(self):
+        """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
+        files, the page and its archive). The tests below run these, not a copy."""
+        steps = self.jobs["build"]["steps"]
+        self.assertEqual([step.get("name") for step in steps[4:6]], [self.PUBLISHED["name"], self.PAGE["name"]])
+        return steps[4], steps[5]
+
+    def run_steps(self, folder, environment, *steps):
+        """Steps of build, run here one after the other as the runner runs a step that names no shell (bash -e), in
+        `folder` (protocol/: this repository's tree; state/: a project's state), with `environment` (world()'s: git
+        reads no configuration of this machine's, and fetches the project's local stand-in for its address on
+        github.com): (exit code, what was said)."""
+        said = []
+        for step in steps:
+            ran = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=folder, capture_output=True, text=True, timeout=300,
+                                 env={"PATH": os.environ["PATH"], "HIVE_NOW": NOW, **environment})
+            said.append(ran.stdout + ran.stderr)
+            if ran.returncode:
+                return ran.returncode, "".join(said)
+        return 0, "".join(said)
+
+    def git(self, *argv):
+        """git on the project's stand-in (self.origin), with world()'s environment and an identity of its own."""
+        subprocess.run(["git", "-C", str(self.origin), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv], check=True, capture_output=True,
+                       timeout=60, env={"PATH": os.environ["PATH"], **self.environment})
+
+    def world(self):
+        """A folder as build has it before its own steps: protocol/ (this repository's tree), state/ (a project's
+        state, with one accepted contribution), and a project whose published branch holds the example project's two
+        files, plus a link and a file the page has no business with (self.origin, which git reaches for the project's
+        address on github.com). Returns (the folder, the environment the steps run with)."""
+        folder = Path(tempfile.mkdtemp(prefix="page-steps-"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "protocol").symlink_to(self.ROOT)
+        (folder / "state").mkdir()
+        with open(folder / "state/ledger.jsonl", "w") as f:
+            f.write(json.dumps(verdict(1, "2026-11-11T10:00:00Z", "alice", 101, "toy-0001")) + "\n")
+        self.origin = folder / "origin"
+        (self.origin / "hive").mkdir(parents=True)
+        for name in ("project.json", "tasks.jsonl"):
+            shutil.copyfile(self.ROOT / "examples/project/hive" / name, self.origin / "hive" / name)
+        (self.origin / "elsewhere").write_text("never written out\n")
+        (self.origin / "a-link").symlink_to("/etc/passwd")
+        self.environment = {"HOME": str(folder), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_COUNT": "1",
+                            "GIT_CONFIG_KEY_0": f"url.file://{self.origin}.insteadOf", "GIT_CONFIG_VALUE_0": "https://github.com/Bee-ruche/toy",
+                            "REPOSITORY": "Bee-ruche/toy"}
+        for command in (["init", "-q", "-b", "master"], ["add", "-A"], ["commit", "-q", "-m", "published"]):
+            self.git(*command)
+        return folder, dict(self.environment)
+
+    def packed(self, folder):
+        """The archive's members, as Pages reads them: {name: bytes}, after checking each is a plain file or folder."""
+        with tarfile.open(folder / "artifact.tar") as archive:
+            members = archive.getmembers()
+            for member in members:
+                self.assertTrue((member.isfile() or member.isdir()) and not member.name.startswith("/") and ".." not in member.name.split("/"), member.name)
+            return {member.name: archive.extractfile(member).read() for member in members if member.isfile()}
+
+    def test_the_steps_that_make_the_page_run_as_the_runner_runs_them(self):
+        """The two steps, run: the project's two files are written out from its published branch, byte for byte, and
+        nothing else of its tree; the page is made from the state with them, and packed whole (each file page.py wrote,
+        and nothing else) into the one archive the upload takes. The title and the address reach page.py as the
+        caller wrote them, as data: a title that looks like shell is shown as text and runs nothing."""
+        folder, environment = self.world()
+        title = 'A toy $(touch ran) `touch ran` "; touch ran'
+        code, said = self.run_steps(folder, {**environment, "TITLE": title, "SITE_URL": SITE}, *self.making())
+        self.assertEqual(code, 0, said)
+        for name in ("project.json", "tasks.jsonl"):
+            self.assertEqual((folder / "published" / name).read_bytes(), (self.ROOT / "examples/project/hive" / name).read_bytes())
+        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["project.json", "tasks.jsonl"])
+        self.assertEqual(sorted(path.name for path in (folder / "project").iterdir()), [".git"], "no tree is checked out")
+        self.assertFalse((folder / "ran").exists() or (folder / "page/ran").exists(), "the title ran nothing")
+        packed = self.packed(folder)
+        written = {f"./{path.relative_to(folder / 'page')}": path.read_bytes() for path in (folder / "page").rglob("*") if path.is_file()}
+        self.assertEqual(packed, written, "every file page.py wrote, and nothing else")
+        win = f"./wins/{sha(5001)}.html"
+        self.assertIn(f"{SITE}/wins/{sha(5001)}.svg", packed[win].decode(), "the address reached page.py")
+        self.assertIn(title, Seen(packed["./index.html"].decode()).said, "the title, shown as text")
+        self.assertIn(f"{REPO}/commit/{sha(5001)}", packed["./index.html"].decode(), "the project's own address")
+        self.assertIsNotNone(json.loads(packed["./summary.json"])["map"], "the task file reached page.py (--tasks)")
+
+    def test_a_title_that_looks_like_an_option_is_a_title(self):
+        """The caller's texts reach page.py joined to their option's name (--title=..., --site-url=...): a title that
+        starts with a dash is the title, not an option of page.py's, and one that names an option sets nothing."""
+        folder, environment = self.world()
+        for title in ("--now", "-x", "--help", "--now=2020-01-01T00:00:00Z", "-"):
+            with self.subTest(title=title):
+                shutil.rmtree(folder / "page", ignore_errors=True)
+                (folder / "artifact.tar").unlink(missing_ok=True)
+                steps = self.making() if not (folder / "published").exists() else self.making()[1:]
+                code, said = self.run_steps(folder, {**environment, "TITLE": title, "SITE_URL": ""}, *steps)
+                self.assertEqual(code, 0, said)
+                index = self.packed(folder)["./index.html"].decode()
+                self.assertIn(title, Seen(index).said)
+                self.assertNotIn("2020", json.loads(self.packed(folder)["./summary.json"]).get("generated_at", ""), "--now was not set by the title")
+
+    def test_an_empty_address_is_left_out_and_a_wrong_one_stops_the_step_before_anything_is_packed(self):
+        """No address: page.py is not given --site-url, and the pages of the contributions give no Markdown. An address
+        page.py does not take, or a state it cannot read: the step stops, nothing is packed, and so nothing is uploaded
+        or deployed (the site stays as it was)."""
+        folder, environment = self.world()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertNotIn("github.io", self.packed(folder)[f"./wins/{sha(5001)}.html"].decode())
+        for site in ("http://bee-ruche.github.io/toy", "https://bee-ruche.github.io/toy/", "https://x.example/a b", "--now=2020-01-01T00:00:00Z"):
+            with self.subTest(site=site):
+                shutil.rmtree(folder / "page", ignore_errors=True)
+                (folder / "artifact.tar").unlink(missing_ok=True)
+                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": site}, self.making()[1])
+                self.assertNotEqual(code, 0, said)
+                self.assertIn("page: --site-url: https://host/path", said, "page.py refused the address itself: it reached it whole, as the value of its option")
+                self.assertFalse((folder / "artifact.tar").exists())
+        shutil.rmtree(folder / "state")
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.making()[1])
+        self.assertNotEqual(code, 0, said)
+        self.assertFalse((folder / "artifact.tar").exists())
+
+    def test_a_published_branch_without_the_two_files_stops_the_step(self):
+        """A project whose published branch lacks its tasks or its settings is no hive project: the step that writes
+        them out stops, saying which, and no page is made from half of what it reads."""
+        for name in ("tasks.jsonl", "project.json"):
+            with self.subTest(missing=name):
+                folder, environment = self.world()
+                self.git("rm", "-q", f"hive/{name}")
+                self.git("commit", "-q", "-m", f"no {name}")
+                code, said = self.run_steps(folder, environment, self.making()[0])
+                self.assertNotEqual(code, 0, said)
+                self.assertIn(f"hive/{name}", said)
+
+    def test_settings_that_are_no_projects_file_stop_the_page(self):
+        """page.py is given the project's file of settings (it says which proofs the project takes): a published branch
+        whose hive/project.json is no project's file stops the page's step, and nothing is packed."""
+        folder, environment = self.world()
+        (self.origin / "hive/project.json").write_text("[]")
+        self.git("commit", "-q", "-am", "not settings")
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+        self.assertNotEqual(code, 0, said)
+        self.assertIn("--project", said)
+        self.assertFalse((folder / "artifact.tar").exists())
+
+    def test_the_example_caller_is_the_projects_own_with_one_job_more(self):
+        """examples/page/.github/workflows/hive.yml: the example caller of the run (examples/project), word for word,
+        and one job more after it: the page, unless a person cancelled the run, on the same branch alone, given what the
+        page's two jobs ask for at most and nothing more, at the same commit of Bee-ruche/hive as the run (forty zeros:
+        none, and nothing runs until the project writes one), with the two texts it takes and no secret."""
+        self.assertEqual({key: value for key, value in self.caller.items() if key != "jobs"}, {key: value for key, value in self.plain_caller.items() if key != "jobs"})
+        self.assertEqual(list(self.caller["jobs"]), ["hive", "page"])
+        self.assertEqual(self.caller["jobs"]["hive"], self.plain_caller["jobs"]["hive"])
+        widest = {}
+        for asked in (job["permissions"] for job in self.jobs.values()):
+            widest.update(asked)
+        branch = self.plain_caller["jobs"]["hive"]["if"]
+        self.assertEqual(self.caller["jobs"]["page"], {"needs": "hive", "if": f"${{{{ !cancelled() && {branch} }}}}", "permissions": widest,
+                                                       "uses": "Bee-ruche/hive/.github/workflows/page.yml@" + "0" * 40,
+                                                       "with": {"title": "", "site_url": ""}})
+        self.assertEqual(widest, {"contents": "read", "pages": "write", "id-token": "write"})
+        self.assertLessEqual(set(self.caller["jobs"]["page"]["with"]), set(self.stream["on"]["workflow_call"]["inputs"]))
+        self.assertEqual({job["uses"].split("@")[1] for job in self.caller["jobs"].values()}, {"0" * 40}, "the same commit for both")
+        for word in ("secrets", "environment", "pull_request"):
+            self.assertNotIn(word, re.sub(r"(?m)#.*$", "", self.caller_text))
+        self.assertNotEqual(self.caller["concurrency"]["group"], self.CONCURRENCY["group"], "the run would hold the group its deploy waits for")
+
+    def test_the_document_says_what_a_project_sets_once(self):
+        """docs/hosting.md, in a section of its own, says how a project takes the page: the Pages source and the
+        environment's branch, the example caller and the two places each change is made, the address's shape, the
+        actions a limited list must allow (also in the list of the repository's settings), that the deploy writes no
+        branch, and that it was not tried on GitHub; the line that said the page is no part of the run says where it
+        is. The other documents that speak of the page point to that section."""
+        hosting = (self.ROOT / "docs/hosting.md").read_text(encoding="utf-8")
+        section = hosting.split("\n## The project's page, after each run\n", 1)[1].split("\n## ", 1)[0]
+        for words in ("Settings, Pages", "Source: GitHub Actions", "\"Deployment\n   branches and tags\" should allow the published branch alone",
+                      "`github-pages`",
+                      "[`.github/workflows/page.yml`](../.github/workflows/page.yml)",
+                      "[`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml)",
+                      "the commit in both `uses` lines", "the branch in both\n   `if` lines", "the host in lower case, no final slash",
+                      "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "No branch is written", "`--title=...`", "start a run",
+                      "16 MiB for the tasks", "1 MiB for the settings", "no link, no file of several names",
+                      "a concurrency group of its own, `pages`, in which a deploy that runs is\n  never cancelled, and one that waits behind it gives way to a newer one",
+                      "would hold the very group",
+                      "stops with a sentence that says what to set", "deliberately not a setting"):
+            self.assertIn(words, section)
+        allowed = re.search(r"(?s)\n- \*\*Settings, Actions, General, \"Actions permissions\"\*\*.*?\n- ", hosting).group(0)
+        self.assertIn("`Bee-ruche/hive/.github/workflows/page.yml` and\n  `actions/deploy-pages`", allowed)
+        untried = hosting.split("\n## What could not be tried here\n", 1)[1]
+        self.assertIn("- **The page's workflow, on GitHub**", untried)
+        self.assertIn("whether `pages: read` lets build's token read where the Pages take the site from", untried)
+        self.assertNotIn("The page (`tools/hive/page.py`) is not part of the run.", hosting)
+        self.assertIn('not part of the run: a project that wants it calls its own workflow after the\n  run ("The project\'s page, after each run")', hosting)
+        pointer = "\"The project's page, after each run\""
+        for path in ("README.md", "docs/join.md", "examples/README.md"):
+            self.assertIn(pointer.replace('"', ""), (self.ROOT / path).read_text(encoding="utf-8").replace('"', "").replace("\n  ", " "), path)
+        not_settings = " ".join(json.loads((self.ROOT / "hive/settings.json").read_text(encoding="utf-8"))["not_settings"])
+        self.assertIn(pointer, not_settings)
 
 
 if __name__ == "__main__":

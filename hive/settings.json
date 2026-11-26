@@ -120,6 +120,7 @@
   "What is protected in every project (the 'always' of the protected setting): a project's file adds paths to these; it removes none.",
   "The hive's own counts: three failures that are a candidate's own before it is refused, six runs without an answer before a deal is closed at no cost, a day for a fork that could not be read, a wait that doubles up to seven days.",
   "The hive's own bounds on what a run does besides a project's limits, which have bounds of their own: the branches it lists of one fork, what all the fetches of a run leave, what a plan carries to the other steps, how long it weighs candidates.",
-  "A project's tasks are a file of their own (hive/tasks.jsonl); a task says its files, its tier, its goal and its options there, not in the project's file."
+  "A project's tasks are a file of their own (hive/tasks.jsonl); a task says its files, its tier, its goal and its options there, not in the project's file.",
+  "Whether the project's public page is made again after each run is its caller's, not its file's: a second job of its workflow calls the hive's page workflow (docs/hosting.md, \"The project's page, after each run\"), since only the caller can give the deploying job its permissions."
  ]
 }

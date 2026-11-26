@@ -8760,16 +8760,21 @@ class TestTheRunWorkflow(unittest.TestCase):
             self.assertNotIn(word, re.sub(r"(?m)#.*$", "", self.caller_text))
 
     def test_no_workflow_of_this_repository_names_an_environment_or_a_secret_or_another_repositorys_workflow(self):
-        """This repository's own workflows: its tests (read-only), and the run, which runs in each project's repository
-        when the project calls it. None names an environment or a secret, and none calls another repository's
-        workflow: a workflow that is called runs with its caller's rights, and its text would not be here for a test
-        or a reviewer to read. And the document that explains the run does not repeat it: the file is its only text."""
+        """This repository's own workflows: its tests (read-only), the run, which runs in each project's repository
+        when the project calls it, and the page, which a project may call after the run (tools/hive/test_page.py,
+        TestThePageWorkflow). None names a secret, and none calls another repository's workflow: a workflow that is
+        called runs with its caller's rights, and its text would not be here for a test or a reviewer to read. None
+        names an environment but the page's deploying job, which names the one GitHub Pages deploys to, once. And the
+        document that explains the run does not repeat it: the file is its only text."""
         workflows = sorted((self.ROOT / ".github/workflows").iterdir())
-        self.assertEqual([path.name for path in workflows], ["run.yml", "tests.yml"])
+        self.assertEqual([path.name for path in workflows], ["page.yml", "run.yml", "tests.yml"])
         for path in workflows:
             with self.subTest(workflow=path.name):
                 text = re.sub(r"(?m)#.*$", "", path.read_text(encoding="utf-8"))
-                for word in ("secrets", "environment:", "uses: ./", "workflows/"):
+                if path.name == "page.yml":
+                    self.assertEqual(re.findall(r"(?m)^.*environment.*$", text), ["    environment: github-pages"])
+                    text = text.replace("    environment: github-pages\n", "")
+                for word in ("secrets", "environment", "uses: ./", "workflows/"):
                     self.assertNotIn(word, text)
         self.assertIn("permissions:\n  contents: read\n", (self.ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8"))
         hosting = (self.ROOT / "docs/hosting.md").read_text(encoding="utf-8")
