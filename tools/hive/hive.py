@@ -12586,7 +12586,10 @@ def clone_root():
     """The clone a worker's command runs in, once every link on the way is followed: the nearest folder from the
     command's own up that holds a .git, the root itself never (no clone's root is the machine's). With none, the
     command's own folder, unless it is the root: a command the launcher runs in a container with no clone (names,
-    needs) runs from a folder of its own, and from the root, every folder named from the root would lie « in it »."""
+    needs) runs from a folder of its own, and from the root, every folder named from the root would lie « in it ».
+    (A worker's command run from the root has no clone to run in: the launcher runs each from /work, its clone, or
+    from /tmp. And a folder outside any clone that lies in another repository, a home kept in git, takes that
+    repository for the clone: the guard then refuses more, never less.)"""
     here = folder = os.path.realpath(os.getcwd())
     while os.path.dirname(folder) != folder:
         if os.path.lexists(os.path.join(folder, ".git")):

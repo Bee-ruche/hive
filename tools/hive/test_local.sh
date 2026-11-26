@@ -121,7 +121,7 @@ if [ -n "\${STUB_ID:-}" ] && [ "\$*" = "-u" ]; then echo "\$STUB_ID"; else exec 
 STUBS
 cat > "$T/bin/cygpath" <<'STUBS'
 #!/usr/bin/env bash
-[ "$1" = -m ] && { [ -z "${STUB_DIR:-}" ] || printf '%s\n' "$2" >> "$STUB_DIR/cygpath-args"; printf '%s' "$2"; }
+[ "$1" = -m ] && { [ -z "${STUB_CYGPATH_MARK:-}" ] || printf 'W:'; printf '%s' "$2"; }
 STUBS
 chmod +x "$T/bin/uname" "$T/bin/id" "$T/bin/cygpath"
 
@@ -761,7 +761,7 @@ check "check: its lines, the account git pushes as among them" eval '[ "$CODE" -
   && grep -q -- "names --project Bee-ruche/toy --system linux\$" "$STUB_DIR/args.names" \
   && grep -q "^run .* --label hive.role=names .* -w /tmp .* python3 -I /hive/protocol/tools/hive/hive.py names " "$STUB_DIR/calls"'
 check "every container from a working folder it names, none from the root (the image sets none)" eval \
-  '! grep "^run " "$STUB_DIR/calls" | grep -v " -w /\(tmp\|work\) " && ! grep -q "^run .* -w / " "$STUB_DIR/calls"'
+  '[ "$(grep -c "^run " "$STUB_DIR/calls")" -ge 3 ] && ! grep "^run " "$STUB_DIR/calls" | grep -v " -w /\(tmp\|work\) " && ! grep -q "^run .* -w / " "$STUB_DIR/calls"'
 STUB_NAMES_REFUSE=1 launch check --project Bee-ruche/toy --login alice
 check "refused: check, the tip's names" eval '[ "$CODE" -eq 2 ] && case "$ERR" in "hive: the project'"'"'s tip holds two names"*) true ;; *) false ;; esac'
 launch clone --project Bee-ruche/toy --login alice
@@ -790,10 +790,11 @@ check "the token: sent on curl's standard input, never in an argument, an output
    && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" "$T/tmpd" 2>/dev/null)" ] \
    && [ -z "$(ls -A "$T/tmpd")" ] \
    && grep -qx -- "-q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o $T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"'
-rm -f "$STUB_DIR/cygpath-args"
-TMPDIR="$T/tmpd" STUB_UNAME=MINGW64_NT-10.0-26100 launch check --project Bee-ruche/toy
+: > "$STUB_DIR/curl-args"
+TMPDIR="$T/tmpd" STUB_UNAME=MINGW64_NT-10.0-26100 STUB_CYGPATH_MARK=1 launch check --project Bee-ruche/toy
 check "on Windows, curl given the answer's place in Windows' form (the launcher turns Git Bash's conversion off: curl.exe wrote nothing, the real smoke)" \
-  grep -q "^$T/tmpd/hive-user\.[A-Za-z0-9]*\$" "$STUB_DIR/cygpath-args"
+  grep -qx -- "-q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o W:$T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"
+rm -f "$T/tmpd"/hive-user.*
 check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
   grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
 printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"

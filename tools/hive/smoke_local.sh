@@ -41,7 +41,8 @@ printf '#!/bin/sh\nexec '\''%s'\'' -c credential.helper= "$@"\n' "$real_git" > "
 # never shown: only whether a password line came back).
 mkdir -p "$home/ask" || exit 2
 [ "$(PATH="$home/bin:$PATH" command -v git)" = "$home/bin/git" ] \
-  && ! (cd "$home/ask" && printf 'protocol=https\nhost=github.com\n\n' | PATH="$home/bin:$PATH" GIT_CEILING_DIRECTORIES="$home/ask" \
+  && ! (cd "$home/ask" && printf 'protocol=https\nhost=github.com\n\n' | HOME="$home" PATH="$home/bin:$PATH" \
+        env -u GIT_ASKPASS -u SSH_ASKPASS -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u XDG_CONFIG_HOME GIT_CEILING_DIRECTORIES="$home/ask" \
         GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never timeout 30 git -c core.askPass= credential fill 2>/dev/null | grep -q '^password=') \
   || { echo "smoke: this machine's git would still give a credential: nothing was run"; exit 2; }
 
@@ -51,7 +52,7 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) [ ! -d "${HOME}/.docker" ] || 
 
 echo "smoke: local.sh check --project $PROJECT, at $head"
 said=$(cd "$home/desk" && HOME="$home" PATH="$home/bin:$PATH" \
-  env -u DOCKER_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GH_HOST -u GH_CONFIG_DIR \
+  env -u DOCKER_CONFIG -u XDG_CONFIG_HOME -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GH_HOST -u GH_CONFIG_DIR \
   GCM_INTERACTIVE=never \
   timeout 1800 bash "$home/.hive/protocol/tools/hive/local.sh" check --project "$PROJECT" 2>&1)
 code=$?
