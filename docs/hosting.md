@@ -438,6 +438,18 @@ is one is a line of the project's settings, which changes as any line of them do
 their duties ([protocol.md](protocol.md), "Trusted accounts and their duties"): a trusted account pushes to its own
 fork alone, and `record` writes its duties to `hive-state` with the token it already has.
 
+No job of the run publishes a trusted account's cut. The project's publisher, `hive.py publish-cut`, does, run by
+hand or on the architect's schedule with the project's own account. It needs:
+- Linux;
+- a full clone of the project whose `origin` is its `https://` address;
+- git settings that let that account push the published branch;
+- `gh` signed in as that account.
+
+The cutter's guide runs it at the start of each of the architect's runs (`.claude/skills/bee-cutter/`, "For the
+architect: the trusted accounts' cuts"). Its commit is unsigned and the same on every machine. A published branch
+that requires signed commits therefore refuses it (`REFUSED push`), and such a project cannot use the publisher as
+it is.
+
 ## What a run reads, and when
 
 - **The settings and the tasks are read at one commit for the whole run.** `plan` asks the project's repository which

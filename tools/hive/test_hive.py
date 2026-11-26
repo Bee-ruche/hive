@@ -15131,6 +15131,38 @@ class TestTheCuttersGuide(unittest.TestCase):
         self.assertIn("`shown` `judge`", guide, "and on whose word a task « correct » was published")
         self.assertIn('"shown"', body + source[source.index("def cmd_cut(args)"):source.index("def backlog_at(")])
 
+    def test_the_commands_the_guide_gives_are_ones_the_tool_takes(self):
+        """The cutter runs the guide's commands as written, the architect's and the trusted account's alike: each
+        `hive …` of its code blocks and of its sentences, with a value in place of each placeholder, is one the tool's
+        own reading of a command line accepts (the commands are not run: each is replaced by a note of what it was given)."""
+        guide = (REGISTRY / ".claude/skills/bee-cutter/SKILL.md").read_text(encoding="utf-8")
+        blocks = "\n".join(re.findall(r"```bash\n(.*?)```", guide, re.S)).replace("\\\n", " ")
+        written = [m.group(1).split("  #")[0].split(" > ")[0].strip()
+                   for m in re.finditer(r"(?:^|&& )(hive [a-z-]+ [^)\n]*)", blocks, re.M)]
+        written += re.findall(r"`(hive [a-z-]+ --[^`\n]*)`", guide)
+        values = {"<PROJECT>": "Bee-ruche/toy", "<LOGIN>": "carol", "<FORK>": "toy"}
+        given = []
+        names = ("tally", "outline", "cut", "cut_check", "publish_cut", "duty")
+        for name in names:
+            patch = mock.patch.object(hive, f"cmd_{name}", side_effect=given.append)
+            patch.start()
+            self.addCleanup(patch.stop)
+        for line in written:
+            for placeholder, value in values.items():
+                line = line.replace(placeholder, value)
+            with self.subTest(command=line):
+                self.assertNotIn("<", line, "a placeholder this test knows no value for")
+                with mock.patch("sys.stderr"):
+                    try:
+                        hive.main(shlex.split(line)[1:])
+                    except SystemExit:
+                        self.fail("the tool does not take this command line")
+        commands = sorted({args.command for args in given})
+        self.assertEqual(commands, ["cut", "cut-check", "duty", "outline", "publish-cut", "tally"], "each command of both ways, at least once")
+        duties = [args for args in given if args.command == "duty"]
+        self.assertEqual({(args.login, args.fork, args.release) for args in duties}, {("carol", "toy", None), ("carol", "toy", "out_of_reach")},
+                         "the duty is asked, and given back with a code, under the account's login and its fork")
+
 
 class TestHealth(unittest.TestCase):
     """What « health » says of one project, from its tally (hive.project_health), and what « report » makes of it,
@@ -18412,6 +18444,66 @@ def share_state(world):
     sh("git", "add", "-A", cwd=work)
     sh("git", "commit", "--quiet", "--allow-empty", "-m", "state", cwd=work)
     sh("git", "push", "--quiet", "--force", str(world.upstream), f"HEAD:refs/heads/{hive.STATE_BRANCH}", cwd=work)
+
+
+class TestTheCuttersGuideProposal(Base):
+    """The trusted account's proposal as the cutter's guide makes it (.claude/skills/bee-cutter/SKILL.md, "For a
+    trusted account: the cut duty"): its block of commands and its marker, run as written, with values in place of
+    the placeholders, then read by the project's run. A cut ends the duty « cut », and a proposal that changes nothing
+    ends it « nothing ». (The guide's two `cut-check` lines and the state taken again are the gate's, tested elsewhere.)"""
+    config = {"trusted": TRUSTED}
+    lines, dealt, end_of = TestCuts.lines, TestCuts.dealt, TestCuts.end_of
+
+    def setUp(self):
+        super().setUp()
+        self.carol = self.w.fork("carol", 301)
+
+    def propose(self, duty, published, text):
+        """The guide's block and marker, run in carol's clone, which holds the published commit: the proposal pushed."""
+        guide = (REGISTRY / ".claude/skills/bee-cutter/SKILL.md").read_text(encoding="utf-8")
+        section = guide[guide.index("**The proposal.**"):guide.index("**Nothing to cut**")]
+        block = next(b for b in re.findall(r"```bash\n(.*?)```", section, re.S) if "refs/heads/hive/cut" in b)
+        marker = re.search(r"```text\n(.*?)```", section, re.S).group(1)
+        work, tmp = self.carol.work, self.w.root / "carol-tmp"
+        tmp.mkdir(exist_ok=True)
+        sh("git", "fetch", "--quiet", str(self.w.upstream), f"refs/heads/{self.w.published_branch}", cwd=work)
+        (tmp / "proposal.jsonl").write_text(text)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        fork = sh("git", "remote", "get-url", "origin", cwd=work).stdout.strip()
+        commands = [line.split("  #")[0].rstrip() for line in block.splitlines()]
+        kept = [line for line in commands if line and "backlog" not in line and not line.startswith(("hive ", "rm -rf ~/.hive"))]
+        script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published)
+        self.assertEqual(script.count('"https://github.com/<LOGIN>/<FORK>"'), 1, "one push, to the account's own fork")
+        script = script.replace('"https://github.com/<LOGIN>/<FORK>"', shlex.quote(fork))
+        marker = "\n".join(line for line in marker.splitlines() if not line.startswith("Hive-Backlog:"))
+        marker = marker.replace("<DEAL>", duty).replace("<LOGIN>", "carol").replace("<commit>", published) \
+            .replace("<the tasks file's sha256, as CHECKED printed it>", digest)
+        self.assertNotIn("<", script + marker, "a placeholder this test knows no value for")
+        (tmp / "marker.txt").write_text(marker + "\n")
+        ran = sh("bash", "-e", "-c", script, cwd=work)
+        self.assertIn(digest, ran.stdout, "the guide's own sha256sum line shows the digest the marker names")
+        self.assertIn(f"\n{published}\n", f"\n{ran.stdout}".replace(" ", "\n"), "and its rev-list line the published commit as the one parent")
+        return sh("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+
+    def test_the_guides_proposal_of_a_cut_ends_the_duty_as_the_cut_that_stands(self):
+        duty, published = self.dealt(), self.w.publish()
+        text = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+        proposal = self.propose(duty, published, text)
+        self.assertEqual(sh("git", "rev-parse", f"refs/heads/{hive.CUT_BRANCH}", cwd=self.carol.bare).stdout.strip(), proposal)
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["outcome"], end["fault"], end["proposal"], end["published"], end["digests"]),
+                         ("cut", False, proposal, published, {"tasks": hashlib.sha256(text.encode()).hexdigest()}))
+
+    def test_the_guides_proposal_of_nothing_ends_the_duty_as_nothing_to_cut(self):
+        duty, published = self.dealt(), self.w.publish()
+        text = sh("git", "show", f"{published}:{hive.TASKS_FILE}", cwd=self.w.upstream).stdout
+        proposal = self.propose(duty, published, text)
+        self.assertEqual(sh("git", "rev-parse", f"{proposal}^{{tree}}", cwd=self.carol.work).stdout,
+                         sh("git", "rev-parse", f"{published}^{{tree}}", cwd=self.carol.work).stdout, "an empty commit, with --allow-empty")
+        self.w.run()
+        end = self.end_of()
+        self.assertEqual((end["outcome"], end["fault"], end["proposal"]), ("nothing", False, proposal))
 
 
 class TestPublishCut(Base):

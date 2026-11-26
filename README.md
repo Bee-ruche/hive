@@ -14,13 +14,18 @@ have read. Work from strangers reaches the project only through that judge. Acco
 (its guardians) may look again at a commit the judge refused for a figure the project lets them waive: the commit is
 then judged again in full, and each such decision is a public line of the project's ledger, on a branch of the
 project's own repository.
+Accounts it trusts with cutting cut its tasks during duties the run deals them, and the project's own account
+publishes the cut that passes the gate ([docs/protocol.md](docs/protocol.md), "Trusted accounts and their duties").
 
 ## What this repository holds
 
 - `.github/workflows/run.yml`: the hive's run, a reusable workflow a project calls from its own repository, with its
   own token and no secret ([docs/hosting.md](docs/hosting.md)).
 - `tools/hive/`: the hive's tool (`hive.py`: the steps of a run and the volunteer's commands), the project's page
-  (`page.py`), how a job of a run takes an earlier job's files (`artifact.py`), and their tests.
+  (`page.py`), how a job of a run takes an earlier job's files (`artifact.py`), and their tests; and the local bee:
+  the volunteer's worker on Windows, macOS or Linux through Docker (`local.sh`, its PowerShell shim `local.ps1`, the
+  image's `Dockerfile` and the network gate `egress.py`; [docs/join.md](docs/join.md), "On a machine of yours, through
+  Docker").
 - `tools/judge/`: the judges the hive calls, the common judge and the reference judge, with their containers, their
   toy projects and their tests.
 - `hive/settings.json`: every setting of a project's file, described, with its bounds and recommended values.

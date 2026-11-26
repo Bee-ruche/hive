@@ -130,7 +130,7 @@ esac
 role="" ; : > "$S/mounts"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --rm|-d|--read-only) shift ;;
+    --rm|-d|--read-only|--init) shift ;;
     --label) role="${2#hive.role=}"; shift 2 ;;
     --mount) printf '%s\n' "$2" >> "$S/mounts"; shift 2 ;;
     --*|-e|-w) shift 2 ;;
@@ -361,6 +361,8 @@ check "next: the clone, the protocol read-only, the state read-only, the needs' 
    && [ "$(wc -l < "$STUB_DIR/mounts.tool")" -eq 4 ]'
 check "next: the tool runs as the clone's owner, on the network with no route out, with no credential" \
   grep -q "^run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=tool --user 1000:1000 .* -e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e https_proxy=http://hive-egress-[0-9]*-[0-9]*:3128 -w /work " "$STUB_DIR/calls"
+check "next: the gate runs under an init, read-only, unprivileged, its processes bounded, on the default bridge" \
+  grep -q "^run -d --init --name hive-egress-[0-9]*-[0-9]* --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --cpus 1 --memory 256m --user 65534:65534 --network bridge " "$STUB_DIR/calls"
 STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d
 check "submit: a refusal's line and exit code passed through, the slot emptied" eval '[ "$CODE" -eq 1 ] && [ "$OUT" = "REFUSED (x): y" ] && untouched'
 check "submit: the slot mounted, --hand-over given, no state, no needs" eval \
@@ -801,6 +803,31 @@ reset_world
 STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" launch hive ready --project Bee-ruche/toy --login alice --fork other
 check "refused: a fork with nothing of the project's history" eval 'refused 2 "the fork alice/other holds nothing of the project'"'"'s history" \
   && [ -z "$(git -C "$T/github/alice/other" for-each-ref refs/heads/hive)" ]'
+
+# The volunteer's docs: each launcher command they give, with a value in place of each placeholder, is one the
+# launcher's own reading of a command line takes. Each is run in a home with no login recorded: a command line the
+# launcher reads stops on the login (or, for refresh, goes on to the stub), never on its words.
+DOCS_HOME="$T/docs-home"
+mkdir -p "$DOCS_HOME"
+grep -ho 'bash ~/\.hive/protocol/tools/hive/local\.sh [^`]*' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" \
+  | grep -v 'hive <command>' | sort -u > "$T/doc-lines"
+: > "$T/doc-unread"
+while IFS= read -r line; do
+  words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
+    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g')
+  case "$words" in *"<"*) printf '%s (a placeholder this test knows no value for)\n' "$line" >> "$T/doc-unread"; continue ;; esac
+  # shellcheck disable=SC2086
+  (cd "$T/desk" && HOME="$DOCS_HOME" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
+  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|local.sh login takes one word\|runs the command given after --" "$T/doc-err"; then
+    printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
+  fi
+done < "$T/doc-lines"
+docs_read() {  # every line read, and each of the launcher's commands given at least once
+  [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
+  local word
+  for word in check clone refresh sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+}
+check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, sandbox and login" docs_read
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

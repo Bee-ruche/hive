@@ -410,7 +410,7 @@ egress_up() {
   [ "$("$DOCKER" network inspect -f '{{.Internal}}' "$INNER" 2>/dev/null)" = true ] \
     || die "the network $INNER has a route out: remove it (docker network rm $INNER) and run the command again"
   GATE_UP=1
-  "$DOCKER" run -d --name "$EGRESS" --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
+  "$DOCKER" run -d --init --name "$EGRESS" --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
     --cpus 1 --memory 256m --user 65534:65534 --network bridge "${PROTOCOL_MOUNT[@]}" \
     "$IMAGE" python3 -I /hive/protocol/tools/hive/egress.py --listen 0.0.0.0 --port "$EGRESS_PORT" >/dev/null 2>&1 \
     && "$DOCKER" network connect "$INNER" "$EGRESS" >/dev/null 2>&1 || die "Docker could not start the hive's gate ($EGRESS)"

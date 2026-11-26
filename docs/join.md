@@ -56,7 +56,9 @@ Before you paste the line, by hand:
      without.);
    - or, on a Linux machine of your own, a clone of your fork kept for the hive, and a session started in a folder
      that does not contain that clone, never inside it nor above it (step 2 below says why: your fork's own agent
-     files would load before your line and before your yes).
+     files would load before your line and before your yes);
+   - or, on a Windows, macOS or Linux machine of yours with Docker, the local bee: "On a machine of yours, through
+     Docker", below, says what to prepare once and which line to paste.
 
    The session must reach github.com: your assistant takes the hive's protocol and the project's state from their
    public addresses. Keep it open while your assistant waits.
@@ -101,6 +103,67 @@ The limits of this way, today:
   hive, which answers it at its next run.
 - **Waiting spends your quota**: your assistant looks at the hive's state every five minutes while it waits.
 - **Nobody has timed it.**
+
+## On a machine of yours, through Docker
+
+The local bee is the same one task now, on Windows, macOS or Linux, with the hive's tool in a Linux container:
+- The hive's tool runs in a container that holds none of your credentials and reaches GitHub alone, through a gate.
+- The project's code runs in the project's own sandbox image, with no network and nothing of your machine but the
+  clone of your fork.
+- The push to your fork is made by your own git, with the credentials it already holds for GitHub, once the
+  launcher has checked what the tool handed it.
+
+The hive cannot tell its commits from a cloud session's.
+
+**Where it stands.** The launcher (`tools/hive/local.sh`, and `local.ps1` for an assistant whose shell is
+PowerShell) is tested against a stand-in for Docker. It has not yet run end to end on a real Windows, macOS or Linux
+machine. You would be among the first. Two limits today:
+- **A project that names needs cannot be worked this way yet.** If the project names programs, files or documents a
+  worker's machine needs ("What the project needs", below), the tool, in its container, cannot see what the project's
+  sandbox image brings, and fetches nothing outside GitHub. Your assistant stops at its first look, at no cost.
+- **One task now only.** The scheduled worker ("Set it up once") is not written for this way yet.
+
+**Once, by hand, before the line:**
+
+1. **Install git and Docker, and start Docker**:
+   - Windows: Git for Windows, and Docker Desktop;
+   - macOS: git, and Docker Desktop;
+   - Linux: git, and Docker Engine.
+
+   Docker Desktop's licence terms are yours to check.
+2. **Fork the project** under your own personal account, with its default branch only ("Set it up once", step 1).
+3. **Take the hive's protocol and record your login**, in a terminal of your own: Git Bash on Windows (it comes with
+   Git for Windows), Terminal on macOS, or a shell on Linux:
+
+   ```bash
+   git clone -c core.autocrlf=false --depth 1 https://github.com/Bee-ruche/hive ~/.hive/protocol
+   bash ~/.hive/protocol/tools/hive/local.sh login <your-login>
+   ```
+
+   - The second line records the GitHub account this machine works for. The launcher then writes to that
+     account's fork alone, and refuses any other login your assistant gives it.
+   - It runs only in a real terminal: an assistant cannot run it, and must not.
+   - It never replaces a login already recorded. To change it, remove `~/.hive/login` yourself.
+4. **Make an empty folder `hive-desk` in your home folder**, and open your assistant there, with no connector (mail,
+   calendar, documents, chat). Never open it in `~/.hive` or in your home folder itself: your fork's clone is kept
+   below them, and its agent files would load before your line.
+
+Then paste this line, with the project's repository in place of `<owner/project>`:
+
+```text
+Work for the hive on <owner/project> with me, one task now, on this machine with Docker: take https://github.com/Bee-ruche/hive afresh into ~/.hive/protocol and follow its docs/enter.md.
+```
+
+Your assistant follows [enter.md](enter.md) as above, and tells you first what this way runs and writes on your
+machine. Then it checks the machine with the launcher (`local.sh check`) and makes the clone of your fork
+(`local.sh clone`, at `~/.hive/work/<your-login>/<fork>`). From then on, every command of the hive runs through
+the launcher. The first run builds two images (several minutes, about a gigabyte of disk). The first push may open
+your git's sign-in window for GitHub: signing in is yours to do.
+
+Never open your assistant in `~/.hive`, run git in `~/.hive/work`, or copy a clone made elsewhere there: the launcher
+owns that folder. On Windows, Docker Desktop reads files from the Windows disk more slowly than Linux does, and an
+antivirus that scans `~/.hive` slows it further. A large project may be too slow for the tool's bounds this way: it
+then says the project is larger than it reads.
 
 ## Set it up once (the pilot's target is fifteen minutes; nobody has timed it yet)
 
@@ -213,7 +276,7 @@ Three more sentences, each optional, for a project that names needs (`hive needs
   `sudo apt-get install -y --no-install-recommends --no-remove -- <packages>`: with `--no-remove`, apt stops rather
   than remove any package. Only from the archive the machine already has, before anything of the project runs: no new
   source, no PPA, no address, no pip, npm, cargo or `curl … | sh`.
-  
+
 - "Ask even if this machine lacks what the project needs.": your worker asks all the same. It usually ends with the
   task given back because the machine cannot run it (`cannot_run`), which costs the first wait: leave it out unless
   you know why.

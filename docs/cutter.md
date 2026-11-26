@@ -57,7 +57,7 @@ What those who split work for others have learnt, for people and for AI agents, 
 | The architect | Writes the project's charter: its goal, what counts as progress, its directions and priorities, the lowest goal a task may set (the floor), and what it asks of volunteers | the project's lead | exists; tooling planned |
 | The tally | Counts, from the ledger and the tasks alone: deals, expiries, deals given back, acceptances, refusals by reason, best figures, time to accept; the judge's figures at the tip; which tasks are **stuck**; whether the project is **starving** (nothing left to deal) | code of the hive | built (`hive.py tally`) |
 | The deterministic cutter | Applies the rules: closes a stuck task and cuts it again with a lower goal where the project's floors allow, publishes the architect's planned tasks once their prerequisites are done, up to the project's target of open tasks, and says what it could not do | code of the hive | built (`hive.py cut`) |
-| The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new tasks and goals | the architect's own agent, trusted | its guide is built (`.claude/skills/bee-cutter/`); it proposes, the gate decides |
+| The AI cutter | Does what rules cannot: chooses a cut where the structure is not known, writes the tasks' context, proposes new tasks and goals | the architect's own agent, or the agent of an account the project trusts with `cut`, during a duty the hive deals it | its guide is built (`.claude/skills/bee-cutter/`, both ways); it proposes, the gate decides |
 | The gate (`cut-check`) | Passes or refuses every proposed change of the tasks, the AI's included; nothing overrides it | code of the hive | built (`hive.py cut-check`) |
 | The judge author | Writes and hardens the judge of a new kind of project: the bottleneck of every new kind | trusted; later, tasks for volunteers judged by seeded mutants | with each new kind |
 | The judge | Accepts or refuses a candidate | machine | exists |
@@ -502,6 +502,13 @@ the architect's account, which may change the published branch: the project's tr
 gate, the bound on each cycle and one commit to go back are what hold if it errs. A project that wants a person to
 read each cut before it lands says so in its charter: the cutter then opens a pull request instead of publishing.
 
+Or on a trusted account's side: an account the project trusts with `cut` cuts during the duties the hive deals it
+([protocol.md](protocol.md), "Trusted accounts and their duties"). Its agent runs the same guide, from a clone of
+the project and one of its own fork, every hour while it works for the project. It pushes its cut to its own fork,
+and the project's publisher (`hive.py publish-cut`), run with the project's own account, publishes the cut that
+stands. The guide says both sides: the account's ("For a trusted account: the cut duty") and the architect's ("For the
+architect: the trusted accounts' cuts").
+
 ## Not yet
 
 - A deal weighted by the cutter (recruitment in proportion to what an area yields, a share of scouts, scores that
@@ -533,3 +540,6 @@ read each cut before it lands says so in its charter: the cutter then opens a pu
    records the answers in `tip.json`, and `hive cut` and `cut-check` take the proof from there ("The proof at the
    tip"). **Done**; it acts in a project once its caller names a commit of the hive that holds it. The last manual
    step of a cycle on a project of the reference kind: with it, a cutter can run alone on a schedule.
+7. Cutting by trusted accounts: the cut duty, its proposal held to the gate in the project's run, the publisher
+   (`hive.py publish-cut`), and both sides in the cutter's guide. **Done** in the hive. Moving a pilot onto it (a
+   trusted account cutting, the architect's schedule running the publisher): not yet.
