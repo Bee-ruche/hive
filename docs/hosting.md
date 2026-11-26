@@ -556,15 +556,20 @@ What it does:
 
 - **After each run**, unless a person cancelled it, on the published branch alone, in the caller's concurrency group
   (one at a time, after the run's four jobs).
-- **`build`** may read the repository and nothing more. Its first two steps are the run's own: the protocol's check
-  and the hive's code at the workflow's own commit of `Bee-ruche/hive`. It checks out `hive-state` without keeping the
-  token, writes out the project's two files of its published branch (`hive/tasks.jsonl`, `hive/project.json`) from
-  git's objects, with no tree checked out, makes the page with `page.py` into a folder of its own, packs it, and
-  uploads it under the name Pages takes (`github-pages`, kept a day). A step that fails stops it there: nothing is
-  deployed, and the site stays as it was.
+- **`build`** may read the repository and its Pages settings, and nothing more. Its first two steps are the run's own:
+  the protocol's check and the hive's code at the workflow's own commit of `Bee-ruche/hive`. It then asks GitHub
+  where the repository's Pages take the site from, and stops with a sentence that says what to set unless it is a
+  workflow (step 1 above), before anything is built. It checks out `hive-state` without keeping the token, and writes
+  out the project's two files of its published branch (`hive/tasks.jsonl`, `hive/project.json`) from git's objects,
+  with no tree checked out: each only if it is a file there (not a link, a folder or a submodule) and no larger than
+  what is read of it anyway (16 MiB for the tasks, as the hive reads them; 1 MiB for the settings, as `page.py` reads
+  them). It makes the page with `page.py` into a folder of its own, checks that the folder holds plain files and
+  folders alone (no link, no file of several names), packs it, and uploads it under the name Pages takes
+  (`github-pages`, kept a day). A step that fails stops it there: nothing is deployed, and the site stays as it was.
 - **`deploy`** may do two things: `pages: write` (create a Pages deployment) and `id-token: write` (ask for the token
   that tells Pages which workflow, branch and environment the deployment comes from). It has one step,
-  `actions/deploy-pages` pinned to a commit: no checkout, none of the hive's code, no file read.
+  `actions/deploy-pages` pinned to a commit: no checkout, none of the hive's code, no file read. It deploys one at a
+  time (a concurrency group of its own, `pages`, never cancelled by a newer run), whatever the caller's workflow says.
 - **No branch is written**, by either job: the deploy is no push, so the rulesets ("The repository's settings") need no
   change, and no `gh-pages` branch is needed.
 - **Nothing of a contributor's is fetched, checked out or run.** No fork, no candidate and not the hive's own branch is
@@ -574,16 +579,17 @@ What it does:
   `page.py`). The title and the address are the caller's own: they reach `page.py` through the step's environment,
   joined to their option's name (`--title=...`, so that a title that starts with a dash is still a title), and it
   bounds the one and checks the other.
-- **What a token could do if it leaked while its job runs**: build's reads the repository; deploy's replaces the site
-  (what a write to a `gh-pages` branch could do), and nothing else of the repository.
+- **What a token could do if it leaked while its job runs**: build's reads the repository and its Pages settings;
+  deploy's replaces the site (what a write to a `gh-pages` branch could do), and nothing else of the repository.
 - **A public repository**, as for the run: build clones the project without credentials.
 - **To make the page again, start a run** ("Run workflow"), not a re-run of an earlier one: a re-run may find the
   earlier attempt's upload under the same name, which the upload refuses, or, after a day, find it gone.
 
-It is not a setting of `hive/project.json`: the caller's job is the switch, because only the caller can give the
-deploying job its two permissions, and a run that asked for them of every project would fail where they are not
-given. The workflow is held by a test of the file itself (`TestThePageWorkflow` in `tools/hive/test_page.py`): its two
-jobs word for word, the rules they obey, the example caller, and the steps that make the page, run with bash.
+It is deliberately not a setting of `hive/project.json` (no key of `hive/settings.json`): the caller's job is the
+switch, because only the caller can give the deploying job its two permissions (`id-token: write` above all), and a
+run that asked for them of every project would fail where they are not given. The workflow is held by a test of the
+file itself (`TestThePageWorkflow` in `tools/hive/test_page.py`): its two jobs word for word, the rules
+they obey, the example caller, and the steps that make the page, run with bash.
 
 ## Notes on the file
 
@@ -623,9 +629,14 @@ on GitHub yet.
   [hive-workflow.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/hive-workflow.md), "What could not be tried
   here").
 - **The page's workflow, on GitHub** (written 26 November 2026; its steps ran in the tests only, with bash, a local
-  repository for the project and this repository's own `page.py`): the deploy from a called workflow; whether the
-  deploying job must name `github-pages` (assumed, as GitHub's own examples of `actions/deploy-pages` do); the
-  "Deployment branches and tags" rule GitHub gives that environment when the source becomes GitHub Actions; and
-  whether Pages takes the archive as `build` makes it (a plain tar of the page's folder, uploaded under the name
-  `github-pages` by the run's own upload action, where GitHub's examples use `actions/upload-pages-artifact`, which
-  packs the same tar). Its first trial is a test project's first run after its lead makes the three changes above.
+  repository for the project, a stand-in for `gh`, and this repository's own `page.py`):
+  - the deploy from a called workflow;
+  - whether `pages: read` lets build's token read where the Pages take the site from;
+  - whether the deploying job must name `github-pages` (assumed, as GitHub's own examples of `actions/deploy-pages`
+    do), and the "Deployment branches and tags" rule GitHub gives that environment when the source becomes GitHub
+    Actions;
+  - whether Pages takes the archive as `build` makes it: a plain tar of the page's folder, uploaded under the name
+    `github-pages` by the run's own upload action, where GitHub's examples use `actions/upload-pages-artifact`, which
+    packs the same tar.
+
+  Its first trial is a test project's first run after its lead makes the three changes above.

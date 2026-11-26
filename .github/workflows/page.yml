@@ -1,10 +1,12 @@
 # The public page of one hive project, made again after each run (docs/hosting.md, "The project's page, after each
 # run"). A reusable workflow, and nothing else: a project that wants its page calls it from its own workflow, as a job
 # after the hive's run, at the same commit (examples/page/.github/workflows/hive.yml), and sets its repository's Pages
-# source to GitHub Actions once. Two jobs. build reads the project's branch hive-state and two files of its published
-# branch, makes the page with tools/hive/page.py at this workflow's own commit of Bee-ruche/hive, and uploads it; its
-# token reads, and is written nowhere. deploy hands that upload to GitHub Pages: it alone may deploy, and it runs none
-# of the hive's code and reads no file. Neither job writes a branch, and nothing of a fork or a candidate is fetched:
+# source to GitHub Actions once. Two jobs. build checks that the repository's Pages take the site from a workflow,
+# reads the project's branch hive-state and two files of its published branch (each held to its size), makes the page
+# with tools/hive/page.py at this workflow's own commit of Bee-ruche/hive, holds it to plain files and folders, and
+# uploads it; its token reads, and is written nowhere. deploy hands that upload to GitHub Pages, one deploy at a time:
+# it alone may deploy, and it runs none of the hive's code and reads no file. Neither job writes a branch, and nothing
+# of a fork or a candidate is fetched:
 # the page is made from the hive's own state, which page.py reads as data. tools/hive/test_page.py
 # (TestThePageWorkflow) holds this file word for word: whoever changes a line here changes that test in the same
 # commit, in sight of a reviewer.
@@ -26,6 +28,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      pages: read
     steps:
       - name: This workflow's own repository and commit, on Bee-ruche/hive's main (the hive's code runs from there)
         id: protocol
@@ -44,19 +47,32 @@ jobs:
           ref: ${{ steps.protocol.outputs.commit }}
           path: protocol
           persist-credentials: false
+      - name: The repository's GitHub Pages take the site from a workflow (Settings, Pages, Source GitHub Actions), or nothing is made
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source="$(timeout 60 gh api "repos/$REPOSITORY/pages" --jq .build_type)" || source="no Pages site, or no answer"
+          [[ "$source" == workflow ]] || { echo "page: this repository's GitHub Pages do not take the site from a workflow ($source): in Settings, Pages, choose the source GitHub Actions (docs/hosting.md of Bee-ruche/hive, \"The project's page, after each run\"); nothing is made" >&2; exit 1; }
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: hive-state
           path: state
           persist-credentials: false
-      - name: The project's tasks and settings, as its published branch holds them (two files, written as data; no tree is checked out)
+      - name: The project's tasks and settings, as its published branch holds them (two files, each held to its size and written as data; no tree is checked out)
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
           git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project
           mkdir published
-          git -C project show HEAD:hive/tasks.jsonl > published/tasks.jsonl
-          git -C project show HEAD:hive/project.json > published/project.json
+          for file in tasks.jsonl:16777216 project.json:1048576; do
+            name="${file%%:*}" most="${file##*:}"
+            read -r mode type object path <<< "$(git -C project ls-tree HEAD -- "hive/$name")"
+            [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == "hive/$name" ]] || { echo "page: hive/$name is not a file of the published branch: nothing is made" >&2; exit 1; }
+            size="$(git -C project cat-file -s "$object")"
+            (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }
+            git -C project cat-file blob "$object" > "published/$name"
+          done
       - name: The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages
         env:
           REPOSITORY: ${{ github.repository }}
@@ -67,6 +83,7 @@ jobs:
           [[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")
           python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \
             --tasks published/tasks.jsonl --project published/project.json "${site[@]}"
+          [[ -z "$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)" ]] || { echo "page: the page's folder holds a link or a file of several names: nothing is packed" >&2; exit 1; }
           tar --create --file artifact.tar --directory page .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -82,5 +99,8 @@ jobs:
       pages: write
       id-token: write
     environment: github-pages
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     steps:
       - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
