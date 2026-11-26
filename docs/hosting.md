@@ -125,9 +125,12 @@ ends with one line, `hive: …`, and 2, when it cannot start:
 ## Measuring a project
 
 `hive.py measure` judges the project's tip with the project's own kind of judge, a few times, on the architect's own
-machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker. A relay judge also
-needs root, or sudo that runs `mount` and `umount` without asking a password, as on a hosted runner: it mounts a memory
-file system for each phase. It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
+machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker, and root or sudo that
+runs `mount` and `umount` without asking a password, as on a hosted runner: every kind of judge mounts memory file
+systems for its containers (the common judge for each execution of the built variants, the reference judge for
+each container's output, cases and answers, the relay judge for each phase), and `measure` tries it before it starts:
+it mounts a small one and unmounts it, and stops if that fails. It reads the clone as `doctor` does, writes nothing to
+it and pushes nothing.
 
 ```bash
 python3 tools/hive/hive.py measure --project <owner/name> --repo <a full clone of the project> [--times 3] [--factor 2]
@@ -201,10 +204,14 @@ decides:
 It ends with 1 when a judgement fails to judge (code 2) or a phase passes its bound, and 0 otherwise: a refusal
 (code 1) alone fails nothing. It ends with one line, `hive: …`, and 2, when it cannot start:
 - another system than Linux;
-- no Docker, or, for a relay judge, neither root nor sudo for `mount` and `umount` without a password;
+- no Docker;
 - a common project without `--plugin-runs-here`;
 - settings or a manifest that do not load;
 - a `--workdir` that does not exist;
+- a trial mount that fails: after the refusals above, before anything is made, `measure` mounts a small memory file
+  system where the work folder will be and unmounts it, as the judges do (as root, or through `sudo -n`), each in 30
+  s at most; root without the right to mount (a container without `CAP_SYS_ADMIN`) fails it too. The line names the
+  kind of judge, what it mounts and why the trial failed;
 - the judge's image not made.
 
 ## What a project holds
