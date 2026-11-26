@@ -21368,6 +21368,42 @@ class TestSignalsInTheRun(Base):
         self.assertNotIn("signals", self.lines("expired")[-1], "more than the most: none")
 
 
+class TestSignalsHeldByTheSteps(Base):
+    """The steps that write take no signal on the plan's word: a plan that says more than holds has its signals held
+    again by record (a release's) and by apply (a candidate's), and the run goes on."""
+
+    def test_a_plan_that_says_more_than_holds_writes_what_holds(self):
+        real, planning = hive.held_signals, []
+
+        def loose(said, where, task, tasks, config):  # what a plan step gone wrong would carry: every code said, as said
+            return [{"code": code, **({"value": value} if value is not None else {})} for code, value in said] if planning else real(said, where, task, tasks, config)
+
+        def planned(*args, **kwargs):
+            planning.append(1)
+            try:
+                return real_plan(*args, **kwargs)
+            finally:
+                planning.clear()
+
+        real_plan = hive.plan
+        dealt = self.w.deal(self.alice, "toy-0001")
+        release(self.alice, "toy-0001", dealt, "out_of_reach", more=["Hive-Signal: telepathy", "Hive-Signal: too_large"])
+        bob = self.w.fork("bob", 102)
+        deal = self.w.deal(bob, "toy-0002")
+        bob.fresh("hive/submit/toy-0002").write("src/n.c", "int n;\n").commit()
+        marker = ["Hive submit", "", "Hive-Task: toy-0002", "Hive-Action: submit", f"Hive-Deal: {deal}", "Hive-Member: bob",
+                  "Hive-Signal: confidence certain", "Hive-Signal: unclear"]
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "\n".join(marker), cwd=bob.work)
+        bob.push()
+        with mock.patch.object(hive, "held_signals", side_effect=loose), mock.patch.object(hive, "plan", side_effect=planned):
+            self.w.run()
+        events = self.w.load()[2].events
+        expired, = [e for e in events if e["type"] == "expired"]
+        verdict, = [e for e in events if e["type"] == "verdict"]
+        self.assertEqual(expired["signals"], [{"code": "too_large"}], "record held the release's again")
+        self.assertEqual(verdict["signals"], [{"code": "unclear"}], "apply held the candidate's again")
+
+
 class TestSignallingCommands(Volunteer):
     """« hive submit » and « hive release » with --signal: the tool writes the lines, from its own list, once the
     project's run reads them, and refuses before it makes anything otherwise."""
