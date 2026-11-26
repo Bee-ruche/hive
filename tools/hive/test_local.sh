@@ -788,6 +788,11 @@ STUB_ID=12345 launch hive next --project Bee-ruche/toy --login alice
 check "refused: a needs' folder of another account's" eval 'refused 2 "$NEEDS is not your own" && ! ran tool'
 STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice
 check "a needs' folder of the user's, 0755: shown" eval '[ "$CODE" -eq 0 ]'
+# On Windows no owner nor mode is read: the needs' folder made a link is refused by its place alone, before the fetch.
+mv "$NEEDS" "$T/needs-win" && ln -s "$T/needs-win" "$NEEDS"
+STUB_UNAME=MINGW64_NT-10.0-26100 STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "refused on Windows: the needs' folder a link, before the fetch" eval '[ "$CODE" -eq 2 ] && ! ran needs-fetch && ! ran tool'
+rm "$NEEDS" && mv "$T/needs-win" "$NEEDS"
 rm -f "$HOME/.hive/started/Bee-ruche/toy"
 
 chmod g+w "$HOME/.hive/needs"
