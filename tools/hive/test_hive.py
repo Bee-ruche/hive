@@ -15139,7 +15139,7 @@ class TestTheCuttersGuide(unittest.TestCase):
         blocks = "\n".join(re.findall(r"```bash\n(.*?)```", guide, re.S)).replace("\\\n", " ")
         written = [m.group(1).split("  #")[0].split(" > ")[0].strip()
                    for m in re.finditer(r"(?:^|&& )(hive [a-z-]+ [^)\n]*)", blocks, re.M)]
-        written += re.findall(r"`(hive [a-z-]+ --[^`\n]*)`", guide)
+        written += re.findall(r"`(hive [a-z-]+ --[^`\n]*)`", guide) + re.findall(r"`\(cd [^`\n]* && (hive [a-z-]+ [^)`\n]*)\)`", guide)
         values = {"<PROJECT>": "Bee-ruche/toy", "<LOGIN>": "carol", "<FORK>": "toy"}
         given = []
         names = ("tally", "outline", "cut", "cut_check", "publish_cut", "duty")
@@ -15160,8 +15160,9 @@ class TestTheCuttersGuide(unittest.TestCase):
         commands = sorted({args.command for args in given})
         self.assertEqual(commands, ["cut", "cut-check", "duty", "outline", "publish-cut", "tally"], "each command of both ways, at least once")
         duties = [args for args in given if args.command == "duty"]
-        self.assertEqual({(args.login, args.fork, args.release) for args in duties}, {("carol", "toy", None), ("carol", "toy", "out_of_reach")},
-                         "the duty is asked, and given back with a code, under the account's login and its fork")
+        self.assertEqual({(args.login, args.fork, args.release, args.withdraw) for args in duties},
+                         {("carol", "toy", None, False), ("carol", "toy", "out_of_reach", False), ("carol", "toy", None, True)},
+                         "the duty is asked, given back with a code, and the ask taken back, under the account's login and its fork")
 
 
 class TestHealth(unittest.TestCase):
@@ -18466,6 +18467,7 @@ class TestTheCuttersGuideProposal(Base):
         marker = re.search(r"```text\n(.*?)```", section, re.S).group(1)
         work, tmp = self.carol.work, self.w.root / "carol-tmp"
         tmp.mkdir(exist_ok=True)
+        self.carol.write("elsewhere.txt", "a commit of the clone's own, which the proposal must not rest on").commit()
         sh("git", "fetch", "--quiet", str(self.w.upstream), f"refs/heads/{self.w.published_branch}", cwd=work)
         (tmp / "proposal.jsonl").write_text(text)
         digest = hashlib.sha256(text.encode()).hexdigest()
@@ -18474,7 +18476,7 @@ class TestTheCuttersGuideProposal(Base):
         kept = [line for line in commands if line and "backlog" not in line and not line.startswith(("hive ", "rm -rf ~/.hive"))]
         script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published)
         self.assertEqual(script.count('"https://github.com/<LOGIN>/<FORK>"'), 1, "one push, to the account's own fork")
-        script = script.replace('"https://github.com/<LOGIN>/<FORK>"', shlex.quote(fork))
+        script = script.replace('"https://github.com/<LOGIN>/<FORK>"', shlex.quote(fork)).replace("<LOGIN>", "carol")
         marker = "\n".join(line for line in marker.splitlines() if not line.startswith("Hive-Backlog:"))
         marker = marker.replace("<DEAL>", duty).replace("<LOGIN>", "carol").replace("<commit>", published) \
             .replace("<the tasks file's sha256, as CHECKED printed it>", digest)

@@ -7,7 +7,9 @@ description: Cut a hive project's work into tasks, for its architect. In a clone
 
 You are the cutter of one hive project, run for its **architect**, the person who leads it: you write the tasks
 volunteers' agents do. One run is one cycle: read, cut, check, publish, report; then stop. The next run starts
-fresh. A cycle a day is enough: the hive deals and judges a few times a day. The design is in
+fresh. A cycle a day is enough for the architect's own cutting: the hive deals and judges a few times a day (a
+trusted account's duty asks one look an hour, and the publisher one run per `trusted.cut_hours`: their sections
+say so). The design is in
 `docs/cutter.md` of the hive's protocol; read its sections "The loop" and "The gate" once.
 
 `hive` below means `python3 -I ~/.hive/protocol/tools/hive/hive.py`, run **at the root of a clone of the project's
@@ -43,9 +45,12 @@ Two accounts run this guide, and the prompt says which:
    `hive/project.json`, the charter, the code, another branch (but the one "Publish" names for a review), a tag, a
    release, a pull request (but that one), an issue, a comment, a message. No force-push, no deletion. A trusted
    account writes the same commit but pushes it to its own fork's `hive/cut` alone, and `hive duty` pushes its asks
-   to that fork's `hive/duty` ("For a trusted account: the cut duty"). It never pushes to the project.
+   to that fork's `hive/duty` ("For a trusted account: the cut duty"). It never pushes to the project. Its push to
+   `hive/cut` is the one force-push this guide allows: to that branch of its own fork, and nowhere else.
 5. **A refusal is final.** If the gate refuses, a push is declined, a permission is refused or a command fails,
-   do not reach the same thing another way: stop and report it.
+   do not reach the same thing another way: stop and report it. The one exception is a trusted account's live duty,
+   where stopping would let the duty run out: when `hive cut` or the gate fails, it proposes nothing ("Nothing to
+   cut") and reports why.
 
 If you hold tools that reach the architect's personal data or other projects (mail, calendar, documents, other
 repositories), use none of them.
@@ -80,7 +85,7 @@ tasks on its published branch, which your commit goes on (`<commit>` below), and
 code (the branch the hive writes), which the outline read and whose files tasks name. Its proposal,
 `/tmp/proposal.jsonl`, already passed the gate. If
 `hive cut` fails (its `REFUSED` lines name a line of the backlog the gate refuses, or an error), publish nothing and
-report its lines.
+report its lines (a trusted account on a live duty proposes nothing instead: "Nothing to cut").
 
 - `closed`: the stuck tasks it closed (three members accepted elsewhere failed on each); `added`: what it added,
   `from` `easier` (a stuck task cut again with a lower goal) or `backlog` (a planned task whose needs are done); a
@@ -278,23 +283,25 @@ Everything above holds, except "Publish", which this section replaces. The proto
   - `<LOGIN>`, your account's GitHub login;
   - `<FORK>`, the name of your fork's repository (the project's own name unless you renamed your fork).
 
-  Take these from the prompt and from nothing else. If the login is missing, stop and say so.
+  Take these from the prompt and from nothing else. If the login is missing, stop and say so. The account has forked
+  the project already (default branch only), and this machine's git pushes to that fork with the account's own
+  credentials: neither is yours to set up.
 - **Two clones:**
   - `.` is still a clone of the project's own repository, whose `origin` is the project. It never pushes, and needs
     no right to.
-  - `~/.hive/duty/<FORK>` is a clone of your own fork, where `hive duty` runs. Nothing else is done in it: you
+  - `~/.hive/duty/<LOGIN>/<FORK>` is a clone of your own fork, where `hive duty` runs. Nothing else is done in it: you
     read nothing there.
 - **Linux only.** The local bee's launcher (`tools/hive/local.sh`) runs `duty` but does not push to `hive/cut`.
 - **Run every hour.** A duty lasts `duty_hours` (2 by default) and the project's grace (1 hour by default). A cycle
   a day would let your duties run out, each costing a wait that doubles. Each run is one look: ask, wait, or cut.
-- **When you stop for good**, take your ask back, or the hive keeps dealing you duties that then run out. Run
-  `hive duty` from your fork's clone with `--withdraw` once.
+- **When you stop for good**, take your ask back, or the hive keeps dealing you duties that then run out:
+  `(cd ~/.hive/duty/<LOGIN>/<FORK> && hive duty --project <PROJECT> --login <LOGIN> --fork <FORK> --withdraw)`, once.
 
 Each run, once the lines of "The run" that take the protocol and the state have run, up to `git fetch --quiet origin`:
 
 ```bash
-[ -d ~/.hive/duty/<FORK>/.git ] || git clone --quiet "https://github.com/<LOGIN>/<FORK>" ~/.hive/duty/<FORK>
-(cd ~/.hive/duty/<FORK> && hive duty --project <PROJECT> --login <LOGIN> --fork <FORK> --state ~/.hive/cutter-state)
+[ -d ~/.hive/duty/<LOGIN>/<FORK>/.git ] || git clone --quiet "https://github.com/<LOGIN>/<FORK>" ~/.hive/duty/<LOGIN>/<FORK>
+(cd ~/.hive/duty/<LOGIN>/<FORK> && hive duty --project <PROJECT> --login <LOGIN> --fork <FORK> --state ~/.hive/cutter-state)
 ```
 
 What it prints decides the run:
@@ -317,7 +324,7 @@ cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
 git add hive/tasks.jsonl
 git add hive/backlog.jsonl                 # only if you changed the backlog
 git diff --cached --name-only              # hive/tasks.jsonl, hive/backlog.jsonl if you changed it, or nothing; anything else: stop
-git commit --quiet --allow-empty -F /tmp/marker.txt
+git -c user.name=<LOGIN> -c user.email=<LOGIN>@users.noreply.github.com commit --quiet --allow-empty -F /tmp/marker.txt
 git rev-list --parents --max-count=1 HEAD     # the new commit, then <commit>, and nothing else: otherwise stop, push nothing
 git show HEAD:hive/tasks.jsonl | sha256sum    # must be the <sha256> CHECKED printed: otherwise stop, push nothing
 git show HEAD:hive/backlog.jsonl | sha256sum  # the same for the backlog, if you changed it
@@ -329,7 +336,8 @@ git push --quiet --force "https://github.com/<LOGIN>/<FORK>" HEAD:refs/heads/hiv
 The second `cut-check` must print the same `CHECKED` line, as in "Publish".
 
 The push replaces the proposal of an earlier duty, which the hive has already read once. That is the only
-force-push this guide allows, and only to that branch of your own fork.
+force-push this guide allows (rule 4), and only to that branch of your own fork: the fork `hive duty` has just
+accepted as yours. The identity on the command line changes no setting of this machine; the hive reads none of it.
 
 `/tmp/marker.txt` holds a title of your own words, an empty line, then each of these lines alone on its line:
 
@@ -384,8 +392,19 @@ It prints one line:
 - `NOTHING <check>: …`: nothing to publish, which is no fault.
 - `REFUSED <check>: …`: a doubt the publisher does not settle; nothing is pushed.
 
+Then run `git fetch --quiet origin` again before anything else: a published cut has moved the published branch.
+
 What each check means is in `docs/protocol.md`, "Publishing a cut". Report the line. A `REFUSED` is the
 architect's to read.
+
+**How often.** Run the publisher at least once every `trusted.cut_hours` (6 by default): through your own run, or
+through a schedule of its own for this one command.
+- A cut stands until it is published. After `trusted.cut_hours`, the hive may deal another duty on the same commit,
+  and the publisher takes only the latest cut.
+- A cut left unpublished that long can be superseded. Its account's next proposal replaces it on its fork's
+  `hive/cut`, and the publisher then says `REFUSED branch` for the older one.
+- `REFUSED branch` therefore often means only that a newer proposal took its place, and the next cut that stands
+  is published instead.
 
 On a project whose cuts trusted accounts make, your own run cuts nothing unless the architect's prompt says it
 should: a cut you publish makes the duty's proposal stale, at no cost to that account but at the cost of its work.

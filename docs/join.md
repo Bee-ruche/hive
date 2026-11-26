@@ -86,7 +86,8 @@ for your yes (in the scheduled-task way, it tells you the same in the session an
 - that your AI provider's terms are yours to check;
 - which project, and which version of the hive's text it follows.
 
-It asks for your GitHub login. It installs nothing, and asks for no token, no password, no connector and no scheduled
+It asks for your GitHub login. It installs nothing (on a machine through Docker, Docker builds the hive's images:
+below), and asks for no token, no password, no connector and no scheduled
 task. At the end it shows you the verdict and where its line is in the public ledger, and offers another task now,
 or the regular worker.
 
@@ -118,9 +119,10 @@ The hive cannot tell its commits from a cloud session's.
 **Where it stands.** The launcher (`tools/hive/local.sh`, and `local.ps1` for an assistant whose shell is
 PowerShell) is tested against a stand-in for Docker. It has not yet run end to end on a real Windows, macOS or Linux
 machine. You would be among the first. Two limits today:
-- **A project that names needs cannot be worked this way yet.** If the project names programs, files or documents a
+- **A project that names needs can rarely be worked this way yet.** If the project names programs, files or documents a
   worker's machine needs ("What the project needs", below), the tool, in its container, cannot see what the project's
-  sandbox image brings, and fetches nothing outside GitHub. Your assistant stops at its first look, at no cost.
+  sandbox image brings, and fetches nothing outside GitHub. Your assistant then most likely stops at its first look,
+  at no cost.
 - **One task now only.** The scheduled worker ("Set it up once") is not written for this way yet.
 
 **Once, by hand, before the line:**
