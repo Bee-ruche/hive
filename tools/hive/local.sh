@@ -23,7 +23,7 @@
 #
 # Places, all under ~/.hive and built from the arguments alone, each matched by the tool's own patterns first, and
 # each shown to Docker by the very place it resolves to, which must be the place it names (placed: no link on the way):
-#   protocol/                      the hive's protocol, a clone the owner keeps (the guide's « The run »): hive.py from here
+#   protocol/                      the hive's protocol, the assistant's clone of it (the guide's « The run »): hive.py from here
 #   work/<login>/<fork>/           the fork's clone, made by the tool's container (clone), never by this machine's git
 #   state/<owner>/<name>/          the project's state (refresh)
 #   needs/<owner>/<name>/          the project's needs (lower case), fetched by the needs' own container (needs-fetch),
@@ -75,6 +75,25 @@ SHA_RE='^[0-9a-f]{40}$'
 die() { printf 'hive: %s\n' "$*" >&2; exit 2; }
 say() { printf '%s\n' "$*"; }
 lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+# The PATH, before any program is run (uname, tr, mkdir included): every entry named from the root, and none below
+# ~/.hive, where the clones, the store and the slot lie (nothing kept there, a clone's folder included, is run on this
+# machine). Compared without case on every system (bash's own nocasematch: no program), which refuses more, never less.
+under_ci() {  # true if $1 is $2 or lies below it, without case
+  local r=1
+  shopt -s nocasematch
+  if [[ $1 == "$2" || $1 == "$2"/* ]]; then r=0; fi
+  shopt -u nocasematch
+  return $r
+}
+if [ -d "$HOME/.hive" ]; then hive_real=$(cd -P "$HOME/.hive" && pwd -P) || die "$HOME/.hive cannot be read"; else hive_real=""; fi
+set -f; old_ifs="$IFS"; IFS=: read -r -a early_path <<< "$PATH"; IFS="$old_ifs"; set +f
+for entry in ${early_path[@]+"${early_path[@]}"}; do
+  case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
+  [ -n "$hive_real" ] && [ -d "$entry" ] || continue
+  resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
+  if under_ci "$resolved" "$hive_real"; then die "the PATH holds a folder below $HOME/.hive ($entry): nothing kept there is run on this machine"; fi
+done
 
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*) SYSTEM=windows ;;
@@ -224,56 +243,51 @@ AGAIN="the owner connects their GitHub account again, as the worker's guide says
 found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as (LOGIN_VIA git), else gh's (LOGIN_VIA gh)
   # git's own credential for github.com, as the push signs in, asking nothing: no terminal, no askpass, no window of
   # the credential manager's. Its token stays in this function's variables: never printed, written, or in an argument.
-  local ask said token curl answer code login gh
+  local askdir said token curl answer code login gh why=""
   FOUND_LOGIN="" LOGIN_VIA=""
   command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
-  ask=$(mktemp "${TMPDIR:-/tmp}/hive-ask.XXXXXX") || die "no room for a temporary file"
-  printf 'protocol=https\nhost=github.com\n\n' > "$ask"
-  said=$(GIT_MEMORY_KB="" within 30 "$ask" env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never SSH_ASKPASS= \
-    "$GIT" -c core.askPass= -c credential.interactive=never credential fill 2>/dev/null)
-  rm -f "$ask"
-  token=$(printf '%s\n' "$said" | sed -n 's/^password=//p' | head -n 1)
+  # (In an empty folder of its own, which git does not climb out of: no repository's settings are read, the session's
+  # folder's or any above it, which could name another helper.)
+  askdir=$(mktemp -d "${TMPDIR:-/tmp}/hive-ask.XXXXXX") || die "no room for a temporary folder"
+  printf 'protocol=https\nhost=github.com\n\n' > "$askdir/ask"
+  said=$(cd "$askdir" && GIT_MEMORY_KB="" within 30 "$askdir/ask" env GIT_CEILING_DIRECTORIES="$askdir" GIT_TERMINAL_PROMPT=0 \
+    GCM_INTERACTIVE=never SSH_ASKPASS= "$GIT" -c core.askPass= -c credential.interactive=never credential fill 2>/dev/null)
+  rm -rf "$askdir"
+  token=$(printf '%s\n' "$said" | sed -n 's/^password=//p' | tr -d '\r' | head -n 1)
   said=""
+  if [ -n "$token" ] && ! [[ $token =~ ^[A-Za-z0-9_]{20,255}$ ]]; then
+    token="" why="the GitHub credential this machine's git holds is not of a token's shape this launcher sends: $AGAIN"
+  elif [ -n "$token" ] && ! { curl=$(command -v curl) && [ "${curl#/}" != "$curl" ]; }; then
+    token="" why="curl is not on this machine's PATH: it asks GitHub which account this machine's git pushes as"
+  fi
   if [ -n "$token" ]; then
-    [[ $token =~ ^[A-Za-z0-9_]{20,255}$ ]] || { token=""; die "the GitHub credential this machine's git holds is not of a token's shape this launcher sends: $AGAIN"; }
-    curl=$(command -v curl) && [ "${curl#/}" != "$curl" ] || { token=""; die "curl is not on this machine's PATH: it asks GitHub which account this machine's git pushes as"; }
     answer=$(mktemp "${TMPDIR:-/tmp}/hive-user.XXXXXX") || { token=""; die "no room for a temporary file"; }
     # (The header on curl's standard input, never in its arguments; no ~/.curlrc read; https only, no redirect.)
     code=$(printf 'header = "Authorization: token %s"\nheader = "User-Agent: bee-hive-local"\nheader = "Accept: application/vnd.github+json"\nurl = "https://api.github.com/user"\n' "$token" \
       | "$curl" -q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$answer" -w '%{http_code}' --config - 2>/dev/null)
     token=""
     case "$code" in
-      200) login=$(head -c 65536 "$answer" | tr -d '\r\n' | grep -o '"login" *: *"[A-Za-z0-9-]*"' | head -n 1 | sed 's/^.*"\([A-Za-z0-9-]*\)"$/\1/') ;;
-      401|403) rm -f "$answer"; die "GitHub refuses the credential this machine's git holds (it may have expired): $AGAIN" ;;
-      *) rm -f "$answer"; die "GitHub could not be asked which account this machine's git pushes as (the network, or GitHub): run the command again" ;;
+      200) login=$(head -c 65536 "$answer" | tr -d '\r\n' | grep -o '"login" *: *"[A-Za-z0-9-]*"' | head -n 1 | sed 's/^.*"\([A-Za-z0-9-]*\)"$/\1/')
+           rm -f "$answer"
+           [[ $login =~ $LOGIN_RE ]] || die "GitHub's answer about this machine's account holds no login this launcher reads: run the command again; if it fails again, tell the user"
+           FOUND_LOGIN="$login" LOGIN_VIA=git
+           return 0 ;;
+      401|403) why="GitHub refuses the credential this machine's git holds (it may have expired): $AGAIN" ;;
+      *) why="GitHub could not be asked which account this machine's git pushes as (the network, or GitHub): run the command again" ;;
     esac
     rm -f "$answer"
-    [[ $login =~ $LOGIN_RE ]] || die "GitHub's answer about this machine's account holds no login this launcher reads: run the command again; if it fails again, tell the user"
-    FOUND_LOGIN="$login" LOGIN_VIA=git
-    return 0
   fi
-  # No credential of git's: gh's account, if gh is there and signed in (its token is gh's own, never seen here); the
-  # push then signs in through gh, for that push alone (PUSH_SIGN_IN), with no change to git's settings.
+  # No credential of git's that GitHub takes: gh's account on github.com, if gh is there and signed in (its token is
+  # gh's own, never seen here); the push then signs in through gh, for that push alone (PUSH_SIGN_IN), with no change
+  # to git's settings.
   if gh=$(command -v gh 2>/dev/null) && [ "${gh#/}" != "$gh" ] && case "$gh" in *"'"*) false ;; *) true ;; esac \
-      && login=$(GIT_MEMORY_KB="" within 30 /dev/null "$gh" api user --jq .login 2>/dev/null) && [[ $login =~ $LOGIN_RE ]]; then
+      && login=$(GIT_MEMORY_KB="" within 30 /dev/null "$gh" api --hostname github.com user --jq .login 2>/dev/null) && [[ $login =~ $LOGIN_RE ]]; then
     FOUND_LOGIN="$login" LOGIN_VIA=gh
     PUSH_SIGN_IN=(-c credential.helper= -c "credential.helper=!'$gh' auth git-credential")
     return 0
   fi
-  die "$NO_ACCOUNT"
+  die "${why:-$NO_ACCOUNT}"
 }
-
-# The PATH, before any program is run: every entry named from the root, and none below ~/.hive, where the clones,
-# the store and the slot lie (nothing kept there, a clone's folder included, is run on this machine).
-mkdir -p "$HIVE" || die "no room under $HIVE"
-hive_real=$(cd -P "$HIVE" && pwd -P) || die "$HIVE cannot be read"
-set -f; old_ifs="$IFS"; IFS=: read -r -a early_path <<< "$PATH"; IFS="$old_ifs"; set +f
-for entry in ${early_path[@]+"${early_path[@]}"}; do
-  case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
-  [ -d "$entry" ] || continue
-  resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
-  if same_or_below "$resolved" "$hive_real"; then die "the PATH holds a folder below $HIVE ($entry): nothing kept there is run on this machine"; fi
-done
 
 PUSH_SIGN_IN=()
 if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then

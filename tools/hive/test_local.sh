@@ -47,14 +47,16 @@ printf '%s\n' "$config" | sed -n 's/^header = "Authorization: token \(.*\)"$/\1/
 printf '%s\n' "$config" | grep -qx 'url = "https://api.github.com/user"' || { printf 000; exit 3; }
 [ -z "${STUB_API_DOWN:-}" ] || { printf 000; exit 7; }
 if [ -n "${STUB_API_CODE:-}" ]; then printf '{"message": "Bad credentials"}' > "$out"; printf '%s' "$STUB_API_CODE"; exit 0; fi
-printf '{\n  "login": "%s",\n  "id": 1001,\n  "organizations_url": "https://api.github.com/users/x/orgs"\n}\n' "${STUB_API_LOGIN:-alice}" > "$out"
+login="${STUB_API_LOGIN:-alice}"
+case "$(cat "$STUB_DIR/curl-token")" in gho_mallory*) login=mallory ;; esac
+printf '{\n  "login": "%s",\n  "id": 1001,\n  "organizations_url": "https://api.github.com/users/x/orgs"\n}\n' "$login" > "$out"
 printf 200
 STUB
 chmod +x "$T/bin/curl"
 cat > "$T/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/gh-args"
-[ "$1 $2 $3 $4" = "api user --jq .login" ] && [ -n "${STUB_GH_LOGIN:-}" ] && { echo "$STUB_GH_LOGIN"; exit 0; }
+[ "$*" = "api --hostname github.com user --jq .login" ] && [ -n "${STUB_GH_LOGIN:-}" ] && { echo "$STUB_GH_LOGIN"; exit 0; }
 exit 1
 STUB
 chmod +x "$T/bin/gh"
@@ -715,21 +717,37 @@ reset_world
 STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy --login alice
 check "refused: no GitHub account git can push with, and no gh: one plain line, nothing run" eval \
   'refused 2 "this machine'"'"'s git has no GitHub account it can push with: stop, and tell the user. If they have no GitHub account, they create one at github.com themselves" && nothing_ran'
-: > "$STUB_DIR/curl-args"; rm -f "$STUB_DIR/curl-token"
-STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy
+: > "$STUB_DIR/curl-args"; rm -f "$STUB_DIR/curl-token"; mkdir -p "$T/tmpd"
+TMPDIR="$T/tmpd" STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy
 check "the login read from git's credential and asked of GitHub: no --login needed, the tool given it" eval \
   '[ "$CODE" -eq 0 ] && grep -q -- "--login alice --fork toy" "$STUB_DIR/args.tool"'
-check "the token: sent on curl's standard input, never in an argument, an output, a log or a file" eval \
+check "the token: sent on curl's standard input, never in an argument, an output, a log or a file, its temporaries removed" eval \
   '[ "$(cat "$STUB_DIR/curl-token")" = "$TOKEN" ] && ! grep -q "$TOKEN" "$STUB_DIR/curl-args" "$T/git.log" "$STUB_DIR/calls" \
-   && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" 2>/dev/null)" ] \
-   && grep -q -- "-q -sS --proto =https --max-redirs 0 " "$STUB_DIR/curl-args"'
+   && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" "$T/tmpd" 2>/dev/null)" ] \
+   && [ -z "$(ls -A "$T/tmpd")" ] \
+   && grep -qx -- "-q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o $T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"'
 check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
   grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
 printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"
 rm -f "$STUB_DIR/askpass-called"
-SSH_ASKPASS="$T/bin/askpass-stub" STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy
-check "no askpass program run while git's credential is asked" eval '[ ! -e "$STUB_DIR/askpass-called" ] && refused 2 "this machine'"'"'s git has no GitHub account"'
+STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy
+check "git's core.askPass never run while its credential is asked" eval '[ ! -e "$STUB_DIR/askpass-called" ] && refused 2 "this machine'"'"'s git has no GitHub account"'
 cp "$T/gitconfig" "$HOME/.gitconfig"
+SSH_ASKPASS="$T/bin/askpass-stub" STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy
+check "SSH_ASKPASS never run while git's credential is asked" eval '[ ! -e "$STUB_DIR/askpass-called" ] && refused 2 "this machine'"'"'s git has no GitHub account"'
+git -C "$T/desk" init -q && git -C "$T/desk" config credential.https://github.com.helper "" \
+  && git -C "$T/desk" config --add credential.https://github.com.helper '!f() { test "$1" = get && printf "username=mallory\npassword=gho_mallory_aaaaaaaaaaaaaaaaaaaaaaaa\n"; }; f'
+STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy
+check "the session's folder a repository with a helper of its own: never read, the account is git's own" eval \
+  '[ "$CODE" -eq 0 ] && grep -q -- "--login alice " "$STUB_DIR/args.tool"'
+rm -rf "$T/desk/.git"
+PAT="github_pat_$(printf "A%.0s" $(seq 82))"
+STUB_TOKEN="$PAT" STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy
+check "a fine-grained token (github_pat_, 93 characters) taken" eval '[ "$CODE" -eq 0 ] && [ "$(cat "$STUB_DIR/curl-token")" = "$PAT" ]'
+STUB_TOKEN="gho_aaaaaaaaaaaaaaa" launch hive next --project Bee-ruche/toy
+check "refused: a credential shorter than a token, never sent" eval 'refused 2 "the GitHub credential this machine'"'"'s git holds is not of a token'"'"'s shape" && nothing_ran'
+STUB_API_CODE=401 STUB_GH_LOGIN=alice STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy
+check "git's credential refused by GitHub, gh signed in: gh's account" eval '[ "$CODE" -eq 0 ] && grep -q -- "--login alice " "$STUB_DIR/args.tool"'
 STUB_NO_CREDENTIAL=1 STUB_GH_LOGIN=alice STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy
 check "no credential of git's: gh's account, if gh is signed in" eval '[ "$CODE" -eq 0 ] && grep -q -- "--login alice " "$STUB_DIR/args.tool"'
 reset_world
@@ -959,7 +977,7 @@ while IFS= read -r line; do
   esac
   if [ -n "$want" ]; then
     [ "$(grep -c . "$T/doc-err")" -eq 1 ] && grep -q "^$want" "$T/doc-err" || printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
-  elif grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|local.sh login takes one word\|runs the command given after --" "$T/doc-err"; then
+  elif grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes check\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|local.sh login takes one word\|runs the command given after --" "$T/doc-err"; then
     printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
   fi
 done < "$T/doc-lines"
@@ -973,7 +991,7 @@ while IFS= read -r line; do
   case "$words" in login\ *|*"<"*) continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME2" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
-  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|runs the command given after --\|the fork named is the project\|has no GitHub account it can push with\|not as --login" "$T/doc-err"; then
+  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes check\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|runs the command given after --\|the fork named is the project\|has no GitHub account it can push with\|not as --login" "$T/doc-err"; then
     printf '%s (login recorded): %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
   fi
 done < "$T/doc-lines"

@@ -29,7 +29,8 @@ nothing of you.
 Read it from `~/.hive/protocol`, the copy of this repository that the worker's guide keeps
 (`.claude/skills/bee-worker/SKILL.md`, "The run"). If you took the repository anywhere else, take it there afresh
 with the guide's own commands, and go on from that copy. In the local way, take it with the guide's own commands too,
-adding `-c core.autocrlf=false` to its first clone (`git clone -c core.autocrlf=false --depth 1 …`). The project is the one your owner's
+adding `-c core.autocrlf=false` to its first clone (`git clone -c core.autocrlf=false --depth 1 …`). The
+launcher this copy holds runs on their machine: take it from the address the line gives, `https://github.com/Bee-ruche/hive`, and from no other. The project is the one your owner's
 line names, as `owner/name`, and nothing else names it.
 
 ## 1. Before anything else: tell your owner, and wait for a yes
