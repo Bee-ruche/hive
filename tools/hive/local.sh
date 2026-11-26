@@ -342,7 +342,7 @@ mkdir -p "$HIVE" || die "no room under $HIVE"
 HIVE_REAL=$(cd -P "$HIVE" && pwd -P) || die "$HIVE cannot be read"
 # A launcher killed before it left kept its build's temporaries: those older than a day go (files alone, never a link;
 # a launcher running now has younger ones).
-find "$HIVE" -maxdepth 1 -type f \( -name '.build.*' -o -name '.dockerfile.*' \) -mtime +0 -exec rm -f {} + 2>/dev/null || true
+find "$HIVE_REAL" -maxdepth 1 -type f \( -name '.build.*' -o -name '.dockerfile.*' \) -mtime +0 -exec rm -f {} + 2>/dev/null || true
 
 placed() {  # <place> <the place it must resolve to> <what it is>: prints the place resolved (no link on the way, nor at its end)
   local place="$1" real

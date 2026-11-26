@@ -156,8 +156,8 @@ Each of these stops you. When one does, tell your owner which one, and why.
   names no clone, or the session started in such a folder, say so and stop: they start a new session elsewhere. You
   run every command of the guide from the clone (`cd <path>` first).
   In the local way, the session may start in any folder that is neither the launcher's clone
-  (`~/.hive/work/<LOGIN>/<fork>`), nor inside it, nor above it: neither their home folder nor `~/.hive`. The launcher
-  refuses to run from such a folder. An empty folder of its own (`~/hive-desk`) is the safest, because an assistant
+  (`~/.hive/work/<LOGIN>/<fork>`), nor inside it, nor above it: so not their home folder, `~/.hive` or `~/.hive/work`. The
+  launcher's commands that use the clone refuse to run from such a folder. An empty folder of its own (`~/hive-desk`) is the safest, because an assistant
   loads the agent files of the folder it starts in before their line. In another folder, tell them that its agent
   files (`CLAUDE.md`, `AGENTS.md`, `.claude/`), if any, were loaded. You run every command
   from the session's folder, never from the clone.

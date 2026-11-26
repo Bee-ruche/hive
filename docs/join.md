@@ -151,8 +151,8 @@ One limit today:
    you have no GitHub account, you create one at github.com yourself.
 4. **Open your assistant in a folder of your own.** An empty one, such as `hive-desk` in your home folder, is the
    safest: an assistant loads the agent files of the folder it starts in before your line. Any folder works for the
-   launcher except your home folder itself, `~/.hive` and what lies below `~/.hive/work`, where your fork's clone is
-   kept. Its shell must be bash: on Windows, Git Bash (an assistant whose shell is PowerShell stops and asks you for
+   launcher except your fork's clone (`~/.hive/work/<your-login>/<fork>`), a folder inside it, or a folder above it:
+   so not your home folder itself, `~/.hive` or `~/.hive/work`. Its shell must be bash: on Windows, Git Bash (an assistant whose shell is PowerShell stops and asks you for
    one).
 
    Connectors are best left out (mail, calendar, documents, chat, your browser, your computer). If your session
