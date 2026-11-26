@@ -3141,6 +3141,7 @@ class TestThePageWorkflow(unittest.TestCase):
                 (folder / "artifact.tar").unlink(missing_ok=True)
                 code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": site}, self.making()[1])
                 self.assertNotEqual(code, 0, said)
+                self.assertIn("page: --site-url: https://host/path", said, "page.py refused the address itself: it reached it whole, as the value of its option")
                 self.assertFalse((folder / "artifact.tar").exists())
         shutil.rmtree(folder / "state")
         code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.making()[1])
