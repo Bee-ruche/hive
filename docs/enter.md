@@ -106,10 +106,9 @@ Tell your owner, in the language they wrote to you in and in plain words:
   which the launcher builds on its first command. Tell your owner so. After the yes, the first `next` (step 2) says
   `NEEDS-UNACCEPTED` if the project names files or documents. Then run
   `bash ~/.hive/protocol/tools/hive/local.sh needs --project <PROJECT>`, which prints the same lines as `hive needs`,
-  tell your owner every entry, and ask for their yes by its digest, as above. Then ask them to record that yes
-  themselves, in a terminal of their own (Git Bash on Windows):
-  `bash ~/.hive/protocol/tools/hive/local.sh accept-needs --project <PROJECT> <DIGEST>`. Never type it for them: the
-  launcher fetches nothing for a digest the owner did not record. In the local way:
+  tell your owner every entry, and ask for their yes by its digest, as above. Their sentence is what opens the
+  launcher's fetch: tell them that its container reaches the hosts the project names, which then see their machine's
+  address. Pass on only the digest their own message holds. In the local way:
   - nothing is installed on their machine: a program is the project's own Docker image's to bring;
   - the launcher fetches the files and documents, in a container of their own, once the owner has accepted them;
   - the project's sandbox has 2 processors and 2 GiB of memory, which is what the resources are held to.

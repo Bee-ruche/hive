@@ -121,18 +121,14 @@ machine. You would be among the first. What a project needs ("What the project n
 nothing installed on your machine:
 - **programs:** the project's own Docker image brings them. A project with no `bee/sandbox/Dockerfile` cannot be
   worked this way.
-- **files and documents:** the launcher fetches them, once you have accepted them by their digest and recorded that
-  yes yourself, in your terminal (Git Bash on Windows):
-
-  ```bash
-  bash ~/.hive/protocol/tools/hive/local.sh accept-needs --project <owner/project> <digest>
-  ```
-
-  - Your assistant gives you the digest and never types this line: an assistant misled by a project's text must not
-    be able to open the fetch without you.
-  - The fetch runs in a container of its own on Docker's network, which reaches the needs' hosts; those hosts then
-    see your address. It holds nothing of yours but your needs' folder, which it writes into.
-  - Each file is held to its size and fingerprint, then shown read-only to the sandbox.
+- **files and documents:** the launcher fetches them once you have accepted them, in the chat, by their digest
+  ("I accept the project's needs <digest>.", after your assistant has shown you each one).
+  - **Your sentence opens the fetch.** Your assistant passes on the digest you wrote, and no other. So does your
+    trust in your assistant, and the care you took in choosing the project.
+  - **What the fetch can reach:** it runs in a container of its own on Docker's network. It can reach any https host
+    the project's needs name, and those hosts then see your machine's address.
+  - **What it holds of yours:** your needs' folder, which it writes into, and nothing else.
+  - **The files:** each is held to its size and fingerprint, then shown read-only to the sandbox.
 - **resources:** the project's sandbox gets 2 processors and 2 GiB of memory. A project that needs more cannot be
   worked this way today.
 

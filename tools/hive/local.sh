@@ -14,8 +14,6 @@
 #   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh refresh --project <owner/name>
 #   local.sh needs   --project <owner/name>             (what the project needs of a worker's machine, after the yes)
-#   local.sh accept-needs --project <owner/name> <digest>  (the user, typed in a real terminal of their own, never by an
-#                                         assistant: the project's needs they accept, as local.sh needs gave their digest)
 #   local.sh hive    <setup|next|start|ready|submit|release|duty> --project … --login … [--fork …] [the tool's options]
 #   local.sh sandbox --project <owner/name> --login <login> [--fork <name>] -- <command…>
 #
@@ -26,8 +24,6 @@
 # Places, all under ~/.hive and built from the arguments alone, each matched by the tool's own patterns first, and
 # each shown to Docker by the very place it resolves to, which must be the place it names (placed: no link on the way):
 #   login                          the login the user recorded (local.sh login): every command's --login must be it
-#   accepted/<owner>/<name>        the digest of the project's needs the user accepted (local.sh accept-needs): the needs'
-#                                  fetch runs for that digest alone
 #   protocol/                      the hive's protocol, a clone the owner keeps (the guide's « The run »): hive.py from here
 #   work/<login>/<fork>/           the fork's clone, made by the tool's container (clone), never by this machine's git
 #   state/<owner>/<name>/          the project's state (refresh)
@@ -166,22 +162,6 @@ if [ "$COMMAND" = login ]; then
   exit 0
 fi
 
-if [ "$COMMAND" = accept-needs ]; then
-  # The user's own step, for each project and each version of its needs: the digest local.sh needs gave, accepted by the
-  # user in a terminal of their own (as login), so that an assistant misled by a project's text never opens the needs'
-  # fetch, the one container that reaches hosts other than GitHub, without them. It replaces the project's record.
-  [ $# -eq 3 ] && [ "$1" = --project ] || die "local.sh accept-needs takes --project <owner/name> and the digest local.sh needs gave"
-  owner="${2%%/*}" name="${2#*/}"
-  if [ "$owner/$name" != "$2" ] || ! [[ $owner =~ $LOGIN_RE ]] || ! [[ $name =~ $NAME_RE ]] || [ "$name" = . ] || [ "$name" = .. ]; then
-    die "--project: the project's repository on GitHub, owner/name"
-  fi
-  [[ $3 =~ ^[0-9a-f]{64}$ ]] || die "local.sh accept-needs takes the digest of the project's needs, 64 hexadecimal digits, as local.sh needs printed it"
-  [ -t 0 ] && [ -t 1 ] || die "local.sh accept-needs is the user's own step, typed in a terminal of their own (on Windows, in Git Bash): an assistant never runs it"
-  place="$HIVE/accepted/$(lower "$owner")"
-  mkdir -p "$place" && printf '%s\n' "$3" > "$place/$(lower "$name")" || die "no room under $HIVE"
-  say "LOCAL accepted $(lower "$owner")/$(lower "$name") $3"
-  exit 0
-fi
 
 SUB=""
 case "$COMMAND" in
@@ -193,7 +173,7 @@ case "$COMMAND" in
       setup|next|start|ready|submit|release|duty) ;;
       *) die "local.sh hive takes one of setup, next, start, ready, submit, release, duty: the worker's commands, and no other" ;;
     esac ;;
-  *) die "local.sh takes login, accept-needs, check, clone, refresh, needs, hive or sandbox" ;;
+  *) die "local.sh takes login, check, clone, refresh, needs, hive or sandbox" ;;
 esac
 
 # The options each command takes: « name » takes a value, « name! » is a flag.
@@ -775,10 +755,7 @@ case "$COMMAND" in
     egress_up
     [ -n "$PUSHING" ] && EMPTY_ON_EXIT=1
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
-    ACCEPTED_RECORD="$HIVE/accepted/$(lower "$OWNER")/$(lower "$NAME")"
-    if [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ] && ! { [ -f "$ACCEPTED_RECORD" ] && [ ! -L "$ACCEPTED_RECORD" ] && [ "$(head -c 100 "$ACCEPTED_RECORD")" = "$NEEDS_ACCEPTED" ]; }; then
-      say "LOCAL needs not-accepted-here: no files are fetched for this digest until the user, never an assistant, types « local.sh accept-needs --project $PROJECT $NEEDS_ACCEPTED » in a terminal of their own"
-    elif [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ]; then
+    if [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ]; then
       # The project's files and documents, fetched by the tool's own code (needs-fetch: https, each file held to its
       # size and SHA-256) in a container of their own: Docker's default network, which reaches the needs' hosts (the
       # gate passes github.com alone, and the fetch reads no proxy), and nothing but the protocol's tools and the
