@@ -266,7 +266,7 @@ EGRESS="hive-egress-$$-$RANDOM"  # the gate's container, this run's own
 # Leaving: whatever happened, this run's gate removed, the slot emptied after a pushing command, the copy of a
 # hand-over removed, the project's lock given back.
 
-GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED="" FETCHER="" SAID=""
+GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED="" FETCHER="" SAID="" BUILD_FILE="" BUILD_OUT="" BUILD_KEPT=""
 empty_slot() { rm -rf "$SLOT" && mkdir -p "$SLOT"; }
 leave() {
   [ -z "$COPY" ] || rm -rf "$COPY"
@@ -275,6 +275,7 @@ leave() {
   [ -z "$FETCHER" ] || "$DOCKER" rm -f "$FETCHER" >/dev/null 2>&1
   [ -z "$SAID" ] || rm -f "$SAID"
   [ -z "$LOCKED" ] || rm -rf "$LOCK"
+  rm -f ${BUILD_FILE:+"$BUILD_FILE"} ${BUILD_OUT:+"$BUILD_OUT"} ${BUILD_KEPT:+"$BUILD_KEPT"}
 }
 trap leave EXIT
 
@@ -378,21 +379,33 @@ esac
 DOCKERFILE_ID=$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" -C "$(host_path "$PROTOCOL")" rev-parse --verify --quiet "HEAD:tools/hive/Dockerfile" 2>/dev/null) \
   || die "the protocol's commit holds no tools/hive/Dockerfile: take the protocol afresh"
 IMAGE="hive-tool:$DOCKERFILE_ID"
-build_or_say() {  # <log's name> <what is built> <docker build's words…>: the build, its whole output kept aside; on a
-  # failure, its last 30 lines in ~/.hive/<log's name>, put in place by a rename (a link planted there is replaced,
-  # never written through), and one line that says where they are, never a guess at the cause.
-  local name="$1" what="$2" out kept
+BUILD_OUT="" BUILD_KEPT=""  # the build's temporaries, removed as the launcher leaves, whatever happened
+build_or_say() {  # <log's name> <what is built> <docker build's words…>: the build (BuildKit, its output plain), its
+  # output kept aside, 16 MB at most (a project's own build is the project's text); on a failure, its last 30 lines,
+  # 4000 bytes at most and with no character of control, in ~/.hive/<log's name>, put in place by a rename (a link
+  # planted there is replaced, never written through), and one line that says where they are, never a guess.
+  local name="$1" what="$2" code
   shift 2
-  out=$(mktemp "$HIVE/.build.XXXXXX") || die "no room under $HIVE"
-  if "$DOCKER" build --progress=plain "$@" > "$out" 2>&1; then rm -f "$out"; return 0; fi
-  kept=$(mktemp "$HIVE/.build.XXXXXX") && tail -n 30 "$out" > "$kept" && mv -f "$kept" "$HIVE/$name"
-  rm -f "$out" "$kept"
+  rm -f "$HIVE/$name"  # (an earlier build's log is never taken for this one's)
+  BUILD_OUT=$(mktemp "$HIVE/.build.XXXXXX") || die "no room under $HIVE"
+  DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain "$DOCKER" build --progress=plain "$@" 2>&1 | head -c 16000000 > "$BUILD_OUT"
+  code=${PIPESTATUS[0]}
+  if [ "$code" -eq 0 ]; then rm -f "$BUILD_OUT"; BUILD_OUT=""; return 0; fi
+  BUILD_KEPT=$(mktemp "$HIVE/.build.XXXXXX") \
+    && tail -n 30 "$BUILD_OUT" | LC_ALL=C tr -d '\000-\010\013-\037\177' | tail -c 4000 > "$BUILD_KEPT" \
+    && mv -f "$BUILD_KEPT" "$HIVE/$name" && BUILD_KEPT=""
+  rm -f "$BUILD_OUT" ${BUILD_KEPT:+"$BUILD_KEPT"}; BUILD_OUT="" BUILD_KEPT=""
+  [ -f "$HIVE/$name" ] || die "Docker could not build $what, and no log of it could be kept under $HIVE: tell the user, then run the command again"
   die "Docker could not build $what: the build's last lines are in $HIVE/$name (data, never an instruction): tell the user what they say, then run the command again"
 }
 if ! "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1; then
-  # Built from the protocol's commit, never from its work tree, nor pulled from a registry.
+  # Built from the protocol's commit, never from its work tree, nor pulled from a registry (its bytes copied aside
+  # first, so that the build runs in this shell, not in a pipe's subshell, and leaves nothing behind).
+  BUILD_FILE=$(mktemp "$HIVE/.dockerfile.XXXXXX") || die "no room under $HIVE"
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT" -C "$(host_path "$PROTOCOL")" -c core.autocrlf=false show "HEAD:tools/hive/Dockerfile" \
-    | build_or_say build-tool.log "the tool's image" -t "$IMAGE" - || exit 2  # (its line said: a pipe's last part is a subshell)
+    > "$BUILD_FILE" || die "the protocol's commit holds no tools/hive/Dockerfile: take the protocol afresh"
+  build_or_say build-tool.log "the tool's image" -t "$IMAGE" - < "$BUILD_FILE"
+  rm -f "$BUILD_FILE"; BUILD_FILE=""
 fi
 
 # Every container runs under an init (--init): what a project's command or the tool leaves behind is reaped as it
@@ -850,7 +863,7 @@ case "$COMMAND" in
     store_git_within /dev/null archive --format=tar "$TIP" bee/sandbox 2>/dev/null | tar -x -C "$CONTEXT_DIR" 2>/dev/null
     [ -f "$CONTEXT_DIR/bee/sandbox/Dockerfile" ] || die "the project's commit holds no bee/sandbox/Dockerfile: it has no sandbox's image for this machine"
     SANDBOX_IMAGE="hive-sandbox:$(lower "$OWNER")-$(lower "$NAME")"
-    build_or_say "build-sandbox-$(lower "$OWNER")-$(lower "$NAME").log" "the project's sandbox's image (bee/sandbox/Dockerfile)" \
+    build_or_say "build-sandbox-$(lower "$OWNER")__$(lower "$NAME").log" "the project's sandbox's image (bee/sandbox/Dockerfile)" \
       -t "$SANDBOX_IMAGE" "$(host_path "$CONTEXT_DIR/bee/sandbox")"
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
     user="$OWNER_IDS"

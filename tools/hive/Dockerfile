@@ -7,10 +7,12 @@
 # tempfile, zlib, threading and unicodedata.
 #
 # Two steps, both through apt, which checks each archive's signature (InRelease) and never turns TLS checking off:
-# 1. ca-certificates alone, from the base image's own archive (its ubuntu.sources: archive.ubuntu.com and
-#    security.ubuntu.com, as the image ships them). This one package is NOT pinned to the snapshot's date: it is the
-#    version those archives hold on the day of the build. The base image holds no CA bundle, and the snapshot is
-#    served over https alone (http answers 301), so nothing can come from it before this step.
+# 1. ca-certificates, from the base image's own archive (its ubuntu.sources: archive.ubuntu.com and
+#    security.ubuntu.com, as the image ships them). It and what it depends on (openssl, and possibly a newer libssl3t64
+#    and libc6 to satisfy it) are NOT pinned to the snapshot's date: they are the versions those archives hold on the
+#    day of the build, and they stay (step 2 never downgrades them), so the image's openssl and libssl, which Python's
+#    ssl module uses, are the build day's. The base image holds no CA bundle, and the snapshot is served over https
+#    alone (http answers 301), so nothing can come from it before this step.
 # 2. git and python3 from Ubuntu's snapshot of one date, over https, so that two machines building this file get the
 #    same git and Python (the date's index is old by design: Check-Valid-Until is off for it alone).
 FROM mirror.gcr.io/library/ubuntu@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c

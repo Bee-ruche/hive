@@ -105,7 +105,12 @@ case "${1:-}" in
   image) [ -f "$S/built" ]; exit $? ;;
   build)
     [ "${*: -1}" != - ] || cat > /dev/null
-    [ -z "${STUB_BUILD_FAILS:-}" ] || { for i in $(seq 50); do echo "step line $i"; done; exit 1; }
+    if [ -n "${STUB_BUILD_FAILS:-}" ]; then
+      for i in $(seq 50); do if [ $((i % 2)) -eq 0 ]; then echo "step line $i" >&2; else echo "step line $i"; fi; done
+      [ -z "${STUB_BUILD_HUGE:-}" ] || head -c 1048576 /dev/zero | tr '\0' x >&2
+      [ -z "${STUB_BUILD_ESC:-}" ] || printf 'ERROR: \033[31mred\033[0m and a bell\a\n' >&2
+      exit 1
+    fi
     [ "${*: -1}" = - ] || cat "${*: -1}/Dockerfile" > "$S/built.Dockerfile"
     [ "${STUB_SWAP_ON:-}" != build ] || swap
     touch "$S/built"; exit 0 ;;
@@ -338,13 +343,28 @@ check "refused: the image cannot be built, the build's last 30 lines kept under 
    && [ "$(head -n 1 "$HOME/.hive/build-tool.log")" = "step line 21" ] && [ "$(tail -n 1 "$HOME/.hive/build-tool.log")" = "step line 50" ] \
    && [ "$(cat "$T/elsewhere-log/target")" = "not the launcher'"'"'s" ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.build\.")" ]'
 dockerfile_holds() {  # the tool's Dockerfile (a real build proves it; this holds its rules where no Docker builds)
-  local f="$ROOT/tools/hive/Dockerfile" certs snapshot
-  ! grep -qi "http://snapshot\|Verify-Peer\|Verify-Host\|AllowInsecure\|allow-insecure\|allow-unauthenticated\|trusted=yes" "$f" || return 1
-  certs=$(grep -n "install .*--no-install-recommends ca-certificates" "$f" | cut -d: -f1)
-  snapshot=$(grep -n 'deb https://snapshot\.ubuntu\.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' "$f" | cut -d: -f1)
-  [ -n "$certs" ] && [ -n "$snapshot" ] && [ "$certs" -lt "$snapshot" ] && grep -q "install .*--no-install-recommends git python3" "$f"
+  local code certs drop snapshot valid tools
+  code=$(grep -v '^ *#' "$ROOT/tools/hive/Dockerfile")
+  ! printf '%s\n' "$code" | grep -qi "http://snapshot\|Verify-Peer\|Verify-Host\|AllowInsecure\|allow-insecure\|AllowUnauthenticated\|allow-unauthenticated\|force-yes\|trusted=yes\|apt-key\|Acquire::https" || return 1
+  certs=$(printf '%s\n' "$code" | grep -n "install .*--no-install-recommends ca-certificates" | cut -d: -f1)
+  drop=$(printf '%s\n' "$code" | grep -n "rm -f /etc/apt/sources.list.d/ubuntu.sources" | cut -d: -f1)
+  snapshot=$(printf '%s\n' "$code" | grep -n 'deb https://snapshot\.ubuntu\.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' | cut -d: -f1)
+  valid=$(printf '%s\n' "$code" | grep -n "Check-Valid-Until=false update" | cut -d: -f1)
+  tools=$(printf '%s\n' "$code" | grep -n "install .*--no-install-recommends git python3" | cut -d: -f1)
+  [ "$(printf '%s\n' "$code" | grep -c "Check-Valid-Until")" -eq 1 ] || return 1
+  [ -n "$certs" ] && [ -n "$drop" ] && [ -n "$snapshot" ] && [ -n "$valid" ] && [ -n "$tools" ] \
+    && [ "$certs" -lt "$drop" ] && [ "$drop" -lt "$snapshot" ] && [ "$snapshot" -lt "$valid" ] && [ "$valid" -lt "$tools" ]
 }
 check "the tool's Dockerfile: ca-certificates first, then the snapshot over https, TLS checking never turned off" dockerfile_holds
+rm -f "$STUB_DIR/built"
+STUB_BUILD_FAILS=1 STUB_BUILD_HUGE=1 STUB_BUILD_ESC=1 launch hive next --project Bee-ruche/toy --login alice
+check "a failed build's log: 4000 bytes at most, no character of control, its end kept (a line of a megabyte, escapes)" eval \
+  'refused 2 "Docker could not build the tool'"'"'s image: the build'"'"'s last lines are in" \
+   && [ "$(wc -c < "$HOME/.hive/build-tool.log")" -le 4000 ] && ! tr -d "\n" < "$HOME/.hive/build-tool.log" | LC_ALL=C grep -q "[[:cntrl:]]" \
+   && [ "$(tail -n 1 "$HOME/.hive/build-tool.log")" = "ERROR: [31mred[0m and a bell" ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.build\.\|^\.dockerfile\.")" ]'
+launch hive next --project Bee-ruche/toy --login alice
+check "a build that works: an earlier build's log removed, so that it is never taken for this one's" eval '[ ! -e "$HOME/.hive/build-tool.log" ]'
+rm -f "$STUB_DIR/built"
 launch hive next --project Bee-ruche/toy --login alice
 check "the image built from the protocol's commit, tagged by its Dockerfile's blob id, its whole output kept aside" \
   grep -q "^build --progress=plain -t hive-tool:$(git -C "$PROTOCOL" rev-parse HEAD:tools/hive/Dockerfile) -\$" "$STUB_DIR/calls"
@@ -837,8 +857,8 @@ check "sandbox: its image built from the project's commit start printed, not fro
   '[ "$CODE" -eq 0 ] && [ "$(cat "$STUB_DIR/built.Dockerfile")" = "FROM the-tip" ] && [ "$(cat "$CLONE/bee/sandbox/Dockerfile")" = "FROM the-assistant" ]'
 STUB_BUILD_FAILS=1 launch "${SANDBOX[@]}"
 check "refused: the sandbox's image cannot be built, its last 30 lines kept under ~/.hive" eval \
-  'refused 2 "Docker could not build the project'"'"'s sandbox'"'"'s image (bee/sandbox/Dockerfile): the build'"'"'s last lines are in $HOME/.hive/build-sandbox-bee-ruche-toy.log" \
-   && ! ran sandbox && [ "$(tail -n 1 "$HOME/.hive/build-sandbox-bee-ruche-toy.log")" = "step line 50" ]'
+  'refused 2 "Docker could not build the project'"'"'s sandbox'"'"'s image (bee/sandbox/Dockerfile): the build'"'"'s last lines are in $HOME/.hive/build-sandbox-bee-ruche__toy.log" \
+   && ! ran sandbox && [ "$(tail -n 1 "$HOME/.hive/build-sandbox-bee-ruche__toy.log")" = "step line 50" ]'
 echo "STARTED hive/work/toy-0001 at 1111111111111111111111111111111111111111" > "$HOME/.hive/started/Bee-ruche/toy"
 launch "${SANDBOX[@]}"
 check "refused: a start on a commit the project does not hold" eval 'refused 2 "the project'"'"'s commit the last start was on could not be fetched" && nothing_ran'
