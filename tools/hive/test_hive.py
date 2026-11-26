@@ -17339,19 +17339,24 @@ class TestTheMeasure(Base):
     def test_a_judge_that_mounts_some_other_way_is_seen(self):
         """On a copy of the judges' code, reference.py changed: a mount run through subprocess by the program's path, or
         written in an f-string, is a string that names mount; mount_point imported inside a function under another name
-        still makes the kind one that mounts, with nothing stray."""
+        still makes the kind one that mounts, with nothing stray; and a reference judge that mounts nothing is not counted
+        for relay.py's Judgement, which does."""
         source = REGISTRY / "tools/judge"
         original = (source / "reference.py").read_text(encoding="utf-8")
         lines = original.splitlines(keepends=True)
         at = next(n for n, text in enumerate(lines) if 'container.mount_point("mount"' in text)
         indent = lines[at][:len(lines[at]) - len(lines[at].lstrip())]
+        mounting = set(hive.JUDGE_MOUNTS)
         variants = (
-            ("the program's path", indent + 'subprocess.run(["/usr/bin/mount", "-t", "tmpfs", "tmpfs", path], check=True)\n', None, [("reference", at + 1)]),
+            ("the program's path", indent + 'subprocess.run(["/usr/bin/mount", "-t", "tmpfs", "tmpfs", path], check=True)\n', None,
+             mounting, [("reference", at + 1)]),
             ("an f-string", indent + 'subprocess.run(f"mount -t tmpfs -o size={megabytes}m tmpfs {path}", shell=True, check=True)\n', None,
-             [("reference", at + 1)]),
+             mounting, [("reference", at + 1)]),
             ("an import in a function", indent + "from container import mount_point as put\n" + indent + 'put("mount", "-t", "tmpfs", "tmpfs", path)\n',
-             'put("umount", path)', []))
-        for name, line, umount, expected in variants:
+             'put("umount", path)', mounting, []),
+            # (relay.py defines a Judgement too, which still mounts: the reference judge must not be counted for it)
+            ("no mount at all", indent + "pass\n", "pass", mounting - {"reference"}, []))
+        for name, line, umount, kinds_expected, expected in variants:
             with self.subTest(name):
                 copy = Path(tempfile.mkdtemp(dir=self.tmp.name))
                 for path in source.glob("*.py"):
@@ -17363,7 +17368,7 @@ class TestTheMeasure(Base):
                 self.assertNotEqual(changed, original)
                 (copy / "reference.py").write_text(changed, encoding="utf-8")
                 kinds, strays, _ = self.judges_mounts(copy)
-                self.assertEqual((kinds, strays), (set(hive.JUDGE_MOUNTS), expected))
+                self.assertEqual((kinds, strays), (kinds_expected, expected))
 
     def test_the_time_of_a_judgement_holds_with_the_manifests_bounds_as_they_are(self):
         """Bounds proposed below the manifest's own make a smaller worst case: the time proposed for a judgement still
