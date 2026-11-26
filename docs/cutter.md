@@ -508,7 +508,8 @@ the project and one of its own fork, every hour while it works for the project. 
 and the project's publisher (`hive.py publish-cut`), run with the project's own account, publishes the cut that
 stands. The guide says both sides: the account's ("For a trusted account: the cut duty") and the architect's ("For the
 architect: the trusted accounts' cuts"). A charter that asks a person to read each cut holds for these cuts too: the publisher
-opens no pull request, so the architect then runs it by hand, after reading the cut that stands.
+opens no pull request, so the architect then runs it by hand, after reading the cut that stands. No schedule
+runs the publisher on such a project.
 
 ## Not yet
 

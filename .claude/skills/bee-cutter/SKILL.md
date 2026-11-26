@@ -283,9 +283,13 @@ Everything above holds, except "Publish", which this section replaces. The proto
   - `<LOGIN>`, your account's GitHub login;
   - `<FORK>`, the name of your fork's repository (the project's own name unless you renamed your fork).
 
-  Take these from the prompt and from nothing else. If the login is missing, stop and say so. Before any
-  command uses them, check their shapes (a GitHub login; a repository's name): the first line of the block below
-  does, and stops on anything else. The account has forked
+  Take these from the prompt and from nothing else. If the login is missing, stop and say so. Before you write
+  either into any command, read it yourself, character by character:
+  - the login: letters, digits and `-` only, 39 at most;
+  - the fork's name: letters, digits, `.`, `_` and `-` only, not dots alone, not ending in `.git`.
+
+  Anything else, a space, a quote, a second line: stop, and write it into nothing. The first line of the block below
+  checks the same again. The account has forked
   the project already (default branch only), and this machine's git pushes to that fork with the account's own
   credentials: neither is yours to set up.
 - **Two clones:**
@@ -302,8 +306,8 @@ Everything above holds, except "Publish", which this section replaces. The proto
 Each run, once the lines of "The run" that take the protocol and the state have run, up to `git fetch --quiet origin`:
 
 ```bash
-printf '%s\n' '<LOGIN>' | grep -Eqx '[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?' && printf '%s\n' '<FORK>' | grep -Eqx '[A-Za-z0-9._-]{1,100}' \
-  && [ '<FORK>' != . ] && [ '<FORK>' != .. ] || { echo "the login or the fork's name is not of GitHub's shape: stop" >&2; exit 1; }
+[[ '<LOGIN>' =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ && '<FORK>' =~ ^[A-Za-z0-9._-]{1,100}$ && ! '<FORK>' =~ ^(\.+|.*\.git)$ ]] \
+  || { echo "the login or the fork's name is not of GitHub's shape: stop" >&2; exit 1; }
 [ -d ~/.hive/duty/<LOGIN>/<FORK>/.git ] || git clone --quiet "https://github.com/<LOGIN>/<FORK>" ~/.hive/duty/<LOGIN>/<FORK>
 (cd ~/.hive/duty/<LOGIN>/<FORK> && hive duty --project <PROJECT> --login <LOGIN> --fork <FORK> --state ~/.hive/cutter-state)
 ```
@@ -323,6 +327,7 @@ marker below. Push it straight to your fork's branch `hive/cut`:
 
 ```bash
 git checkout --quiet --detach <commit>
+[ ! -L hive ] && [ ! -L hive/tasks.jsonl ] && [ ! -L hive/backlog.jsonl ] || { echo "a link where the two files go: stop, push nothing" >&2; exit 1; }
 cp /tmp/proposal.jsonl hive/tasks.jsonl
 cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
 git add hive/tasks.jsonl
@@ -332,14 +337,15 @@ git -c user.name=<LOGIN> -c user.email=<LOGIN>@users.noreply.github.com commit -
 [ "$(git rev-list --parents --max-count=1 HEAD | cut -d' ' -f2-)" = "<commit>" ] || { echo "not one commit on <commit>: stop, push nothing" >&2; exit 1; }
 [ "$(git show HEAD:hive/tasks.jsonl | sha256sum | cut -d' ' -f1)" = "<sha256>" ] || { echo "not the tasks file CHECKED named: stop, push nothing" >&2; exit 1; }
 [ "$(git show HEAD:hive/backlog.jsonl | sha256sum | cut -d' ' -f1)" = "<backlog sha256>" ] || { echo "not the backlog CHECKED named: stop" >&2; exit 1; }  # only if you changed the backlog
-rm -rf ~/.hive/cutter-state && git clone --quiet --depth 1 --branch hive-state "https://github.com/<PROJECT>" ~/.hive/cutter-state
-hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl  # (and --backlog)
+rm -rf ~/.hive/cutter-state && git clone --quiet --depth 1 --branch hive-state "https://github.com/<PROJECT>" ~/.hive/cutter-state || { echo "the state could not be taken again: stop, push nothing" >&2; exit 1; }
+hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl > /tmp/second-check.txt || { echo "the gate refuses it now: stop, push nothing" >&2; exit 1; }  # (and --backlog)
+grep -Eq '^CHECKED <sha256> against <commit>($|;)' /tmp/second-check.txt || { echo "not the CHECKED line of the first cut-check: stop, push nothing" >&2; exit 1; }
 git push --quiet --force "https://github.com/<LOGIN>/<FORK>" HEAD:refs/heads/hive/cut
 ```
 
-
-`<sha256>` (and `<backlog sha256>`) are the digests `CHECKED` printed. Each `[ … ] || … exit 1` line stops the
-block, with nothing pushed. The second `cut-check` must print the same `CHECKED` line, as in "Publish".
+`<sha256>` (and `<backlog sha256>`) are the digests `CHECKED` printed. Run the block as one script, in bash: each
+`… || { …; exit 1; }` stops it there, with nothing pushed. The second `cut-check`, on the state taken again, must
+print the same `CHECKED` line, as in "Publish".
 
 The push replaces the proposal of an earlier duty, which the hive has already read once. That is the only
 force-push this guide allows (rule 4), and only to that branch of your own fork: the fork `hive duty` has just
@@ -390,8 +396,12 @@ project's publisher, `hive publish-cut`, run with the project's own account. It 
 **A charter that asks a person to read each cut** ("Publish") holds for the trusted accounts' cuts too. The publisher
 pushes straight to the published branch and opens no pull request. On such a project:
 - do not run it unless the architect's prompt says to;
-- report instead that the trusted cuts wait for the architect, who reads the cut that stands and runs
-  `hive publish-cut` by hand.
+- report instead that the trusted cuts wait for the architect, who runs `hive publish-cut` by hand after reading
+  the cut that stands;
+- the architect finds that cut in the ledger, as the latest line of type `duty-end` with `"outcome": "cut"`: its
+  `proposal` commit lies on the branch `hive/cut` of the account's fork. Reading it is the architect's, not yours
+  (rule 2);
+- no schedule runs the publisher on such a project ("How often" below does not apply).
 
 Otherwise, at the start of each of your runs, once the lines of "The run" that take the protocol and the state have
 run, up to `git fetch --quiet origin`:
@@ -410,8 +420,8 @@ Then run `git fetch --quiet origin` again before anything else: a published cut 
 What each check means is in `docs/protocol.md`, "Publishing a cut". Report the line. A `REFUSED` is the
 architect's to read.
 
-**How often.** Run the publisher at least once every `trusted.cut_hours` (6 by default): through your own run, or
-through a schedule of its own for this one command.
+**How often** (on a project whose charter does not ask a person to read each cut). Run the publisher at least once
+every `trusted.cut_hours` (6 by default): through your own run, or through a schedule of its own for this one command.
 - A cut stands until it is published. After `trusted.cut_hours`, the hive may deal another duty on the same commit,
   and the publisher takes only the latest cut.
 - A cut left unpublished that long can be superseded. Its account's next proposal replaces it on its fork's

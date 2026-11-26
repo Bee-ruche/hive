@@ -18459,22 +18459,34 @@ class TestTheCuttersGuideProposal(Base):
         super().setUp()
         self.carol = self.w.fork("carol", 301)
 
-    def propose(self, duty, published, text):
-        """The guide's block and marker, run in carol's clone, which holds the published commit: the proposal pushed."""
-        guide = (REGISTRY / ".claude/skills/bee-cutter/SKILL.md").read_text(encoding="utf-8")
+    GUIDE = REGISTRY / ".claude/skills/bee-cutter/SKILL.md"
+
+    def script(self, duty, published, text, checked=None, again=None, after=("", "")):
+        """The guide's proposal block and its marker, ready to run in carol's clone, which holds the published commit.
+        `checked`: the digest the first cut-check printed (the file's own by default); `again`: the CHECKED line the
+        second one prints (the same by default: the state taken again is replaced by that line); `after`: (a line of
+        the block, a command slipped in after it), to doctor the state the checks see."""
+        guide = self.GUIDE.read_text(encoding="utf-8")
         section = guide[guide.index("**The proposal.**"):guide.index("**Nothing to cut**")]
         block = next(b for b in re.findall(r"```bash\n(.*?)```", section, re.S) if "refs/heads/hive/cut" in b)
         marker = re.search(r"```text\n(.*?)```", section, re.S).group(1)
         work, tmp = self.carol.work, self.w.root / "carol-tmp"
         tmp.mkdir(exist_ok=True)
-        self.carol.write("elsewhere.txt", "a commit of the clone's own, which the proposal must not rest on").commit()
+        if not (tmp / "moved").exists():
+            self.carol.write("elsewhere.txt", "a commit of the clone's own, which the proposal must not rest on").commit()
+            (tmp / "moved").write_text("")
         sh("git", "fetch", "--quiet", str(self.w.upstream), f"refs/heads/{self.w.published_branch}", cwd=work)
         (tmp / "proposal.jsonl").write_text(text)
         digest = hashlib.sha256(text.encode()).hexdigest()
         fork = sh("git", "remote", "get-url", "origin", cwd=work).stdout.strip()
         commands = [line.split("  #")[0].rstrip() for line in block.splitlines() if "only if you changed the backlog" not in line]
-        kept = [line for line in commands if line and not line.startswith(("hive ", "rm -rf ~/.hive"))]
-        script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published).replace("<sha256>", digest)
+        kept = []
+        for line in commands:
+            if line.startswith("hive cut-check "):
+                kept.append(f"echo {shlex.quote(again or f'CHECKED {checked or digest} against {published}')} > /tmp/second-check.txt")
+            elif line and not line.startswith("rm -rf ~/.hive"):
+                kept.append(line + (f"\n{after[1]}" if after[0] and line.startswith(after[0]) else ""))
+        script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published).replace("<sha256>", checked or digest)
         self.assertEqual(script.count('"https://github.com/<LOGIN>/<FORK>"'), 1, "one push, to the account's own fork")
         script = script.replace('"https://github.com/<LOGIN>/<FORK>"', shlex.quote(fork)).replace("<LOGIN>", "carol")
         marker = "\n".join(line for line in marker.splitlines() if not line.startswith("Hive-Backlog:"))
@@ -18482,12 +18494,48 @@ class TestTheCuttersGuideProposal(Base):
             .replace("<the tasks file's sha256, as CHECKED printed it>", digest)
         self.assertNotIn("<", script + marker, "a placeholder this test knows no value for")
         (tmp / "marker.txt").write_text(marker + "\n")
-        checks = [line for line in kept if line.startswith("[ ") and line.endswith("exit 1; }")]
-        self.assertEqual([("diff --cached" in c, "rev-list --parents" in c, "sha256sum" in c) for c in checks],
-                         [(True, False, False), (False, True, False), (False, False, True)],
-                         "three checks that stop the block: no other file, one commit on the checked one, the tasks file's digest")
-        sh("bash", "-e", "-c", script, cwd=work)
-        return sh("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+        checks = [line for line in kept if line.startswith(("[ ", "grep ")) and line.endswith("exit 1; }")]
+        self.assertEqual([("-L hive" in c, "diff --cached" in c, "rev-list --parents" in c, "sha256sum" in c, "second-check" in c) for c in checks],
+                         [(True, False, False, False, False), (False, True, False, False, False), (False, False, True, False, False),
+                          (False, False, False, True, False), (False, False, False, False, True)],
+                         "the checks that stop the block: no link, no other file, one commit on the checked one, the tasks file's "
+                         "digest, the second gate's CHECKED line")
+        return script
+
+    def propose(self, duty, published, text):
+        """The guide's block run as written: the proposal pushed. Returns its commit."""
+        sh("bash", "-c", self.script(duty, published, text), cwd=self.carol.work)
+        return sh("git", "rev-parse", "HEAD", cwd=self.carol.work).stdout.strip()
+
+    def test_each_check_of_the_guides_block_stops_it_with_nothing_pushed(self):
+        duty, published = self.dealt(), self.w.publish()
+        text = task_lines([*CLOSED_FOUR, NEW_SEVEN])
+        for name, options in (("a file beyond the two", {"after": ("git add hive/tasks.jsonl", "echo x > stray.txt && git add stray.txt")}),
+                              ("a link where the tasks file goes", {"after": ("git checkout --quiet --detach", "rm -f hive/tasks.jsonl && ln -s ../elsewhere.txt hive/tasks.jsonl")}),
+                              ("another digest than the gate's", {"checked": "0" * 64}),
+                              ("the second gate saying another file", {"again": f"CHECKED {'1' * 64} against {published}"}),
+                              ("the second gate against another commit", {"again": f"CHECKED {hashlib.sha256(text.encode()).hexdigest()} against {'2' * 40}"})):
+            with self.subTest(case=name):
+                ran = sh("bash", "-c", self.script(duty, published, text, **options), cwd=self.carol.work, check=False)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("stop", ran.stderr)
+                self.assertEqual(sh("git", "for-each-ref", f"refs/heads/{hive.CUT_BRANCH}", cwd=self.carol.bare).stdout, "", "nothing pushed")
+                sh("git", "reset", "--quiet", "--hard", cwd=self.carol.work)
+                sh("git", "clean", "-fdq", cwd=self.carol.work)
+
+    def test_the_guides_shape_check_takes_a_login_and_a_fork_name_and_nothing_else(self):
+        guide = self.GUIDE.read_text(encoding="utf-8")
+        section = guide[guide.index("## For a trusted account: the cut duty"):guide.index("**The proposal.**")]
+        block = next(b for b in re.findall(r"```bash\n(.*?)```", section, re.S) if "hive duty --project" in b)
+        first = block[:block.index("\n[ -d ")].replace("\\\n", " ")
+        self.assertIn("exit 1", first)
+        for login, fork, good in (("carol", "toy", True), ("Carol-2", "my.fork_x-1", True), ("a" * 39, "t", True),
+                                  ("a" * 40, "toy", False), ("-carol", "toy", False), ("carol-", "toy", False), ("ca rol", "toy", False),
+                                  ("carol", ".", False), ("carol", "..", False), ("carol", "...", False), ("carol", "toy.git", False),
+                                  ("carol", "a/b", False), ("carol", "toy\nevil", False), ("carol\nevil", "toy", False), ("carol", "", False)):
+            with self.subTest(login=login, fork=fork):
+                ran = subprocess.run(["bash", "-c", first.replace("<LOGIN>", login).replace("<FORK>", fork)], capture_output=True, text=True)
+                self.assertEqual(ran.returncode == 0, good, ran.stderr)
 
     def test_the_guides_proposal_of_a_cut_ends_the_duty_as_the_cut_that_stands(self):
         duty, published = self.dealt(), self.w.publish()

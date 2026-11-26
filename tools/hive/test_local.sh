@@ -124,7 +124,9 @@ case "${1:-}" in
   exec) [ -z "${STUB_GATE_DOWN:-}" ]; exit $? ;;
   port) printf '%s' "${STUB_PORT:-}"; exit 0 ;;
   inspect) case "$*" in *Aliases*) echo "${STUB_ALIASES:-}" ;; esac; exit 0 ;;
-  run) shift ;;
+  run) shift
+    # Every container the launcher starts runs under an init: the stub refuses any other, in every case of this suite.
+    case " $* " in *" --init "*) ;; *) echo "stub docker: a container with no init: $*" >&2; exit 125 ;; esac ;;
   *) exit 0 ;;
 esac
 role="" ; : > "$S/mounts"
@@ -833,13 +835,27 @@ while IFS= read -r line; do
     printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
   fi
 done < "$T/doc-lines"
+# Then with the login recorded, so that the readings after it are reached too (the fork's name, the sandbox's --
+# and its command): each line stops on none of them.
+DOCS_HOME2="$T/docs-home2"
+mkdir -p "$DOCS_HOME2/.hive" && printf 'alice\n' > "$DOCS_HOME2/.hive/login"
+while IFS= read -r line; do
+  words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
+    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g')
+  case "$words" in login\ *|*"<"*) continue ;; esac
+  # shellcheck disable=SC2086
+  (cd "$T/desk" && HOME="$DOCS_HOME2" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
+  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|runs the command given after --\|the fork named is the project\|no login is recorded\|is not the login the user recorded" "$T/doc-err"; then
+    printf '%s (login recorded): %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
+  fi
+done < "$T/doc-lines"
 docs_read() {  # every line read, and each of the launcher's commands given at least once
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
   for word in check clone refresh sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
   # No PowerShell command line in the volunteer's docs: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a
   # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
-  ! grep -n 'local\.ps1"\|& "\$HOME\|Select-String\|\$LASTEXITCODE' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
+  ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
 check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, sandbox and login" docs_read
 

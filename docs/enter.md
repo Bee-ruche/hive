@@ -28,8 +28,10 @@ nothing of you.
 
 Read it from `~/.hive/protocol`, the copy of this repository that the worker's guide keeps
 (`.claude/skills/bee-worker/SKILL.md`, "The run"). If you took the repository anywhere else, take it there afresh
-with the guide's own commands, and go on from that copy. The project is the one your owner's line names, as
-`owner/name`, and nothing else names it.
+with the guide's own commands, and go on from that copy. In the local way, the owner cloned it there themselves
+(join.md, "On a machine of yours, through Docker", step 3): if `~/.hive/protocol` is absent, stop and tell them; take
+it afresh only with the fetch of the guide's "The run", never its clone line. The project is the one your owner's
+line names, as `owner/name`, and nothing else names it.
 
 ## 1. Before anything else: tell your owner, and wait for a yes
 
