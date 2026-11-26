@@ -5,8 +5,10 @@
 #
 # - The launcher and the protocol are this clone's HEAD (commit first), in a home of the smoke's own, removed after:
 #   nothing of ~/.hive is read or written.
-# - No credential is read. git sees no settings of this machine's (no helper), and the account comes from a stand-in
-#   gh that names a login of its own (hive-smoke). check pushes nothing.
+# - No credential is read. The launcher clears every GIT_ variable, so the smoke puts a git of its own first on PATH:
+#   this machine's git with its credential helpers reset (-c credential.helper=), which asks no helper and finds no
+#   token. The account then comes from a stand-in gh that names a login of its own (hive-smoke). check pushes nothing.
+#   (So the token's way, git's credential sent to api.github.com by curl, is not run here.)
 # - It reaches GitHub's public pages for the project, through the launcher's gate, as a volunteer's check does.
 # - The containers are the launcher's own (hive-egress-<pid>-<n>, and throwaway ones), on its network hive-inner.
 #
@@ -32,11 +34,25 @@ cat > "$home/bin/gh" <<'GH'
 exit 1
 GH
 chmod +x "$home/bin/gh"
+real_git=$(command -v git) && case "$real_git" in *"'"*) false ;; /*) true ;; *) false ;; esac \
+  || { echo "smoke: git is not on PATH by a plain place"; exit 2; }
+printf '#!/bin/sh\nexec '\''%s'\'' -c credential.helper= "$@"\n' "$real_git" > "$home/bin/git" && chmod +x "$home/bin/git" || exit 2
+# Before the launcher: that git is the one found, and it finds no password for github.com (what it would say is
+# never shown: only whether a password line came back).
+mkdir -p "$home/ask" || exit 2
+[ "$(PATH="$home/bin:$PATH" command -v git)" = "$home/bin/git" ] \
+  && ! (cd "$home/ask" && printf 'protocol=https\nhost=github.com\n\n' | PATH="$home/bin:$PATH" GIT_CEILING_DIRECTORIES="$home/ask" \
+        GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never timeout 30 git -c core.askPass= credential fill 2>/dev/null | grep -q '^password=') \
+  || { echo "smoke: this machine's git would still give a credential: nothing was run"; exit 2; }
+
+# Docker's settings from their usual place, as the launcher reads them: on Windows, the user's profile (no HOME of
+# Docker's); elsewhere ~/.docker, which the smoke's home shows through a link.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) [ ! -d "${HOME}/.docker" ] || ln -s "${HOME}/.docker" "$home/.docker" || exit 2 ;; esac
 
 echo "smoke: local.sh check --project $PROJECT, at $head"
-said=$(cd "$home/desk" && DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" HOME="$home" PATH="$home/bin:$PATH" \
-  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GH_HOST -u GH_CONFIG_DIR \
-  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GCM_INTERACTIVE=never \
+said=$(cd "$home/desk" && HOME="$home" PATH="$home/bin:$PATH" \
+  env -u DOCKER_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GH_HOST -u GH_CONFIG_DIR \
+  GCM_INTERACTIVE=never \
   timeout 1800 bash "$home/.hive/protocol/tools/hive/local.sh" check --project "$PROJECT" 2>&1)
 code=$?
 printf '%s\n' "$said"

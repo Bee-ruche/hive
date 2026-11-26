@@ -121,7 +121,7 @@ if [ -n "\${STUB_ID:-}" ] && [ "\$*" = "-u" ]; then echo "\$STUB_ID"; else exec 
 STUBS
 cat > "$T/bin/cygpath" <<'STUBS'
 #!/usr/bin/env bash
-[ "$1" = -m ] && printf '%s' "$2"
+[ "$1" = -m ] && { [ -z "${STUB_DIR:-}" ] || printf '%s\n' "$2" >> "$STUB_DIR/cygpath-args"; printf '%s' "$2"; }
 STUBS
 chmod +x "$T/bin/uname" "$T/bin/id" "$T/bin/cygpath"
 
@@ -790,6 +790,10 @@ check "the token: sent on curl's standard input, never in an argument, an output
    && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" "$T/tmpd" 2>/dev/null)" ] \
    && [ -z "$(ls -A "$T/tmpd")" ] \
    && grep -qx -- "-q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o $T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"'
+rm -f "$STUB_DIR/cygpath-args"
+TMPDIR="$T/tmpd" STUB_UNAME=MINGW64_NT-10.0-26100 launch check --project Bee-ruche/toy
+check "on Windows, curl given the answer's place in Windows' form (the launcher turns Git Bash's conversion off: curl.exe wrote nothing, the real smoke)" \
+  grep -q "^$T/tmpd/hive-user\.[A-Za-z0-9]*\$" "$STUB_DIR/cygpath-args"
 check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
   grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
 printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"

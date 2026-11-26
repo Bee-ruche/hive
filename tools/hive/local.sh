@@ -264,7 +264,7 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
     answer=$(mktemp "${TMPDIR:-/tmp}/hive-user.XXXXXX") || { token=""; die "no room for a temporary file"; }
     # (The header on curl's standard input, never in its arguments; no ~/.curlrc read; https only, no redirect.)
     code=$(printf 'header = "Authorization: token %s"\nheader = "User-Agent: bee-hive-local"\nheader = "Accept: application/vnd.github+json"\nurl = "https://api.github.com/user"\n' "$token" \
-      | "$curl" -q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$answer" -w '%{http_code}' --config - 2>/dev/null)
+      | "$curl" -q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$(host_path "$answer")" -w '%{http_code}' --config - 2>/dev/null)
     token=""
     case "$code" in
       200) login=$(head -c 65536 "$answer" | tr -d '\r\n' | grep -o '"login" *: *"[A-Za-z0-9-]*"' | head -n 1 | sed 's/^.*"\([A-Za-z0-9-]*\)"$/\1/')
