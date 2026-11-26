@@ -20823,6 +20823,36 @@ class TestTheNamesADiskHolds(Volunteer):
             code, text = self.names(system)
             self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), self.err)
 
+    def test_names_from_the_root_or_a_folder_with_no_clone(self):
+        """The launcher's check ran names in a container whose image sets no working folder: from the root, every
+        folder of PATH lay « in the clone », and the command never started (the founder's trial). The root is no
+        clone's root; a folder of its own with no clone above it guards what lies below it, and nothing else."""
+        alone = Path(tempfile.mkdtemp(dir=os.path.realpath(tempfile.gettempdir())))
+        self.addCleanup(shutil.rmtree, alone, True)
+        if any(os.path.lexists(os.path.join(folder, ".git")) for folder in (str(alone), *map(str, alone.parents))):
+            self.skipTest("the machine's temporary folder lies in a repository")
+        for cwd in ("/", str(alone)):
+            with self.subTest(cwd=cwd), mock.patch.dict(os.environ, {"PATH": "/usr/local/bin:/usr/bin:/bin"}):
+                code, text = self.run_cli("names", "--project", "Bee-ruche/toy", "--system", "linux", "--upstream-url", str(self.w.upstream), cwd=cwd)
+                self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), self.err)
+        with mock.patch.dict(os.environ, {"PATH": f"{alone}/bin:/usr/bin:/bin"}):
+            self.one_line(self.run_cli("names", "--project", "Bee-ruche/toy", "--system", "linux", "--upstream-url", str(self.w.upstream), cwd=str(alone)),
+                          hive.RELATIVE_PATH)
+
+    def test_the_clone_is_the_nearest_folder_up_that_holds_its_git(self):
+        """From a folder inside the clone, the whole clone is guarded, not only what lies below that folder."""
+        work = self.alice.work.resolve()
+        (work / "deep/er").mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, work / "deep", True)
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(work / "deep/er")
+        self.assertEqual(hive.clone_root(), str(work))
+        self.assertEqual([hive.of_the_clone(entry) for entry in (f"{work}/tools/bin", str(work), str(work.parent), f"{work}-beside", "/usr/bin")],
+                         [True, True, False, False, False])
+        os.chdir("/")
+        self.assertEqual((hive.clone_root(), hive.of_the_clone("/usr/bin"), hive.of_the_clone("/")), (None, False, False))
+
     def held_or_not(self, files, system, paths):
         """The project moves on to a commit that holds these files (one commit, on a project of the case's own):
         names refuses them on that system, a Linux disk holds them, and so does macOS a name only Windows refuses."""

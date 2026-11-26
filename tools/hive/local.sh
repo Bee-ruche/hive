@@ -464,7 +464,7 @@ LIMITS=(--rm --init --read-only --cap-drop ALL --security-opt no-new-privileges 
 PROTOCOL_MOUNT=(--mount "type=bind,source=$(host_path "$PROTOCOL_TOOLS"),target=/hive/protocol/tools/hive,readonly")
 
 probe() {  # the owner of a folder (resolved) as the containers see it, then Docker's clock, from a throwaway container
-  "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=probe --mount "type=bind,source=$(host_path "$1"),target=/probed,readonly" \
+  "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=probe -w /tmp --mount "type=bind,source=$(host_path "$1"),target=/probed,readonly" \
     "$IMAGE" sh -c 'stat -c %u:%g /probed && date -u +%s'
 }
 
@@ -494,7 +494,7 @@ egress_up() {
     || die "the network $INNER has a route out: remove it (docker network rm $INNER) and run the command again"
   GATE_UP=1
   "$DOCKER" run -d --init --name "$EGRESS" --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
-    --cpus 1 --memory 256m --user 65534:65534 --network bridge "${PROTOCOL_MOUNT[@]}" \
+    --cpus 1 --memory 256m --user 65534:65534 --network bridge -w /tmp "${PROTOCOL_MOUNT[@]}" \
     "$IMAGE" python3 -I /hive/protocol/tools/hive/egress.py --listen 0.0.0.0 --port "$EGRESS_PORT" >/dev/null 2>&1 \
     && "$DOCKER" network connect "$INNER" "$EGRESS" >/dev/null 2>&1 || die "Docker could not start the hive's gate ($EGRESS)"
   [ -z "$("$DOCKER" port "$EGRESS" 2>/dev/null)" ] || die "the hive's gate has a port published on this machine: nothing is run through it"
@@ -514,7 +514,7 @@ egress_up() {
     done
   done
   # From the network, no name outside the machine resolves: a resolver that forwarded would be a way out.
-  if "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=dns "$IMAGE" sh -c 'getent hosts github.com || getent hosts example.com' >/dev/null 2>&1; then
+  if "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=dns -w /tmp "$IMAGE" sh -c 'getent hosts github.com || getent hosts example.com' >/dev/null 2>&1; then
     die "a name outside this machine resolves from the network $INNER: Docker's resolver forwards there, and the gate would not be the only way out"
   fi
   # The gate listens before anything is sent through it.
@@ -682,7 +682,7 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   # hive.py hand-over-check first, in a fresh container that never sees the clone: the very bytes copied here, held to
   # the project's bounds (pack_bounds) before this machine's git unpacks anything of them.
   local said
-  said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=check --user 65534:65534 --tmpfs /tmp:rw,size=1g \
+  said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=check --user 65534:65534 --tmpfs /tmp:rw,size=1g -w /tmp \
     "${TOOL_ENV[@]}" "${PROTOCOL_MOUNT[@]}" --mount "type=bind,source=$(host_path "$copy"),target=/hive/handover,readonly" \
     "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py hand-over-check --project "$PROJECT" --login "$LOGIN" --hand-over /hive/handover)
   local code=$?
@@ -765,7 +765,7 @@ case "$COMMAND" in
     egress_up
     WORK=$(below_hive "$HIVE/work" "the clones' folder") || exit 2
     watch_clock_and_owner "$WORK"
-    said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=names --user 65534:65534 --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
+    said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=names --user 65534:65534 --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
       "${PROTOCOL_MOUNT[@]}" "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py names --project "$PROJECT" --system "$SYSTEM") || exit $?
     say "$said"
     say "LOCAL clone $CLONE"
@@ -777,7 +777,7 @@ case "$COMMAND" in
     egress_up
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
-    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=clone --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
+    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=clone --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
       --mount "type=bind,source=$(host_path "$CLONE_SOURCE"),target=/work" "$IMAGE" \
       git -c core.hooksPath=/dev/null clone --quiet --no-recurse-submodules --template= "$FORK_URL" /work >/dev/null \
       || die "the fork could not be cloned from $FORK_URL: check that the fork exists under your account, then run the command again"
@@ -796,7 +796,7 @@ case "$COMMAND" in
     egress_up
     watch_clock_and_owner "$STATE"  # (with no network, reading an owner and a clock: the places are checked after it)
     STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
-    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=refresh --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" \
+    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=refresh --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
       --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state" "$IMAGE" sh -c '
         if [ -d /hive/state/.git ]; then
           git -C /hive/state fetch --quiet --depth 1 "$1" hive-state && git -C /hive/state reset --quiet --hard FETCH_HEAD && git -C /hive/state clean -ffdx --quiet

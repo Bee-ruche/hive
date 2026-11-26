@@ -12582,11 +12582,24 @@ UNFORESEEN = ("this command stopped on an error of the tool's own ({kind}, line 
 QUIET = "this command stopped on an error of the tool's own ({kind}, line {line} of hive.py): what it had done stays done"
 
 
+def clone_root():
+    """The clone a worker's command runs in, once every link on the way is followed: the nearest folder from the
+    command's own up that holds a .git, the root itself never (no clone's root is the machine's). With none, the
+    command's own folder, unless it is the root: a command the launcher runs in a container with no clone (names,
+    needs) runs from a folder of its own, and from the root, every folder named from the root would lie « in it »."""
+    here = folder = os.path.realpath(os.getcwd())
+    while os.path.dirname(folder) != folder:
+        if os.path.lexists(os.path.join(folder, ".git")):
+            return folder
+        folder = os.path.dirname(folder)
+    return None if os.path.dirname(here) == here else here
+
+
 def of_the_clone(entry):
-    """True if an entry of PATH is the folder a worker's command runs in (the clone's root) or lies below it,
-    once every link on the way is followed."""
-    here, place = os.path.realpath(os.getcwd()), os.path.realpath(entry)
-    return place == here or place.startswith(here.rstrip(os.sep) + os.sep)
+    """True if an entry of PATH is the clone a worker's command runs in (clone_root) or lies below it, once every
+    link on the way is followed."""
+    root, place = clone_root(), os.path.realpath(entry)
+    return root is not None and (place == root or place.startswith(root.rstrip(os.sep) + os.sep))
 
 
 HIVE_PATHS = ("registry", "state", "repo", "out", "bundle", "plan", "workdir", "judge_workdir", "verdicts")

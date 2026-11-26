@@ -166,7 +166,10 @@ case "${1:-}" in
   inspect) case "$*" in *Aliases*) echo "${STUB_ALIASES:-}" ;; esac; exit 0 ;;
   run) shift
     # Every container the launcher starts runs under an init: the stub refuses any other, in every case of this suite.
-    case " $* " in *" --init "*) ;; *) echo "stub docker: a container with no init: $*" >&2; exit 125 ;; esac ;;
+    case " $* " in *" --init "*) ;; *) echo "stub docker: a container with no init: $*" >&2; exit 125 ;; esac
+    # And from a working folder it names: the tool's image sets none, and from the root, hive.py's guard took every
+    # folder of PATH for one of the clone's (the founder's trial, at check's names).
+    case " $* " in *" -w /"*) ;; *) echo "stub docker: a container with no working folder: $*" >&2; exit 125 ;; esac ;;
   *) exit 0 ;;
 esac
 role="" ; : > "$S/mounts"
@@ -755,7 +758,10 @@ rm "$CLONE/.cursor"
 launch check --project Bee-ruche/toy --login alice
 check "check: its lines, the account git pushes as among them" eval '[ "$CODE" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "NAMES-HELD 3" && printf "%s\n" "$OUT" | grep -qx "LOCAL clone $CLONE" \
   && printf "%s\n" "$OUT" | grep -qx "LOCAL login alice" \
-  && grep -q -- "names --project Bee-ruche/toy --system linux\$" "$STUB_DIR/args.names"'
+  && grep -q -- "names --project Bee-ruche/toy --system linux\$" "$STUB_DIR/args.names" \
+  && grep -q "^run .* --label hive.role=names .* -w /tmp .* python3 -I /hive/protocol/tools/hive/hive.py names " "$STUB_DIR/calls"'
+check "every container from a working folder it names, none from the root (the image sets none)" eval \
+  '! grep "^run " "$STUB_DIR/calls" | grep -v " -w /\(tmp\|work\) " && ! grep -q "^run .* -w / " "$STUB_DIR/calls"'
 STUB_NAMES_REFUSE=1 launch check --project Bee-ruche/toy --login alice
 check "refused: check, the tip's names" eval '[ "$CODE" -eq 2 ] && case "$ERR" in "hive: the project'"'"'s tip holds two names"*) true ;; *) false ;; esac'
 launch clone --project Bee-ruche/toy --login alice
