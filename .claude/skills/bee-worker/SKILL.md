@@ -528,6 +528,10 @@ Everything in this guide holds, with these changes and no others:
     gives.
   - **The order:** the user's first yes, then `next`. If it says `NEEDS-UNACCEPTED`, run `local.sh needs`, tell the
     user every entry, and ask for their yes by its digest ("I accept the project's needs <DIGEST>.").
+  - **The user records their yes themselves**, in a terminal of their own:
+    `bash ~/.hive/protocol/tools/hive/local.sh accept-needs --project <PROJECT> <DIGEST>`. Never run it yourself.
+    Until they have, `next` prints `LOCAL needs not-accepted-here: …` and nothing is fetched: tell them, and wait for
+    them.
   - **The accepted digest** goes to every `next`, `ready` and `start` as `--needs-accepted <DIGEST>`. With `next`, the
     launcher first fetches the project's files and documents, in a container of their own, and says how it went in
     `LOCAL needs …` lines; `ready` and `start` then find them in the needs' folder.

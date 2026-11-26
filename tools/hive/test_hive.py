@@ -21094,6 +21094,18 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         with mock.patch.object(hive, "SETTINGS_BYTES", 10), mock.patch.object(hive, "LOCAL_REMOTES", True), \
                 self.assertRaisesRegex(hive.HiveError, "the project's hive/project.json is larger than 10 bytes"):
             hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
+        (self.w.published / "corpus.bin").write_bytes(os.urandom(64 << 10))  # (a tip whose pack outweighs the bound: random bytes do not compress)
+        leads_git("add", "-A", cwd=self.w.published)
+        leads_git("commit", "--quiet", "-m", "a large file", cwd=self.w.published)
+        leads_git("push", "--quiet", "origin", f"HEAD:refs/heads/{self.w.published_branch}", cwd=self.w.published)
+        self.w.last_published = (None, None)
+        with mock.patch.object(hive, "SETTINGS_FETCH_BYTES", 32 << 10), mock.patch.object(hive, "LOCAL_REMOTES", True), \
+                self.assertRaisesRegex(hive.HiveError, "it may be larger than 32768 bytes, the most this command fetches"):
+            hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
+        tip = sh("git", "rev-parse", f"refs/heads/{self.w.published_branch}", cwd=self.w.upstream).stdout.strip()
+        with mock.patch.object(hive, "LOCAL_REMOTES", True):
+            self.assertEqual(hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)[1], tip,
+                             "the same tip within the bound")
         code, text = self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), "--by-fetch",
                                   cwd=Path(self.tmp.name))
         self.assertEqual((code, self.spoken(text)[-2]), (0, f"NEEDS-DIGEST {digest}"), self.err)

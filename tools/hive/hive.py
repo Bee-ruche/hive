@@ -557,7 +557,7 @@ GIT_DATA_BYTES = 2 << 30  # the data memory one git of the tool's may take (meas
 GIT_STACK_BYTES = 8 << 20  # the stack of each thread of git's: the usual one (a larger one, counted for each thread, would use the bound up)
 
 
-def bounded():
+def bounded(file_bytes=None):
     """Runs in each git the tool starts, on the hive's side and on a worker's, before git does: git is bounded in
     memory as it is in time. What git is handed is a candidate's objects, or a store that is whatever ran in a
     clone left, and a few bytes there can name gigabytes (a file of zeros, an object that declares a size, a pack
@@ -565,7 +565,8 @@ def bounded():
     GIT_DATA_BYTES of data the kernel gives git no more, and git ends saying so: the command then goes on as after
     any git that failed. (The files git maps to read them are not counted: a large repository's packs do not stop
     it. Where the machine already allows less, that is kept, for the limit in force and for the one above it: a
-    limit is lowered, never raised.)"""
+    limit is lowered, never raised.) file_bytes: no file
+    git writes may grow past that many bytes (RLIMIT_FSIZE): a fetch made to keep one pack, git's own bound on it.)"""
     def lowered(limit, most):
         return most if limit == resource.RLIM_INFINITY else min(limit, most)
 
@@ -573,6 +574,9 @@ def bounded():
     resource.setrlimit(resource.RLIMIT_DATA, (lowered(in_force, GIT_DATA_BYTES), lowered(above, GIT_DATA_BYTES)))
     in_force, above = resource.getrlimit(resource.RLIMIT_STACK)
     resource.setrlimit(resource.RLIMIT_STACK, (lowered(in_force, lowered(above, GIT_STACK_BYTES)), above))
+    if file_bytes is not None:
+        in_force, above = resource.getrlimit(resource.RLIMIT_FSIZE)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (lowered(in_force, file_bytes), lowered(above, file_bytes)))
 
 
 def git(repo, *args, stdin=None, check=True, timeout=300, env=None, isolated=True, attributes=True):
@@ -8789,7 +8793,7 @@ class Clone:
         environment.update(env or {})
         return environment
 
-    def git(self, *args, to=None, stdin=None, check=True, timeout=300, env=None, raw=False, literal=True, attributes=None):
+    def git(self, *args, to=None, stdin=None, check=True, timeout=300, env=None, raw=False, literal=True, attributes=None, file_bytes=None):
         """Runs git on this clone and on no other: its folders are named, not searched for. What a setting could
         turn into a program is switched off (GIT_BASE, GIT_WORKER), and the machine's own settings are not read,
         nor any variable of git's that the environment holds (the settings it carries, a place, a program's name):
@@ -8801,10 +8805,12 @@ class Clone:
         input and the output are bytes (file names are bytes for git). literal=False: for a command given no path,
         whose own steps give git paths of their own (« stash » cleans the whole tree as « :/ », which a literal
         reading takes for a file of that name, and then removes nothing). attributes: the commit or the tree whose
-        .gitattributes files the command follows, in place of those that lie in the work tree."""
+        .gitattributes files the command follows, in place of those that lie in the work tree. file_bytes: no file the
+        command writes grows past that many bytes (bounded)."""
         try:
             result = subprocess.run(self.command(*args, literal=literal, attributes=attributes), input=stdin, capture_output=True, timeout=timeout,
-                                    env=self.environment(to, env), cwd=self.root, preexec_fn=bounded,
+                                    env=self.environment(to, env), cwd=self.root,
+                                    preexec_fn=bounded if file_bytes is None else (lambda: bounded(file_bytes)),
                                     **({} if raw else {"text": True, "errors": "replace"}))
         except subprocess.TimeoutExpired as e:
             raise HiveError(f"git {args[0]}: timeout after {timeout} s") from e
@@ -9402,6 +9408,7 @@ NEEDS_ACCEPTED_KEYS = {  # what the digest covers of each kind: all the loader h
     "resources": ("kind", *NEED_RESOURCES, "architectures"),
 }
 RAW_FILE = "https://raw.githubusercontent.com/{repository}/{commit}/" + PROJECT_FILE  # « needs »: the settings at their commit
+SETTINGS_FETCH_BYTES = 128 << 20  # the most the settings' fetch with git (needs --by-fetch, through the launcher's gate) takes of the tip
 
 
 class NeedsHeld:
@@ -10067,13 +10074,19 @@ def settings_at_the_address(project, upstream_url=None, by_fetch=False):
         branch, commit = found
         if by_fetch or remote_parts(address)[0] is None:  # (tests: a folder of the machine, which no address of GitHub's names)
             try:
-                store.git("fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}", to=address, timeout=120)
+                # One pack, never loose objects, so that the bound on one file is a bound on the whole fetch.
+                fetched = store.git("-c", "fetch.unpackLimit=1", "fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}",
+                                    to=address, timeout=120, check=False, file_bytes=SETTINGS_FETCH_BYTES)
+                if fetched.returncode != 0:
+                    raise HiveError(f"the project's tip could not be fetched to read its settings: it may be larger than {SETTINGS_FETCH_BYTES} "
+                                    "bytes, the most this command fetches, or the network failed: run the command again; if it fails again, "
+                                    "tell the user")
                 size = store.git("cat-file", "-s", f"{need_sha(commit)}:{PROJECT_FILE}").stdout.strip()
                 if not size.isdigit() or int(size) > SETTINGS_BYTES:  # (asked before the blob is read: a file of any size is never held whole)
                     raise HiveError(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
                 raw = store.git("cat-file", "blob", f"{need_sha(commit)}:{PROJECT_FILE}", raw=True).stdout
             except HiveError as error:
-                if "is larger than" in str(error):
+                if "larger than" in str(error):
                     raise
                 raise HiveError(not_asked.format(error=error)) from None
         else:

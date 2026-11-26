@@ -39,9 +39,9 @@ git -C "$PROTOCOL" init -q && git -C "$PROTOCOL" add -A && git -C "$PROTOCOL" co
 
 LAUNCHER="$T/local.sh"
 sed -e "s|^GITHUB=\"https://github.com\"\$|GITHUB=\"file://$T/github\"|" -e 's|^FILE_PROTOCOL="never"$|FILE_PROTOCOL="always"|' \
-  "$ROOT/tools/hive/local.sh" > "$LAUNCHER"
-if [ "$(diff "$ROOT/tools/hive/local.sh" "$LAUNCHER" | grep -c '^>')" -ne 2 ]; then
-  echo "the launcher's copy differs in other lines than its two constants"; exit 2
+  -e 's|^NEEDS_SECONDS=1860 |NEEDS_SECONDS=3    |' "$ROOT/tools/hive/local.sh" > "$LAUNCHER"
+if [ "$(diff "$ROOT/tools/hive/local.sh" "$LAUNCHER" | grep -c '^>')" -ne 3 ]; then
+  echo "the launcher's copy differs in other lines than its three constants"; exit 2
 fi
 
 # The project, its fork, and a scratch clone where the hand-overs are made.
@@ -166,6 +166,7 @@ case "$role" in
     exit 0 ;;
   needs) printf 'NEEDS Bee-ruche/toy at %s\nNEEDS-DIGEST %s\n' "$(printf a%.0s $(seq 40))" "${STUB_NEEDS_DIGEST:-0}" ;;
   needs-fetch)
+    [ -z "${STUB_FETCH_SLEEP:-}" ] || sleep "$STUB_FETCH_SLEEP"
     [ -z "${STUB_FETCH_OUT:-}" ] || cat "$STUB_FETCH_OUT"
     exit "${STUB_FETCH_CODE:-0}" ;;
   sandbox)
@@ -358,6 +359,8 @@ check "refused: an outside name resolves from the network" eval 'refused 2 "a na
 
 reset_world
 DIGEST=$(printf "d%.0s" $(seq 64))  # (a digest of the needs the user accepted, as local.sh needs prints one)
+ACCEPTED_FILE="$HOME/.hive/accepted/bee-ruche/toy"  # (as the user's local.sh accept-needs writes it: its own cases, below)
+mkdir -p "$(dirname "$ACCEPTED_FILE")" && echo "$DIGEST" > "$ACCEPTED_FILE"
 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
 check "next: its lines passed through, its exit code kept" eval '[ "$CODE" -eq 0 ] && [ "$OUT" = "WAIT until later" ]'
 check "next: the tool's command line" grep -qx "python3 -I /hive/protocol/tools/hive/hive.py next --project Bee-ruche/toy --login alice --fork toy --needs-accepted $DIGEST --state /hive/state --needs-home /hive/home --needs-shown $HOME/.hive/needs/bee-ruche/toy" "$STUB_DIR/args.tool"
@@ -419,6 +422,33 @@ check "needs: the tool's needs, behind the gate, its settings read with git, as 
    && [ "$(cat "$STUB_DIR/mounts.needs")" = "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" ]'
 launch needs --project Bee-ruche/toy --login alice
 check "refused: needs takes no login" eval 'refused 2 "--login is not an option of local.sh needs" && nothing_ran'
+# The fetch runs for a digest the user recorded alone (local.sh accept-needs): never for one an assistant passes on.
+OTHER=$(printf "e%.0s" $(seq 64))
+echo "$OTHER" > "$ACCEPTED_FILE"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "a digest the user did not record: no fetch, the launcher says the user types it, the tool runs" eval \
+  '[ "$CODE" -eq 0 ] && ! ran needs-fetch && ran tool && printf "%s\n" "$OUT" | grep -q "^LOCAL needs not-accepted-here: .*the user, never an assistant, types « local.sh accept-needs --project Bee-ruche/toy $DIGEST »"'
+rm "$ACCEPTED_FILE"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "no digest recorded: no fetch" eval '! ran needs-fetch && printf "%s\n" "$OUT" | grep -q "^LOCAL needs not-accepted-here: "'
+echo "$DIGEST" > "$T/accepted-elsewhere" && ln -s "$T/accepted-elsewhere" "$ACCEPTED_FILE"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "a record that is a link: no fetch" eval '! ran needs-fetch'
+rm "$ACCEPTED_FILE" && echo "$DIGEST" > "$ACCEPTED_FILE"
+# The fetch bounded in time (the tests' copy: 3 s), its container removed, its copy of the lines too.
+started=$(date +%s)
+STUB_FETCH_SLEEP=20 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+took=$(( $(date +%s) - started ))
+check "a fetch past its bound: stopped, said, its container removed, the tool run" eval \
+  '[ "$took" -lt 15 ] && printf "%s\n" "$OUT" | grep -q "^LOCAL needs fetch-failed " && ran tool \
+   && grep -q "^rm -f hive-needs-[0-9]*-[0-9]*$" "$STUB_DIR/calls" && [ -z "$(ls -A "$HOME/.hive" | grep "^\.needs\.")" ]'
+# Its lines: 4000 bytes at most, no character of control.
+{ printf 'NEEDS-MISSING file corpus.bin: \033[31mred\033[0m and a bell\a\n'; for i in $(seq 200); do printf 'NEEDS-MISSING file f%s: %s\n' "$i" "$(printf "x%.0s" $(seq 60))"; done; } > "$T/long-fetch"
+STUB_FETCH_OUT="$T/long-fetch" STUB_FETCH_CODE=1 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "the fetch's lines: no character of control, 4000 bytes of them at most" eval \
+  'local_lines=$(printf "%s\n" "$OUT" | grep "^LOCAL needs " | sed "s/^LOCAL needs //") \
+   && ! printf "%s" "$local_lines" | LC_ALL=C grep -q "[[:cntrl:]]" && [ "$(printf "%s" "$local_lines" | wc -c)" -le 4000 ] \
+   && printf "%s\n" "$local_lines" | grep -q "^NEEDS-MISSING file corpus.bin: \[31mred\[0m and a bell$"'
 mv "$HOME/.hive/needs/bee-ruche/toy" "$T/needs-real" && ln -s "$T/needs-real" "$HOME/.hive/needs/bee-ruche/toy"
 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
 check "refused: the needs' folder a link, before the fetch" eval '[ "$CODE" -eq 2 ] && ! ran needs-fetch && ! ran tool'
@@ -681,6 +711,22 @@ check "refused: login replacing the one recorded" eval '[ "$CODE" -eq 2 ] && [ "
   && [ "$(cat "$HOME/.hive/login")" = Alice ]'
 launch login "al ice"
 check "refused: login of another form" eval 'refused 2 "local.sh login takes one word"'
+# accept-needs: the user's own step, in a terminal, for one project and one digest.
+cp "$ACCEPTED_FILE" "$T/accepted-aside"
+D2=$(printf "f%.0s" $(seq 64))
+launch accept-needs --project Bee-ruche/toy "$D2"
+check "refused: accept-needs with no terminal (an assistant's command)" eval \
+  'refused 2 "local.sh accept-needs is the user'"'"'s own step" && [ "$(cat "$ACCEPTED_FILE")" = "$DIGEST" ]'
+launch_tty accept-needs --project Bee-ruche/TOY "$D2"
+check "accept-needs: typed in a terminal, the project's record replaced (its name in lower case)" eval \
+  '[ "$CODE" -eq 0 ] && [ "$OUT" = "LOCAL accepted bee-ruche/toy $D2" ] && [ "$(cat "$ACCEPTED_FILE")" = "$D2" ]'
+launch_tty accept-needs --project Bee-ruche/toy "${D2}0"
+check "refused: accept-needs given a digest of another shape" eval '[ "$CODE" -eq 2 ] && printf "%s" "$OUT" | grep -q "takes the digest of the project" && [ "$(cat "$ACCEPTED_FILE")" = "$D2" ]'
+launch_tty accept-needs --project ../toy "$D2"
+check "refused: accept-needs given a project of another form" eval '[ "$CODE" -eq 2 ] && printf "%s" "$OUT" | grep -q "^hive: --project:"'
+launch_tty accept-needs "$D2"
+check "refused: accept-needs with no project" eval '[ "$CODE" -eq 2 ] && printf "%s" "$OUT" | grep -q "takes --project <owner/name> and the digest"'
+cp "$T/accepted-aside" "$ACCEPTED_FILE"
 mv "$T/login-aside" "$HOME/.hive/login"
 launch hive next --project Bee-ruche/toy --login bob
 check "refused: a login that is not the one recorded" eval 'refused 2 "--login is not the login the user recorded" && nothing_ran'
@@ -879,7 +925,7 @@ grep -ho 'bash ~/\.hive/protocol/tools/hive/local\.sh [^`]*' "$ROOT/docs/enter.m
 : > "$T/doc-unread"
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
-    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g')
+    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<owner/project>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g' -e "s|<DIGEST>|$DIGEST|g; s|<digest>|$DIGEST|g")
   case "$words" in *"<"*) printf '%s (a placeholder this test knows no value for)\n' "$line" >> "$T/doc-unread"; continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
@@ -887,6 +933,7 @@ while IFS= read -r line; do
   # takes no login: it must stop on none of the launcher's readings of a command line.
   case "$words" in
     login\ *) want="hive: local.sh login is the user's own step" ;;
+    accept-needs\ *) want="hive: local.sh accept-needs is the user's own step" ;;
     refresh\ *|needs\ *) want="" ;;
     *) want="hive: no login is recorded on this machine" ;;
   esac
@@ -902,7 +949,7 @@ DOCS_HOME2="$T/docs-home2"
 mkdir -p "$DOCS_HOME2/.hive" && printf 'alice\n' > "$DOCS_HOME2/.hive/login"
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
-    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g')
+    | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<owner/project>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g' -e "s|<DIGEST>|$DIGEST|g; s|<digest>|$DIGEST|g")
   case "$words" in login\ *|*"<"*) continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME2" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
@@ -913,7 +960,7 @@ done < "$T/doc-lines"
 docs_read() {  # every line read, and each of the launcher's commands given at least once
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
-  for word in check clone refresh needs sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  for word in check clone refresh needs sandbox login accept-needs; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
   # No PowerShell command line in the volunteer's docs: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a
   # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"

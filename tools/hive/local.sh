@@ -14,6 +14,8 @@
 #   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh refresh --project <owner/name>
 #   local.sh needs   --project <owner/name>             (what the project needs of a worker's machine, after the yes)
+#   local.sh accept-needs --project <owner/name> <digest>  (the user, typed in a real terminal of their own, never by an
+#                                         assistant: the project's needs they accept, as local.sh needs gave their digest)
 #   local.sh hive    <setup|next|start|ready|submit|release|duty> --project … --login … [--fork …] [the tool's options]
 #   local.sh sandbox --project <owner/name> --login <login> [--fork <name>] -- <command…>
 #
@@ -24,6 +26,8 @@
 # Places, all under ~/.hive and built from the arguments alone, each matched by the tool's own patterns first, and
 # each shown to Docker by the very place it resolves to, which must be the place it names (placed: no link on the way):
 #   login                          the login the user recorded (local.sh login): every command's --login must be it
+#   accepted/<owner>/<name>        the digest of the project's needs the user accepted (local.sh accept-needs): the needs'
+#                                  fetch runs for that digest alone
 #   protocol/                      the hive's protocol, a clone the owner keeps (the guide's « The run »): hive.py from here
 #   work/<login>/<fork>/           the fork's clone, made by the tool's container (clone), never by this machine's git
 #   state/<owner>/<name>/          the project's state (refresh)
@@ -41,10 +45,11 @@
 # Written for bash 3.2 (macOS's own) and Git Bash: no associative array, no ${x,,}, no mapfile.
 set -u
 
-# (The tests' copy, test_local.sh, replaces these lines and no other: a folder of bare repositories for GitHub, and
-# the rule that lets git read such a folder.)
+# (The tests' copy, test_local.sh, replaces these lines and no other: a folder of bare repositories for GitHub, the rule
+# that lets git read such a folder, and a shorter bound for the needs' fetch.)
 GITHUB="https://github.com"
 FILE_PROTOCOL="never"
+NEEDS_SECONDS=1860         # how long the needs' fetch may take, at most (hive.py's own bound for all of them, and a minute)
 
 DOCKER="docker"
 GIT="git"
@@ -161,6 +166,23 @@ if [ "$COMMAND" = login ]; then
   exit 0
 fi
 
+if [ "$COMMAND" = accept-needs ]; then
+  # The user's own step, for each project and each version of its needs: the digest local.sh needs gave, accepted by the
+  # user in a terminal of their own (as login), so that an assistant misled by a project's text never opens the needs'
+  # fetch, the one container that reaches hosts other than GitHub, without them. It replaces the project's record.
+  [ $# -eq 3 ] && [ "$1" = --project ] || die "local.sh accept-needs takes --project <owner/name> and the digest local.sh needs gave"
+  owner="${2%%/*}" name="${2#*/}"
+  if [ "$owner/$name" != "$2" ] || ! [[ $owner =~ $LOGIN_RE ]] || ! [[ $name =~ $NAME_RE ]] || [ "$name" = . ] || [ "$name" = .. ]; then
+    die "--project: the project's repository on GitHub, owner/name"
+  fi
+  [[ $3 =~ ^[0-9a-f]{64}$ ]] || die "local.sh accept-needs takes the digest of the project's needs, 64 hexadecimal digits, as local.sh needs printed it"
+  [ -t 0 ] && [ -t 1 ] || die "local.sh accept-needs is the user's own step, typed in a terminal of their own (on Windows, in Git Bash): an assistant never runs it"
+  place="$HIVE/accepted/$(lower "$owner")"
+  mkdir -p "$place" && printf '%s\n' "$3" > "$place/$(lower "$name")" || die "no room under $HIVE"
+  say "LOCAL accepted $(lower "$owner")/$(lower "$name") $3"
+  exit 0
+fi
+
 SUB=""
 case "$COMMAND" in
   check|clone|refresh|needs|sandbox) ;;
@@ -171,7 +193,7 @@ case "$COMMAND" in
       setup|next|start|ready|submit|release|duty) ;;
       *) die "local.sh hive takes one of setup, next, start, ready, submit, release, duty: the worker's commands, and no other" ;;
     esac ;;
-  *) die "local.sh takes login, check, clone, refresh, needs, hive or sandbox" ;;
+  *) die "local.sh takes login, accept-needs, check, clone, refresh, needs, hive or sandbox" ;;
 esac
 
 # The options each command takes: « name » takes a value, « name! » is a flag.
@@ -264,13 +286,14 @@ EGRESS="hive-egress-$$-$RANDOM"  # the gate's container, this run's own
 # Leaving: whatever happened, this run's gate removed, the slot emptied after a pushing command, the copy of a
 # hand-over removed, the project's lock given back.
 
-GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED="" FETCHER=""
+GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED="" FETCHER="" SAID=""
 empty_slot() { rm -rf "$SLOT" && mkdir -p "$SLOT"; }
 leave() {
   [ -z "$COPY" ] || rm -rf "$COPY"
   [ -z "$EMPTY_ON_EXIT" ] || empty_slot
   [ -z "$GATE_UP" ] || "$DOCKER" rm -f "$EGRESS" >/dev/null 2>&1
   [ -z "$FETCHER" ] || "$DOCKER" rm -f "$FETCHER" >/dev/null 2>&1
+  [ -z "$SAID" ] || rm -f "$SAID"
   [ -z "$LOCKED" ] || rm -rf "$LOCK"
 }
 trap leave EXIT
@@ -752,7 +775,10 @@ case "$COMMAND" in
     egress_up
     [ -n "$PUSHING" ] && EMPTY_ON_EXIT=1
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
-    if [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ]; then
+    ACCEPTED_RECORD="$HIVE/accepted/$(lower "$OWNER")/$(lower "$NAME")"
+    if [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ] && ! { [ -f "$ACCEPTED_RECORD" ] && [ ! -L "$ACCEPTED_RECORD" ] && [ "$(head -c 100 "$ACCEPTED_RECORD")" = "$NEEDS_ACCEPTED" ]; }; then
+      say "LOCAL needs not-accepted-here: no files are fetched for this digest until the user, never an assistant, types « local.sh accept-needs --project $PROJECT $NEEDS_ACCEPTED » in a terminal of their own"
+    elif [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ]; then
       # The project's files and documents, fetched by the tool's own code (needs-fetch: https, each file held to its
       # size and SHA-256) in a container of their own: Docker's default network, which reaches the needs' hosts (the
       # gate passes github.com alone, and the fetch reads no proxy), and nothing but the protocol's tools and the
@@ -766,15 +792,18 @@ case "$COMMAND" in
       needs_own
       FETCHER="hive-needs-$$-$RANDOM"
       said_file=$(mktemp "$HIVE/.needs.XXXXXX") || die "no room under $HIVE"
-      "$DOCKER" run "${LIMITS[@]}" --name "$FETCHER" --network bridge --label hive.role=needs-fetch --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g \
+      SAID="$said_file"
+      GIT_MEMORY_KB="" within "$NEEDS_SECONDS" /dev/null "$DOCKER" run "${LIMITS[@]}" --name "$FETCHER" --network bridge --label hive.role=needs-fetch --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g \
         --tmpfs "/hive/home:rw,uid=${OWNER_IDS%%:*},gid=${OWNER_IDS##*:},mode=700" -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" \
         --mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/hive/home/.hive/needs/$(lower "$OWNER")/$(lower "$NAME")" \
         "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py needs-fetch --project "$PROJECT" --needs-accepted "$NEEDS_ACCEPTED" \
         --needs-home /hive/home > "$said_file" 2>&1
       fetch_code=$?
-      head -n 40 "$said_file" | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
-      if [ "$fetch_code" -ne 0 ] && ! grep -q '^NEEDS-' "$said_file"; then say "LOCAL needs fetch-failed $fetch_code"; fi
-      rm -f "$said_file"
+      [ "$fetch_code" -eq 0 ] || "$DOCKER" rm -f "$FETCHER" >/dev/null 2>&1  # (past its bound, the client is killed: the container too)
+      # Its lines, 4000 bytes at most, with no character of control but the line's end.
+      head -c 4000 "$said_file" | tr -d '\000-\011\013-\037\177' | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
+      if [ "$fetch_code" -ne 0 ] && ! grep -q '^NEEDS-\(FETCHED\|MISSING\|UNACCEPTED\) ' "$said_file"; then say "LOCAL needs fetch-failed $fetch_code"; fi
+      rm -f "$said_file"; SAID=""
     fi
     # Right before the tool runs: each place resolved, each mount built.
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
