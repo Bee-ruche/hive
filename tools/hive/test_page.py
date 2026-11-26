@@ -2923,8 +2923,8 @@ class TestThePageWorkflow(unittest.TestCase):
     PAGE = {"name": "The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages",
             "env": {"REPOSITORY": "${{ github.repository }}", "TITLE": "${{ inputs.title }}", "SITE_URL": "${{ inputs.site_url }}"},
             "run": "site=()\n"
-                   '[[ -z "$SITE_URL" ]] || site=(--site-url "$SITE_URL")\n'
-                   'python3 protocol/tools/hive/page.py --state state --out page --title "$TITLE" --repo-url "https://github.com/$REPOSITORY" \\\n'
+                   '[[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")\n'
+                   'python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\\n'
                    '  --tasks published/tasks.jsonl --project published/project.json "${site[@]}"\n'
                    "tar --create --file artifact.tar --directory page .\n"}
 
@@ -2996,7 +2996,7 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual([step["with"] for step in build[2:] if step.get("uses") == self.RUN.CHECKOUT], [self.RUN.STATE_READ["with"]])
         runs = "\n".join(step.get("run", "") for job in self.jobs.values() for step in job["steps"])
         self.assertEqual([line.strip() for line in runs.splitlines() if "python3" in line],
-                         ['python3 protocol/tools/hive/page.py --state state --out page --title "$TITLE" --repo-url "https://github.com/$REPOSITORY" \\'])
+                         ['python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\'])
         self.assertEqual(re.findall(r"git clone[^\n]*", runs), ['git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project'])
         self.assertEqual(re.findall(r"git -C project (\S+) (\S+)", runs), [("show", "HEAD:hive/tasks.jsonl"), ("show", "HEAD:hive/project.json")])
         for word in ("hive.py", "artifact.py", "fetch", "forks", "bundle", "candidate", "push", "git checkout", "curl", "wget", "pip ", "npm ", "docker",
@@ -3021,11 +3021,15 @@ class TestThePageWorkflow(unittest.TestCase):
             self.assertRegex(action, r"\Aactions/[a-z-]+@[0-9a-f]{40}\Z")
 
     def test_deploy_follows_build_and_each_jobs_time(self):
-        """deploy after build, and only once it succeeded (nothing to deploy otherwise); each job's time, and the upload
-        kept a day: Pages takes it at once, and the next run makes another."""
+        """deploy after build, and only once it succeeded (nothing to deploy otherwise), each on GitHub's own machine
+        as the run's jobs are; each job's time; and one upload, of the archive the page's step packs, under the one name
+        Pages' action looks for, kept a day: Pages takes it at once, and the next run makes another."""
         self.assertEqual({name: (job.get("needs"), job.get("if")) for name, job in self.jobs.items()}, {"build": (None, None), "deploy": ("build", None)})
+        self.assertEqual({name: job["runs-on"] for name, job in self.jobs.items()}, {"build": "ubuntu-24.04", "deploy": "ubuntu-24.04"})
         self.assertEqual({name: job["timeout-minutes"] for name, job in self.jobs.items()}, {"build": 10, "deploy": 15})
-        self.assertEqual([step["with"]["retention-days"] for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.UPLOAD], [1])
+        self.assertEqual([step["with"] for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.UPLOAD],
+                         [{"name": "github-pages", "path": "artifact.tar", "retention-days": 1}])
+        self.assertIn("tar --create --file artifact.tar --directory page .\n", self.making()[1]["run"])
 
     def making(self):
         """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
@@ -3035,53 +3039,54 @@ class TestThePageWorkflow(unittest.TestCase):
         return steps[3], steps[4]
 
     def run_steps(self, folder, environment, *steps):
-        """Steps of build, run here one after the other with bash as the runner runs them (bash -e, pipefail), in
-        `folder` (protocol/: this repository's tree; state/: a project's state), with `environment` and a PATH whose
-        git fetches `ORIGIN` for any address of github.com: (exit code, what was said)."""
-        (folder / "bin").mkdir(exist_ok=True)
-        git = shutil.which("git")
-        (folder / "bin/git").write_text('#!/bin/bash\nargs=()\nfor a in "$@"; do [[ "$a" == https://github.com/* ]] && a="$ORIGIN"; args+=("$a"); done\n'
-                                        f'exec {git} "${{args[@]}}"\n')
-        os.chmod(folder / "bin/git", 0o755)
+        """Steps of build, run here one after the other as the runner runs a step that names no shell (bash -e), in
+        `folder` (protocol/: this repository's tree; state/: a project's state), with `environment` (world()'s: git
+        reads no configuration of this machine's, and fetches the project's local stand-in for its address on
+        github.com): (exit code, what was said)."""
         said = []
         for step in steps:
-            ran = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]], cwd=folder, capture_output=True,
-                                 text=True, timeout=300,
-                                 env={"PATH": f"{folder / 'bin'}:{os.environ['PATH']}", "HOME": str(folder), "HIVE_NOW": NOW,
-                                      "GIT_CONFIG_NOSYSTEM": "1", **environment})
+            ran = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=folder, capture_output=True, text=True, timeout=300,
+                                 env={"PATH": os.environ["PATH"], "HIVE_NOW": NOW, **environment})
             said.append(ran.stdout + ran.stderr)
             if ran.returncode:
                 return ran.returncode, "".join(said)
         return 0, "".join(said)
 
+    def git(self, *argv):
+        """git on the project's stand-in (self.origin), with world()'s environment and an identity of its own."""
+        subprocess.run(["git", "-C", str(self.origin), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv], check=True, capture_output=True,
+                       timeout=60, env={"PATH": os.environ["PATH"], **self.environment})
+
     def world(self):
         """A folder as build has it before its own steps: protocol/ (this repository's tree), state/ (a project's
         state, with one accepted contribution), and a project whose published branch holds the example project's two
-        files, plus a link and a file the page has no business with."""
+        files, plus a link and a file the page has no business with (self.origin, which git reaches for the project's
+        address on github.com). Returns (the folder, the environment the steps run with)."""
         folder = Path(tempfile.mkdtemp(prefix="page-steps-"))
         self.addCleanup(shutil.rmtree, folder, True)
         (folder / "protocol").symlink_to(self.ROOT)
         (folder / "state").mkdir()
         with open(folder / "state/ledger.jsonl", "w") as f:
             f.write(json.dumps(verdict(1, "2026-11-11T10:00:00Z", "alice", 101, "toy-0001")) + "\n")
-        origin = folder / "origin"
-        (origin / "hive").mkdir(parents=True)
+        self.origin = folder / "origin"
+        (self.origin / "hive").mkdir(parents=True)
         for name in ("project.json", "tasks.jsonl"):
-            shutil.copyfile(self.ROOT / "examples/project/hive" / name, origin / "hive" / name)
-        (origin / "elsewhere").write_text("never written out\n")
-        (origin / "a-link").symlink_to("/etc/passwd")
-        identity = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
-        for command in (["init", "-q", "-b", "master"], ["add", "-A"], [*identity, "commit", "-q", "-m", "published"]):
-            subprocess.run(["git", "-C", str(origin), *command], check=True, capture_output=True, timeout=60, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1"})
-        return folder, {"ORIGIN": f"file://{origin}", "REPOSITORY": "Bee-ruche/toy"}
+            shutil.copyfile(self.ROOT / "examples/project/hive" / name, self.origin / "hive" / name)
+        (self.origin / "elsewhere").write_text("never written out\n")
+        (self.origin / "a-link").symlink_to("/etc/passwd")
+        self.environment = {"HOME": str(folder), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_COUNT": "1",
+                            "GIT_CONFIG_KEY_0": f"url.file://{self.origin}.insteadOf", "GIT_CONFIG_VALUE_0": "https://github.com/Bee-ruche/toy",
+                            "REPOSITORY": "Bee-ruche/toy"}
+        for command in (["init", "-q", "-b", "master"], ["add", "-A"], ["commit", "-q", "-m", "published"]):
+            self.git(*command)
+        return folder, dict(self.environment)
 
-    @staticmethod
-    def packed(folder):
+    def packed(self, folder):
         """The archive's members, as Pages reads them: {name: bytes}, after checking each is a plain file or folder."""
         with tarfile.open(folder / "artifact.tar") as archive:
             members = archive.getmembers()
             for member in members:
-                assert (member.isfile() or member.isdir()) and not member.name.startswith("/") and ".." not in member.name.split("/"), member.name
+                self.assertTrue((member.isfile() or member.isdir()) and not member.name.startswith("/") and ".." not in member.name.split("/"), member.name)
             return {member.name: archive.extractfile(member).read() for member in members if member.isfile()}
 
     def test_the_steps_that_make_the_page_run_as_the_runner_runs_them(self):
@@ -3107,6 +3112,21 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertIn(f"{REPO}/commit/{sha(5001)}", packed["./index.html"].decode(), "the project's own address")
         self.assertIsNotNone(json.loads(packed["./summary.json"])["map"], "the task file reached page.py (--tasks)")
 
+    def test_a_title_that_looks_like_an_option_is_a_title(self):
+        """The caller's texts reach page.py joined to their option's name (--title=..., --site-url=...): a title that
+        starts with a dash is the title, not an option of page.py's, and one that names an option sets nothing."""
+        folder, environment = self.world()
+        for title in ("--now", "-x", "--help", "--now=2020-01-01T00:00:00Z", "-"):
+            with self.subTest(title=title):
+                shutil.rmtree(folder / "page", ignore_errors=True)
+                (folder / "artifact.tar").unlink(missing_ok=True)
+                steps = self.making() if not (folder / "published").exists() else self.making()[1:]
+                code, said = self.run_steps(folder, {**environment, "TITLE": title, "SITE_URL": ""}, *steps)
+                self.assertEqual(code, 0, said)
+                index = self.packed(folder)["./index.html"].decode()
+                self.assertIn(title, Seen(index).said)
+                self.assertNotIn("2020", json.loads(self.packed(folder)["./summary.json"]).get("generated_at", ""), "--now was not set by the title")
+
     def test_an_empty_address_is_left_out_and_a_wrong_one_stops_the_step_before_anything_is_packed(self):
         """No address: page.py is not given --site-url, and the pages of the contributions give no Markdown. An address
         page.py does not take, or a state it cannot read: the step stops, nothing is packed, and so nothing is uploaded
@@ -3128,24 +3148,23 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertFalse((folder / "artifact.tar").exists())
 
     def test_a_published_branch_without_the_two_files_stops_the_step(self):
-        """A project whose published branch lacks its tasks or its settings is no hive project: the step stops, and no
-        page is made from half of what it reads."""
-        folder, environment = self.world()
-        origin = Path(environment["ORIGIN"][len("file://"):])
-        subprocess.run(["git", "-C", str(origin), "rm", "-q", "hive/tasks.jsonl"], check=True, capture_output=True, timeout=60)
-        subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "no tasks"], check=True,
-                       capture_output=True, timeout=60)
-        code, said = self.run_steps(folder, environment, self.making()[0])
-        self.assertNotEqual(code, 0, said)
+        """A project whose published branch lacks its tasks or its settings is no hive project: the step that writes
+        them out stops, saying which, and no page is made from half of what it reads."""
+        for name in ("tasks.jsonl", "project.json"):
+            with self.subTest(missing=name):
+                folder, environment = self.world()
+                self.git("rm", "-q", f"hive/{name}")
+                self.git("commit", "-q", "-m", f"no {name}")
+                code, said = self.run_steps(folder, environment, self.making()[0])
+                self.assertNotEqual(code, 0, said)
+                self.assertIn(f"hive/{name}", said)
 
     def test_settings_that_are_no_projects_file_stop_the_page(self):
         """page.py is given the project's file of settings (it says which proofs the project takes): a published branch
         whose hive/project.json is no project's file stops the page's step, and nothing is packed."""
         folder, environment = self.world()
-        origin = Path(environment["ORIGIN"][len("file://"):])
-        (origin / "hive/project.json").write_text("[]")
-        subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-am", "not settings"], check=True,
-                       capture_output=True, timeout=60)
+        (self.origin / "hive/project.json").write_text("[]")
+        self.git("commit", "-q", "-am", "not settings")
         code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
         self.assertNotEqual(code, 0, said)
         self.assertIn("--project", said)
@@ -3173,13 +3192,31 @@ class TestThePageWorkflow(unittest.TestCase):
             self.assertNotIn(word, re.sub(r"(?m)#.*$", "", self.caller_text))
 
     def test_the_document_says_what_a_project_sets_once(self):
-        """docs/hosting.md says how a project takes the page: the workflow and the example, the Pages source, the
-        actions a limited list must allow, and that the deploy needs no branch."""
+        """docs/hosting.md, in a section of its own, says how a project takes the page: the Pages source and the
+        environment's branch, the example caller and the two places each change is made, the address's shape, the
+        actions a limited list must allow (also in the list of the repository's settings), that the deploy writes no
+        branch, and that it was not tried on GitHub; the line that said the page is no part of the run says where it
+        is. The other documents that speak of the page point to that section."""
         hosting = (self.ROOT / "docs/hosting.md").read_text(encoding="utf-8")
-        for words in (".github/workflows/page.yml", "examples/page/.github/workflows/hive.yml", "GitHub Actions", "`github-pages`",
-                      "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "No branch is written"):
-            self.assertIn(words, hosting)
+        section = hosting.split("\n## The project's page, after each run\n", 1)[1].split("\n## ", 1)[0]
+        for words in ("Settings, Pages", "Source: GitHub Actions", "\"Deployment\n   branches and tags\" should allow the published branch alone",
+                      "`github-pages`",
+                      "[`.github/workflows/page.yml`](../.github/workflows/page.yml)",
+                      "[`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml)",
+                      "the commit in both `uses` lines", "the branch in both\n   `if` lines", "the host in lower case, no final slash",
+                      "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "No branch is written", "`--title=...`", "start a run"):
+            self.assertIn(words, section)
+        allowed = re.search(r"(?s)\n- \*\*Settings, Actions, General, \"Actions permissions\"\*\*.*?\n- ", hosting).group(0)
+        self.assertIn("`Bee-ruche/hive/.github/workflows/page.yml` and\n  `actions/deploy-pages`", allowed)
+        untried = hosting.split("\n## What could not be tried here\n", 1)[1]
+        self.assertIn("- **The page's workflow, on GitHub**", untried)
         self.assertNotIn("The page (`tools/hive/page.py`) is not part of the run.", hosting)
+        self.assertIn('not part of the run: a project that wants it calls its own workflow after the\n  run ("The project\'s page, after each run")', hosting)
+        pointer = "\"The project's page, after each run\""
+        for path in ("README.md", "docs/join.md", "examples/README.md"):
+            self.assertIn(pointer.replace('"', ""), (self.ROOT / path).read_text(encoding="utf-8").replace('"', "").replace("\n  ", " "), path)
+        not_settings = " ".join(json.loads((self.ROOT / "hive/settings.json").read_text(encoding="utf-8"))["not_settings"])
+        self.assertIn(pointer, not_settings)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ publishes the cut that passes the gate ([docs/protocol.md](docs/protocol.md), "T
 
 - `.github/workflows/run.yml`: the hive's run, a reusable workflow a project calls from its own repository, with its
   own token and no secret ([docs/hosting.md](docs/hosting.md)).
+- `.github/workflows/page.yml`: the project's public page, made again after each run and deployed to GitHub Pages, for
+  a project that calls it after the run ([docs/hosting.md](docs/hosting.md), "The project's page, after each run").
 - `tools/hive/`: the hive's tool (`hive.py`: the steps of a run and the volunteer's commands), the project's page
   (`page.py`), how a job of a run takes an earlier job's files (`artifact.py`), and their tests; and the local bee:
   the volunteer's worker on Windows, macOS or Linux through Docker (`local.sh`; a PowerShell shim, `local.ps1`, not

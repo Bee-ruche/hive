@@ -231,10 +231,10 @@ All of it in the project's own repository. Copies of the first test project's ar
    [`examples/project/.github/workflows/hive.yml`](../examples/project/.github/workflows/hive.yml) with two changes:
    the forty zeros replaced by the full id of the commit of `Bee-ruche/hive`'s main that the project runs, and the
    branch its `if` names set to the project's default branch. It asks GitHub to run the hive every hour (below, "GitHub
-   starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for. A project that also wants its
-   public page made again after each run copies
+   starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for.
+   A project that also wants its public page made again after each run copies
    [`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml) instead, with the same
-   changes made to both lines that name `Bee-ruche/hive` ("The project's page, after each run", below).
+   changes made in both of its jobs ("The project's page, after each run", below).
 4. **The branch `hive-state`**, made once by the lead: a branch of its own history (none of the project's), which
    holds the hive's state (`ledger.jsonl`, `feed.json`, `ignored.json`, `accounts.json`, `stats.json`, and `tip.json`
    where the project's judge answers about the tip: [cutter.md](cutter.md), "The proof at the tip") at its root.
@@ -542,10 +542,13 @@ What the lead does, once:
    no secret and needs no reviewer. A project that published by hand on a branch (`gh-pages`) stops being served from
    it at that switch: the branch is no longer read, and a maintainer may keep it or remove it.
 2. **The caller**: [`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml) in place
-   of the plain example, with the same changes (the commit, the branch), made to both lines that name `Bee-ruche/hive`:
-   the page runs at the same commit as the run. Its two texts may be filled in or left empty: `title`, the line under
-   the project's name, and `site_url`, the address Pages serves the site at (`https://owner.github.io/name`, no final
-   slash), which the page of each contribution needs to give the Markdown that shows its card elsewhere.
+   of the plain example, with the same changes, each made twice: the commit in both `uses` lines (the page is meant to
+   run at the same commit as the run; each job checks its own commit is on the hive's main), and the branch in both
+   `if` lines (a page job whose `if` names another branch is skipped at every run, without a word). Its two texts may be
+   filled in or left empty: `title`, the line under the project's name, and `site_url`, the address Pages serves the
+   site at (`https://owner.github.io/name`, the host in lower case, no final slash), which the page of each
+   contribution needs to give the Markdown that shows its card elsewhere. An address `page.py` does not take stops
+   every page (below).
 3. **Where the actions allowed are limited** ("The repository's settings"): the page's workflow and
    `actions/deploy-pages`, at the commit it names.
 
@@ -564,13 +567,18 @@ What it does:
   `actions/deploy-pages` pinned to a commit: no checkout, none of the hive's code, no file read.
 - **No branch is written**, by either job: the deploy is no push, so the rulesets ("The repository's settings") need no
   change, and no `gh-pages` branch is needed.
-- **Nothing of a contributor's is on the machine.** No fork, no candidate and not the hive's own branch is fetched: the
-  page is made from the hive's own state, which holds texts that strangers chose (logins, model identifiers) and which
-  `page.py` reads as data, checked, bounded and escaped ("Trust" at the head of `page.py`). The title and the address
-  are the caller's own: they reach `page.py` through the step's environment, and it bounds the one and checks the
-  other.
+- **Nothing of a contributor's is fetched, checked out or run.** No fork, no candidate and not the hive's own branch is
+  fetched; the published branch's tip comes as git's objects alone (what its maintainers published), of which two
+  files are written out. The page is made from the hive's own state, which holds texts that strangers chose (logins,
+  model identifiers) and which `page.py` reads as data, checked, bounded and escaped ("Trust" at the head of
+  `page.py`). The title and the address are the caller's own: they reach `page.py` through the step's environment,
+  joined to their option's name (`--title=...`, so that a title that starts with a dash is still a title), and it
+  bounds the one and checks the other.
 - **What a token could do if it leaked while its job runs**: build's reads the repository; deploy's replaces the site
   (what a write to a `gh-pages` branch could do), and nothing else of the repository.
+- **A public repository**, as for the run: build clones the project without credentials.
+- **To make the page again, start a run** ("Run workflow"), not a re-run of an earlier one: a re-run may find the
+  earlier attempt's upload under the same name, which the upload refuses, or, after a day, find it gone.
 
 It is not a setting of `hive/project.json`: the caller's job is the switch, because only the caller can give the
 deploying job its two permissions, and a run that asked for them of every project would fail where they are not

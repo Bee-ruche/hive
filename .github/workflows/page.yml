@@ -64,8 +64,8 @@ jobs:
           SITE_URL: ${{ inputs.site_url }}
         run: |
           site=()
-          [[ -z "$SITE_URL" ]] || site=(--site-url "$SITE_URL")
-          python3 protocol/tools/hive/page.py --state state --out page --title "$TITLE" --repo-url "https://github.com/$REPOSITORY" \
+          [[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")
+          python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \
             --tasks published/tasks.jsonl --project published/project.json "${site[@]}"
           tar --create --file artifact.tar --directory page .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
