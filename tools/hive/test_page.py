@@ -3020,6 +3020,20 @@ class TestThePageWorkflow(unittest.TestCase):
         for action in re.findall(r"uses: (\S+)", self.uncommented):
             self.assertRegex(action, r"\Aactions/[a-z-]+@[0-9a-f]{40}\Z")
 
+    def test_deploy_follows_build_and_each_jobs_time(self):
+        """deploy after build, and only once it succeeded (nothing to deploy otherwise); each job's time, and the upload
+        kept a day: Pages takes it at once, and the next run makes another."""
+        self.assertEqual({name: (job.get("needs"), job.get("if")) for name, job in self.jobs.items()}, {"build": (None, None), "deploy": ("build", None)})
+        self.assertEqual({name: job["timeout-minutes"] for name, job in self.jobs.items()}, {"build": 10, "deploy": 15})
+        self.assertEqual([step["with"]["retention-days"] for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.UPLOAD], [1])
+
+    def making(self):
+        """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
+        files, the page and its archive). The tests below run these, not a copy."""
+        steps = self.jobs["build"]["steps"]
+        self.assertEqual([step.get("name") for step in steps[3:5]], [self.PUBLISHED["name"], self.PAGE["name"]])
+        return steps[3], steps[4]
+
     def run_steps(self, folder, environment, *steps):
         """Steps of build, run here one after the other with bash as the runner runs them (bash -e, pipefail), in
         `folder` (protocol/: this repository's tree; state/: a project's state), with `environment` and a PATH whose
@@ -3077,7 +3091,7 @@ class TestThePageWorkflow(unittest.TestCase):
         caller wrote them, as data: a title that looks like shell is shown as text and runs nothing."""
         folder, environment = self.world()
         title = 'A toy $(touch ran) `touch ran` "; touch ran'
-        code, said = self.run_steps(folder, {**environment, "TITLE": title, "SITE_URL": SITE}, self.PUBLISHED, self.PAGE)
+        code, said = self.run_steps(folder, {**environment, "TITLE": title, "SITE_URL": SITE}, *self.making())
         self.assertEqual(code, 0, said)
         for name in ("project.json", "tasks.jsonl"):
             self.assertEqual((folder / "published" / name).read_bytes(), (self.ROOT / "examples/project/hive" / name).read_bytes())
@@ -3091,24 +3105,25 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertIn(f"{SITE}/wins/{sha(5001)}.svg", packed[win].decode(), "the address reached page.py")
         self.assertIn(title, Seen(packed["./index.html"].decode()).said, "the title, shown as text")
         self.assertIn(f"{REPO}/commit/{sha(5001)}", packed["./index.html"].decode(), "the project's own address")
+        self.assertIsNotNone(json.loads(packed["./summary.json"])["map"], "the task file reached page.py (--tasks)")
 
     def test_an_empty_address_is_left_out_and_a_wrong_one_stops_the_step_before_anything_is_packed(self):
         """No address: page.py is not given --site-url, and the pages of the contributions give no Markdown. An address
         page.py does not take, or a state it cannot read: the step stops, nothing is packed, and so nothing is uploaded
         or deployed (the site stays as it was)."""
         folder, environment = self.world()
-        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.PUBLISHED, self.PAGE)
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
         self.assertEqual(code, 0, said)
         self.assertNotIn("github.io", self.packed(folder)[f"./wins/{sha(5001)}.html"].decode())
         for site in ("http://bee-ruche.github.io/toy", "https://bee-ruche.github.io/toy/", "https://x.example/a b", "--now=2020-01-01T00:00:00Z"):
             with self.subTest(site=site):
                 shutil.rmtree(folder / "page", ignore_errors=True)
                 (folder / "artifact.tar").unlink(missing_ok=True)
-                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": site}, self.PAGE)
+                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": site}, self.making()[1])
                 self.assertNotEqual(code, 0, said)
                 self.assertFalse((folder / "artifact.tar").exists())
         shutil.rmtree(folder / "state")
-        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.PAGE)
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.making()[1])
         self.assertNotEqual(code, 0, said)
         self.assertFalse((folder / "artifact.tar").exists())
 
@@ -3120,8 +3135,21 @@ class TestThePageWorkflow(unittest.TestCase):
         subprocess.run(["git", "-C", str(origin), "rm", "-q", "hive/tasks.jsonl"], check=True, capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "no tasks"], check=True,
                        capture_output=True, timeout=60)
-        code, said = self.run_steps(folder, environment, self.PUBLISHED)
+        code, said = self.run_steps(folder, environment, self.making()[0])
         self.assertNotEqual(code, 0, said)
+
+    def test_settings_that_are_no_projects_file_stop_the_page(self):
+        """page.py is given the project's file of settings (it says which proofs the project takes): a published branch
+        whose hive/project.json is no project's file stops the page's step, and nothing is packed."""
+        folder, environment = self.world()
+        origin = Path(environment["ORIGIN"][len("file://"):])
+        (origin / "hive/project.json").write_text("[]")
+        subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-am", "not settings"], check=True,
+                       capture_output=True, timeout=60)
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+        self.assertNotEqual(code, 0, said)
+        self.assertIn("--project", said)
+        self.assertFalse((folder / "artifact.tar").exists())
 
     def test_the_example_caller_is_the_projects_own_with_one_job_more(self):
         """examples/page/.github/workflows/hive.yml: the example caller of the run (examples/project), word for word,
