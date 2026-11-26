@@ -21092,15 +21092,18 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         self.assertEqual((hive.needs_digest(config), commit), (digest, self.w.publish()),
                          "an address of GitHub's: by_fetch reads it with git, and without it the settings come from GitHub's address for files")
         with mock.patch.object(hive, "SETTINGS_BYTES", 10), mock.patch.object(hive, "LOCAL_REMOTES", True), \
-                self.assertRaisesRegex(hive.HiveError, "the project's hive/project.json is larger than 10 bytes"):
+                self.assertRaisesRegex(hive.HiveError, "^the project's hive/project.json is larger than 10 bytes"):
             hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
-        (self.w.published / "corpus.bin").write_bytes(os.urandom(64 << 10))  # (a tip whose pack outweighs the bound: random bytes do not compress)
+        # A tip of many small files (random bytes do not compress): each object alone is far under the bound, and the
+        # one pack the fetch keeps (fetch.unpackLimit=1) is over it. Kept as loose objects, each would pass.
+        for number in range(48):
+            (self.w.published / f"corpus-{number}.bin").write_bytes(os.urandom(1 << 10))
         leads_git("add", "-A", cwd=self.w.published)
         leads_git("commit", "--quiet", "-m", "a large file", cwd=self.w.published)
         leads_git("push", "--quiet", "origin", f"HEAD:refs/heads/{self.w.published_branch}", cwd=self.w.published)
         self.w.last_published = (None, None)
         with mock.patch.object(hive, "SETTINGS_FETCH_BYTES", 32 << 10), mock.patch.object(hive, "LOCAL_REMOTES", True), \
-                self.assertRaisesRegex(hive.HiveError, "it may be larger than 32768 bytes, the most this command fetches"):
+                self.assertRaisesRegex(hive.HiveError, "^the project's tip could not be fetched to read its settings: it may be larger than 32768 bytes, the most this command fetches"):
             hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
         tip = sh("git", "rev-parse", f"refs/heads/{self.w.published_branch}", cwd=self.w.upstream).stdout.strip()
         with mock.patch.object(hive, "LOCAL_REMOTES", True):

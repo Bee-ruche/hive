@@ -778,8 +778,10 @@ case "$COMMAND" in
       fetch_code=$?
       [ "$fetch_code" -eq 0 ] || "$DOCKER" rm -f "$FETCHER" >/dev/null 2>&1  # (past its bound, the client is killed: the container too)
       # Its lines, 4000 bytes at most, with no character of control but the line's end.
-      head -c 4000 "$said_file" | tr -d '\000-\011\013-\037\177' | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
-      if [ "$fetch_code" -ne 0 ] && ! grep -q '^NEEDS-\(FETCHED\|MISSING\|UNACCEPTED\) ' "$said_file"; then say "LOCAL needs fetch-failed $fetch_code"; fi
+      shown=$(head -c 4000 "$said_file" | tr -d '\000-\011\013-\037\177')
+      printf '%s\n' "$shown" | while IFS= read -r line || [ -n "$line" ]; do [ -z "$line" ] || say "LOCAL needs $line"; done
+      # (A failure is said unless the lines shown already say what the fetch found.)
+      if [ "$fetch_code" -ne 0 ] && ! printf '%s\n' "$shown" | grep -q '^NEEDS-\(FETCHED\|MISSING\|UNACCEPTED\) '; then say "LOCAL needs fetch-failed $fetch_code"; fi
       rm -f "$said_file"; SAID=""
     fi
     # Right before the tool runs: each place resolved, each mount built.

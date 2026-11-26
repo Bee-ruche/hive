@@ -426,13 +426,14 @@ STUB_FETCH_SLEEP=20 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next 
 took=$(( $(date +%s) - started ))
 check "a fetch past its bound: stopped, said, its container removed, the tool run" eval \
   '[ "$took" -lt 15 ] && printf "%s\n" "$OUT" | grep -q "^LOCAL needs fetch-failed " && ran tool \
-   && grep -q "^rm -f hive-needs-[0-9]*-[0-9]*$" "$STUB_DIR/calls" && [ -z "$(ls -A "$HOME/.hive" | grep "^\.needs\.")" ]'
+   && [ "$(grep -c "^rm -f hive-needs-[0-9]*-[0-9]*$" "$STUB_DIR/calls")" -ge 2 ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.needs\.")" ]'
 # Its lines: 4000 bytes at most, no character of control.
-{ printf 'NEEDS-MISSING file corpus.bin: \033[31mred\033[0m and a bell\a\n'; for i in $(seq 200); do printf 'NEEDS-MISSING file f%s: %s\n' "$i" "$(printf "x%.0s" $(seq 60))"; done; } > "$T/long-fetch"
+{ printf 'NEEDS-MISSING file corpus.bin: \033[31mred\033[0m and a bell\a\n'; for i in $(seq 200); do printf 'NEEDS-MISSING file f%s: %s\n' "$i" "$(printf "x%.0s" $(seq 150))"; done; } > "$T/long-fetch"
 STUB_FETCH_OUT="$T/long-fetch" STUB_FETCH_CODE=1 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
 check "the fetch's lines: no character of control, 4000 bytes of them at most" eval \
   'local_lines=$(printf "%s\n" "$OUT" | grep "^LOCAL needs " | sed "s/^LOCAL needs //") \
-   && ! printf "%s" "$local_lines" | LC_ALL=C grep -q "[[:cntrl:]]" && [ "$(printf "%s" "$local_lines" | wc -c)" -le 4000 ] \
+   && ! printf "%s" "$local_lines" | LC_ALL=C grep -q "[[:cntrl:]]" && [ "$(printf "%s" "$local_lines" | wc -c)" -le 4000 ] && [ "$(printf "%s" "$local_lines" | wc -c)" -gt 3000 ] \
+   && [ "$(printf "%s\n" "$local_lines" | tail -n 1 | wc -c)" -lt 170 ] \
    && printf "%s\n" "$local_lines" | grep -q "^NEEDS-MISSING file corpus.bin: \[31mred\[0m and a bell$"'
 mv "$HOME/.hive/needs/bee-ruche/toy" "$T/needs-real" && ln -s "$T/needs-real" "$HOME/.hive/needs/bee-ruche/toy"
 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"

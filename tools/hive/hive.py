@@ -8878,7 +8878,8 @@ TIP_TOO_LARGE = "the project is larger than this tool reads ({found}). The task 
 
 
 class TooLarge(HiveError):
-    """An object of the clone is larger than this tool reads (OBJECT_BYTES)."""
+    """What this tool will not read whole: an object of the clone larger than it reads (OBJECT_BYTES), or the project's settings
+    or the tip it fetches to read them (settings_at_the_address)."""
 
 
 class Objects:
@@ -10078,15 +10079,15 @@ def settings_at_the_address(project, upstream_url=None, by_fetch=False):
                 fetched = store.git("-c", "fetch.unpackLimit=1", "fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}",
                                     to=address, timeout=120, check=False, file_bytes=SETTINGS_FETCH_BYTES)
                 if fetched.returncode != 0:
-                    raise HiveError(f"the project's tip could not be fetched to read its settings: it may be larger than {SETTINGS_FETCH_BYTES} "
+                    raise TooLarge(f"the project's tip could not be fetched to read its settings: it may be larger than {SETTINGS_FETCH_BYTES} "
                                     "bytes, the most this command fetches, or the network failed: run the command again; if it fails again, "
                                     "tell the user")
                 size = store.git("cat-file", "-s", f"{need_sha(commit)}:{PROJECT_FILE}").stdout.strip()
                 if not size.isdigit() or int(size) > SETTINGS_BYTES:  # (asked before the blob is read: a file of any size is never held whole)
-                    raise HiveError(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
+                    raise TooLarge(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
                 raw = store.git("cat-file", "blob", f"{need_sha(commit)}:{PROJECT_FILE}", raw=True).stdout
             except HiveError as error:
-                if "larger than" in str(error):
+                if isinstance(error, TooLarge):
                     raise
                 raise HiveError(not_asked.format(error=error)) from None
         else:
