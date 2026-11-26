@@ -36,7 +36,7 @@ git config --global user.email tester@example.com
 # (STUB_GH_LOGIN: signed in as that account). The launcher reads the login from them: the user types nothing.
 TOKEN="gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 git config --global credential.https://github.com.helper \
-  '!f() { test "$1" = get || exit 0; [ -z "${STUB_NO_CREDENTIAL:-}" ] || exit 0; printf "username=%s\npassword=%s\n" "${STUB_CRED_USER:-alice}" "${STUB_TOKEN:-gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; }; f'
+  '!f() { test "$1" = get || exit 0; [ -z "${STUB_NO_CREDENTIAL:-}" ] || exit 0; [ -z "${STUB_CRED_SLOW:-}" ] || sleep 30; printf "username=%s\npassword=%s\n" "${STUB_CRED_USER:-alice}" "${STUB_TOKEN:-gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; }; f'
 cat > "$T/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/curl-args"
@@ -829,6 +829,8 @@ rm -rf "$T/desk/bin" "$T/to-desk-bin"
 mkdir -p "$T/tmpd2"
 (cd "$T/desk" && PATH="$BASE_PATH" TMPDIR="$T/tmpd2" STUB_API_SLOW=1 timeout -s TERM 3 bash "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > /dev/null 2>&1)
 check "found_login's folder and answer removed when the launcher is stopped while GitHub is asked" eval '[ -z "$(ls -A "$T/tmpd2")" ]'
+(cd "$T/desk" && PATH="$BASE_PATH" TMPDIR="$T/tmpd2" STUB_CRED_SLOW=1 timeout -s TERM 3 bash "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > /dev/null 2>&1)
+check "found_login's folder removed when the launcher is stopped while git is asked for its credential" eval '[ -z "$(ls -A "$T/tmpd2")" ]'
 check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
   grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
 printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"
