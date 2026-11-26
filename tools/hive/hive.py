@@ -7435,7 +7435,7 @@ JUDGE_MODULES = {"common": "judge", "reference": "reference", "relay": "relay"} 
 # What each kind's judge mounts for its containers (container.mount_point: as root, or through sudo -n), and so why measure
 # asks for root or sudo before it starts; a kind whose judge mounts nothing is not named (TestTheMeasure reads the judges'
 # code for the calls).
-JUDGE_MOUNTS = {"common": "a memory file system for each execution of the builds (container.Execution)",
+JUDGE_MOUNTS = {"common": "a memory file system for each execution of the built variants (container.Execution)",
                 "reference": "a memory file system for each container's output, cases and answers (reference.bounded_folder)",
                 "relay": "a memory file system for each phase (relay.Judgement, reference.bounded_folder)"}
 ONLY_ON_LINUX_DOCTOR = ("the doctor runs on Linux only, as the hive's run does (each git it starts is bounded in a way other systems "

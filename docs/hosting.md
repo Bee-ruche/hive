@@ -127,9 +127,9 @@ ends with one line, `hive: …`, and 2, when it cannot start:
 `hive.py measure` judges the project's tip with the project's own kind of judge, a few times, on the architect's own
 machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker, and root or sudo that
 runs `mount` and `umount` without asking a password, as on a hosted runner: every kind of judge mounts memory file
-systems for its containers (the common judge for each execution of the builds, the reference judge for each
-container's output, cases and answers, the relay judge for each phase), and `measure` checks this before it starts.
-It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
+systems for its containers (the common judge for each execution of the built variants, the reference judge for
+each container's output, cases and answers, the relay judge for each phase), and `measure` checks this before it
+starts. It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
 
 ```bash
 python3 tools/hive/hive.py measure --project <owner/name> --repo <a full clone of the project> [--times 3] [--factor 2]

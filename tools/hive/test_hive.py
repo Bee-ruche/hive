@@ -17222,10 +17222,18 @@ class TestTheMeasure(Base):
         """JUDGE_MOUNTS names exactly the kinds whose judge's module calls container.mount_point, directly or through a
         function or class of the judges' code that does (read from their source, test files aside; each call taken to
         the module that defines or imports what it names, since two modules may define the same name), so that a judge
-        that comes to mount, or stops, is seen here."""
+        that comes to mount, or stops, is seen here. Calls are read as name(…) or module.name(…), names and modules as the
+        module's top-level statements define and import them; so that a mount made some other way (subprocess, an alias,
+        an import inside a function) is not missed, the words mount and umount stand in the judges' code only as the
+        first argument of a call to mount_point."""
         trees = {path.stem: ast.parse(path.read_text(encoding="utf-8")) for path in (REGISTRY / "tools/judge").glob("*.py")
                  if not path.name.startswith("test_")}
         self.assertTrue(set(hive.JUDGE_MODULES.values()) <= set(trees), sorted(trees))
+        allowed = {id(call.args[0]) for tree in trees.values() for call in ast.walk(tree) if isinstance(call, ast.Call) and call.args
+                   and (call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", None)) == "mount_point"}
+        stray = [(module, word.lineno) for module, tree in trees.items() for word in ast.walk(tree)
+                 if isinstance(word, ast.Constant) and word.value in ("mount", "umount") and id(word) not in allowed]
+        self.assertEqual(stray, [], "mount or umount named elsewhere than as mount_point's first argument")
 
         def calls(module, node):
             """(module, name) of each call under `node` that names a top-level function or class of the judges' code."""
