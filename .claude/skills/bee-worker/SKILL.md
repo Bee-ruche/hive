@@ -526,9 +526,11 @@ Everything in this guide holds, with these changes and no others:
 - **The project's needs.** "What the project needs of this machine" holds, with these differences:
   - **The read:** `bash ~/.hive/protocol/tools/hive/local.sh needs --project <PROJECT>` gives what `hive needs`
     gives.
-  - **The accepted digest** goes to every `next`, `ready` and `start` as `--needs-accepted <DIGEST>`. The launcher
-    then fetches the project's files and documents, in a container of their own, before the tool runs, and says
-    how it went in `LOCAL needs …` lines.
+  - **The order:** the user's first yes, then `next`. If it says `NEEDS-UNACCEPTED`, run `local.sh needs`, tell the
+    user every entry, and ask for their yes by its digest ("I accept the project's needs <DIGEST>.").
+  - **The accepted digest** goes to every `next`, `ready` and `start` as `--needs-accepted <DIGEST>`. With `next`, the
+    launcher first fetches the project's files and documents, in a container of their own, and says how it went in
+    `LOCAL needs …` lines; `ready` and `start` then find them in the needs' folder.
   - **Programs:** the project's own Docker image brings them. A program prints `NEEDS-DOCKER`, which is no stop, or,
     when the project has no image, `NEEDS-MISSING`.
   - **Resources** are held to the sandbox's 2 processors and 2 GiB.

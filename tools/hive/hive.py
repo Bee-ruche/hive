@@ -9409,7 +9409,7 @@ class NeedsHeld:
     short, files and documents missing, and the digest the user has not accepted."""
 
     def __init__(self, config):
-        self.repo, self.missing, self.docker, self.unaccepted = config["repo"], [], [], None
+        self.repo, self.missing, self.docker, self.unaccepted, self.launcher = config["repo"], [], [], None, False
         counts = {kind: sum(entry["kind"] == kind for entry in config["needs"]) for kind in NEED_FIELDS}
         self.met = ", ".join([f"{counts[kind]} {kind}(s)" for kind in ("program", "file", "document") if counts[kind]]
                              + (["resources"] if counts["resources"] else []))
@@ -9935,6 +9935,7 @@ def needs_hold(config, clone, commit, accepted, home=None):
     nothing is fetched here: the launcher's own fetch, in a container of its own, brought the files before
     (cmd_needs_fetch)."""
     held, docker, launcher = NeedsHeld(config), None, home is not None
+    held.launcher = launcher
     for entry in config["needs"]:
         if entry["kind"] == "program":
             if launcher:
@@ -9964,11 +9965,17 @@ def needs_hold(config, clone, commit, accepted, home=None):
 
 
 
+def needs_command(launcher):
+    """The command that shows the user the project's needs and their digest: the tool's own, or, through the local bee's
+    launcher (whose tool runs in its container), the launcher's."""
+    return "local.sh needs" if launcher else "hive.py needs"
+
+
 def say_needs(held):
     """Prints what needs_hold found, one line each, in the tool's own words."""
     if held.unaccepted:
         print(f"NEEDS-UNACCEPTED {held.unaccepted}: the project's needs, their packages, files, addresses and licences, are not the ones "
-              f"the user accepted (hive.py needs --project {held.repo} gives them, and this digest): nothing was fetched")
+              f"the user accepted ({needs_command(held.launcher)} --project {held.repo} gives them, and this digest): nothing was fetched")
     for name, why in held.docker:
         print(f"NEEDS-DOCKER program {name}: {why}")
     for kind, name, why in held.missing:
@@ -10022,6 +10029,12 @@ def cmd_needs(args):
     if digest:
         print(f"NEEDS-DIGEST {digest}")
     packages = [entry["package"] for entry in config["needs"] if entry["kind"] == "program"]
+    if getattr(args, "by_fetch", False) and config["needs"]:  # (the local bee: nothing is installed on the user's machine)
+        print("THEN: tell the user each entry of the data, word for word: the programs, the resources, and each file and document with its host, "
+              "its size and its licence. Through the local bee nothing is installed on their machine: the project's own Docker image brings its "
+              "programs, and the launcher fetches its files and documents. Their yes accepts those licences, and that those hosts see this "
+              f"machine's address; then give every next, ready and start of the run --needs-accepted {digest}")
+        return
     print("THEN: " + ("the project names no need: a worker's machine is not checked before an ask" if not config["needs"] else
                       "tell the user each entry of the data, word for word: the programs and the packages that provide them, the resources, "
                       "and each file and document with its host, its size and its licence"
@@ -10055,11 +10068,14 @@ def settings_at_the_address(project, upstream_url=None, by_fetch=False):
         if by_fetch or remote_parts(address)[0] is None:  # (tests: a folder of the machine, which no address of GitHub's names)
             try:
                 store.git("fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}", to=address, timeout=120)
+                size = store.git("cat-file", "-s", f"{need_sha(commit)}:{PROJECT_FILE}").stdout.strip()
+                if not size.isdigit() or int(size) > SETTINGS_BYTES:  # (asked before the blob is read: a file of any size is never held whole)
+                    raise HiveError(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
                 raw = store.git("cat-file", "blob", f"{need_sha(commit)}:{PROJECT_FILE}", raw=True).stdout
             except HiveError as error:
+                if "is larger than" in str(error):
+                    raise
                 raise HiveError(not_asked.format(error=error)) from None
-            if len(raw) > SETTINGS_BYTES:
-                raise HiveError(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
         else:
             raw = settings_from_github(repository, commit)
     try:
@@ -10082,10 +10098,13 @@ def cmd_needs_fetch(args):
     as its own (LOCAL needs …) and runs the worker's command whatever they say: that command checks the folder again
     (needs_hold) and says what it lacks in the worker's lines."""
     config, _ = settings_at_the_address(args.project, args.upstream_url)
+    if not config["needs"]:  # (as needs_stop: a project that names none is not checked, whatever digest was given)
+        print("NEEDS-FETCHED 0")
+        return
     files = [entry for entry in config["needs"] if entry["kind"] in ("file", "document")]
     if args.needs_accepted != needs_digest(config):
         print(f"NEEDS-UNACCEPTED {needs_digest(config)}: the project's needs, their packages, files, addresses and licences, are not the "
-              f"ones the user accepted (hive.py needs --project {config['repo']} gives them, and this digest): nothing was fetched")
+              f"ones the user accepted ({needs_command(True)} --project {config['repo']} gives them, and this digest): nothing was fetched")
         sys.exit(1)
     held = NeedsHeld(config)
     if files:

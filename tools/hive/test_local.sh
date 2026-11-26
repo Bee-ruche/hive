@@ -377,7 +377,7 @@ check "next given the digest: needs-fetch first, then the tool" eval \
   'grep -n "^run " "$STUB_DIR/calls" | grep -m1 "hive.role=needs-fetch" | cut -d: -f1 > "$T/fetch-at" && grep -n "^run " "$STUB_DIR/calls" | grep -m1 "hive.role=tool" | cut -d: -f1 > "$T/tool-at" \
    && [ -s "$T/fetch-at" ] && [ "$(cat "$T/fetch-at")" -lt "$(cat "$T/tool-at")" ]'
 check "needs-fetch: on Docker's default network, as the clone's owner, under the container limits, with no proxy and nothing of the user's but the needs" \
-  grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network bridge --label hive.role=needs-fetch --user 1000:1000 --tmpfs /tmp:rw,size=1g --tmpfs /hive/home:rw,uid=1000,gid=1000,mode=700 -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp " "$STUB_DIR/calls"
+  grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --name hive-needs-[0-9]*-[0-9]* --network bridge --label hive.role=needs-fetch --user 1000:1000 --tmpfs /tmp:rw,size=1g --tmpfs /hive/home:rw,uid=1000,gid=1000,mode=700 -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp " "$STUB_DIR/calls"
 check "needs-fetch: the protocol's tools read-only and the needs' folder, nothing else (no clone, no state, no slot)" eval \
   'grep -qx "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" "$STUB_DIR/mounts.needs-fetch" \
    && grep -qx "type=bind,source=$HOME/.hive/needs/bee-ruche/toy,target=/hive/home/.hive/needs/bee-ruche/toy" "$STUB_DIR/mounts.needs-fetch" \
@@ -389,6 +389,24 @@ check "a fetch that fails: its lines said as the launcher's own, and the tool ru
   '[ "$CODE" -eq 0 ] && [ "$OUT" = "$(printf "LOCAL needs NEEDS-MISSING file corpus.bin: github.com answered 404\nTASK toy-0001\nNEEDS-MISSING file corpus.bin: x")" ] && ran tool'
 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice
 check "next given no digest: no fetch" eval '[ "$CODE" -eq 0 ] && ! ran needs-fetch && ran tool'
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "the fetch's container removed as the launcher leaves, by its own name" eval \
+  'name=$(sed -n "s/^run .*--name \(hive-needs-[0-9]*-[0-9]*\) .*hive.role=needs-fetch.*/\1/p" "$STUB_DIR/calls") && [ -n "$name" ] && grep -qx "rm -f $name" "$STUB_DIR/calls"'
+STUB_FETCH_CODE=7 STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "a fetch that fails and says nothing is said all the same" eval '[ "$OUT" = "$(printf "LOCAL needs fetch-failed 7\nWAIT until later")" ] && ran tool'
+for sub in ready start; do
+  reset_world
+  case "$sub" in start) more="--task toy-0001 --deal d" ;; *) more="" ;; esac
+  # shellcheck disable=SC2086
+  STUB_TOOL_OUT="$(said "THEN: x")" launch hive "$sub" --project Bee-ruche/toy --login alice $more --needs-accepted "$DIGEST"
+  check "$sub given the digest: no fetch (next fetched; no fetch holds up a deal's clock), the digest given to the tool" eval \
+    '! ran needs-fetch && ran tool && grep -q -- "--needs-accepted $DIGEST" "$STUB_DIR/args.tool"'
+done
+reset_world
+chmod g+w "$HOME/.hive/needs/bee-ruche/toy"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "refused: a needs' folder a group may write to, before the fetch" eval 'refused 2 "$HOME/.hive/needs/bee-ruche/toy is not your own" && ! ran needs-fetch && ! ran tool'
+chmod g-w "$HOME/.hive/needs/bee-ruche/toy"
 for given in abc "$(printf "D%.0s" $(seq 64))" "${DIGEST}0"; do
   launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$given"
   check "refused: a digest of another shape ($given)" eval 'refused 2 "--needs-accepted:" && nothing_ran'

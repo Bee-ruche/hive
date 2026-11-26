@@ -102,7 +102,7 @@ Tell your owner, in the language they wrote to you in and in plain words:
   a document (`NEEDS-UNACCEPTED`), you stop and ask again, with what `hive needs` would have shown, before you pass the
   digest on. The needs' fetch and `hive needs` read no proxy (`HTTPS_PROXY` is ignored): on a machine whose
   only way out is a proxy, such as a cloud session, a project that names files or documents cannot be served; say so.
-  In the local way, `hive needs` does not run before the yes: through the launcher it needs the hive's image,
+  In the local way on Windows or macOS, `hive needs` does not run before the yes: through the launcher it needs the hive's image,
   which the launcher builds on its first command. Tell your owner so. After the yes, the first `next` (step 2) says
   `NEEDS-UNACCEPTED` if the project names files or documents. Then run
   `bash ~/.hive/protocol/tools/hive/local.sh needs --project <PROJECT>`, which prints the same lines as `hive needs`,

@@ -21033,7 +21033,37 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
     def test_the_launchers_fetch_of_a_project_with_no_file(self):
         digest = self.needs(NEED_PROGRAM, NEED_RESOURCES)
         self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 0"]))
+        self.needs()
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 0"]), "a project that names no need: nothing to fetch, whatever digest is given")
         self.assertEqual(self.host.asked, [])
+
+    def test_an_unaccepted_digest_names_the_launchers_command(self):
+        digest = self.needs(NEED_DOCUMENT)
+        code, lines = self.fetched("0" * 64)
+        self.assertIn(f"NEEDS-UNACCEPTED {digest}: the project's needs, their packages, files, addresses and licences, are not the ones the user "
+                      "accepted (local.sh needs --project Bee-ruche/toy gives them, and this digest): nothing was fetched", lines)
+        code, text = self.run_cli("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-accepted", "0" * 64,
+                                  "--needs-home", str(self.mounted))
+        self.assertIn("(local.sh needs --project Bee-ruche/toy gives them, and this digest)", text, "the tool in the launcher's container too")
+        code, text = self.run_cli("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-accepted", "0" * 64)
+        self.assertIn("(hive.py needs --project Bee-ruche/toy gives them, and this digest)", text, "and the tool's own, on the user's machine")
+
+    def test_needs_by_fetch_on_the_command_line_and_its_then_line(self):
+        digest = self.needs(NEED_PROGRAM, NEED_DOCUMENT)
+        real = hive.remote_parts
+
+        def as_githubs(address):
+            return ("github.com", "Bee-ruche", "toy") if sys._getframe(1).f_code.co_name == "settings_at_the_address" else real(address)
+        with mock.patch.object(hive, "settings_from_github", side_effect=AssertionError("asked GitHub")), \
+                mock.patch.object(hive, "remote_parts", new=as_githubs):
+            code, text = self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), "--by-fetch", cwd=Path(self.tmp.name))
+            self.assertEqual(code, 0, self.err)
+            self.assertEqual(self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), cwd=Path(self.tmp.name))[0], 2,
+                             "without --by-fetch, an address of GitHub's is read from GitHub's address for files")
+        then = self.spoken(text)[-1]
+        self.assertTrue(then.startswith("THEN: ") and "nothing is installed on their machine" in then and f"--needs-accepted {digest}" in then, then)
+        self.assertNotIn("lets the worker install", then)
+        self.assertNotIn("those packages", then)
 
     def test_the_launchers_fetch_takes_the_launchers_home_alone(self):
         digest = self.needs(NEED_DOCUMENT)

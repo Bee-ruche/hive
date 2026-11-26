@@ -264,12 +264,13 @@ EGRESS="hive-egress-$$-$RANDOM"  # the gate's container, this run's own
 # Leaving: whatever happened, this run's gate removed, the slot emptied after a pushing command, the copy of a
 # hand-over removed, the project's lock given back.
 
-GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED=""
+GATE_UP="" EMPTY_ON_EXIT="" COPY="" LOCKED="" FETCHER=""
 empty_slot() { rm -rf "$SLOT" && mkdir -p "$SLOT"; }
 leave() {
   [ -z "$COPY" ] || rm -rf "$COPY"
   [ -z "$EMPTY_ON_EXIT" ] || empty_slot
   [ -z "$GATE_UP" ] || "$DOCKER" rm -f "$EGRESS" >/dev/null 2>&1
+  [ -z "$FETCHER" ] || "$DOCKER" rm -f "$FETCHER" >/dev/null 2>&1
   [ -z "$LOCKED" ] || rm -rf "$LOCK"
 }
 trap leave EXIT
@@ -751,21 +752,29 @@ case "$COMMAND" in
     egress_up
     [ -n "$PUSHING" ] && EMPTY_ON_EXIT=1
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
-    if [ -n "$NEEDS_ACCEPTED" ]; then
+    if [ -n "$NEEDS_ACCEPTED" ] && [ "$SUB" = next ]; then
       # The project's files and documents, fetched by the tool's own code (needs-fetch: https, each file held to its
       # size and SHA-256) in a container of their own: Docker's default network, which reaches the needs' hosts (the
       # gate passes github.com alone, and the fetch reads no proxy), and nothing but the protocol's tools and the
-      # needs' folder: no clone, no fork, no state, no slot, no credential. Its lines are said as the launcher's own
-      # (LOCAL needs …), and the tool runs whatever they say: it reads the folder again, and its own lines say what
-      # the project lacks (with a deal held, the deal is shown and given back as the guide says).
+      # needs' folder: no clone, no fork, no state, no slot, no credential. For next alone, the guide's first command
+      # of a run: ready and start then find the files held, and no fetch holds up a deal's clock. Its lines are said
+      # as the launcher's own (LOCAL needs …), and the tool runs whatever they say: it reads the folder again, and its
+      # own lines say what the project lacks (with a deal held, the deal is shown and given back as the guide says).
+      # A fetch that says nothing and fails is said too (LOCAL needs fetch-failed <code>). The container has a name of
+      # this run's own, removed as the launcher leaves, whatever happened.
       NEEDS_SOURCE=$(below_hive "$NEEDS" "the needs' folder") || exit 2
       needs_own
-      fetched=$("$DOCKER" run "${LIMITS[@]}" --network bridge --label hive.role=needs-fetch --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g \
+      FETCHER="hive-needs-$$-$RANDOM"
+      said_file=$(mktemp "$HIVE/.needs.XXXXXX") || die "no room under $HIVE"
+      "$DOCKER" run "${LIMITS[@]}" --name "$FETCHER" --network bridge --label hive.role=needs-fetch --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g \
         --tmpfs "/hive/home:rw,uid=${OWNER_IDS%%:*},gid=${OWNER_IDS##*:},mode=700" -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" \
         --mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/hive/home/.hive/needs/$(lower "$OWNER")/$(lower "$NAME")" \
         "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py needs-fetch --project "$PROJECT" --needs-accepted "$NEEDS_ACCEPTED" \
-        --needs-home /hive/home 2>&1 | head -n 40)
-      printf '%s\n' "$fetched" | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
+        --needs-home /hive/home > "$said_file" 2>&1
+      fetch_code=$?
+      head -n 40 "$said_file" | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
+      if [ "$fetch_code" -ne 0 ] && ! grep -q '^NEEDS-' "$said_file"; then say "LOCAL needs fetch-failed $fetch_code"; fi
+      rm -f "$said_file"
     fi
     # Right before the tool runs: each place resolved, each mount built.
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
