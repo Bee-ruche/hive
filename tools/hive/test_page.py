@@ -3154,7 +3154,7 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertLess(run.index("page.py"), run.index("find page"))
         self.assertLess(run.index("find page"), run.index("tar --create"))
         plant = ('() { command python3 "$@" || return $?; case "$PLANT" in link) ln -s /etc/passwd page/wins/planted;; dangling) ln -s nowhere page/planted;; '
-                 "second) ln page/index.html page/planted;; pipe) mkfifo page/planted;; esac; }")
+                 "second) ln page/index.html page/planted;; pipe) mkfifo page/planted;; fail) return 3;; esac; }")
         for kind, found in (("link", "page/wins/planted"), ("dangling", "page/planted"), ("second", "page/"), ("pipe", "page/planted")):
             with self.subTest(kind=kind):
                 folder, environment = self.world()
@@ -3169,6 +3169,13 @@ class TestThePageWorkflow(unittest.TestCase):
         code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": "none", "BASH_FUNC_python3%%": plant}, *self.making())
         self.assertEqual(code, 0, said)
         self.assertTrue((folder / "artifact.tar").is_file(), "the function runs page.py as it is")
+        # page.py that wrote the site and then failed (as when a file could not take its name, "the site is not whole"):
+        # the step stops there, and what it left is not packed.
+        folder, environment = self.world()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": "fail", "BASH_FUNC_python3%%": plant}, *self.making())
+        self.assertEqual(code, 3, said)
+        self.assertTrue((folder / "page/index.html").is_file())
+        self.assertFalse((folder / "artifact.tar").exists(), "a page.py that failed is not packed, whatever it left")
 
     def making(self):
         """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
