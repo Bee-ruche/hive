@@ -543,6 +543,11 @@ check "submit: a refusal's line and exit code passed through, the slot emptied" 
 check "submit: the slot mounted, --hand-over given, no state, no needs" eval \
   'grep -qx "type=bind,source=$SLOT,target=/hive/outbox" "$STUB_DIR/mounts.tool" && grep -q -- "--task toy-0001 --deal d --hand-over /hive/outbox\$" "$STUB_DIR/args.tool" \
    && ! grep -q "needs\|state" "$STUB_DIR/mounts.tool"'
+STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d \
+  --signal confidence=high --signal unclear
+check "submit with signals: each passed through as given, the state read-only and --state given (the codes the run reads)" eval \
+  'grep -q -- "--task toy-0001 --deal d --signal confidence=high --signal unclear --state /hive/state --hand-over /hive/outbox\$" "$STUB_DIR/args.tool" \
+   && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state,readonly" "$STUB_DIR/mounts.tool"'
 STUB_TOOL_OUT="$(said "STARTED hive/work/toy-0001 at $BASE")" launch hive start --project Bee-ruche/toy --login alice --task toy-0001 --deal d
 check "start: STARTED kept for the sandbox" eval '[ "$CODE" -eq 0 ] && grep -qx "STARTED hive/work/toy-0001 at $BASE" "$HOME/.hive/started/Bee-ruche/toy"'
 STUB_TOOL_OUT="$(said "STARTED hive/work/toy-0001 at $BASE")" STUB_TOOL_CODE=3 launch hive start --project Bee-ruche/toy --login alice --task toy-0001 --deal d
@@ -661,6 +666,12 @@ reset_world
 STUB_HANDOVER="$(hand_over release hive/release/toy-0002 "$RELEASE" toy-0002)" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/release/toy-0002")" \
   launch hive release --project Bee-ruche/toy --login alice --task toy-0001 --deal d --because out_of_reach
 check "refused: a release of another task than the command's" eval 'refused 2 "the hand-over'"'"'s branch is not the one" && untouched'
+reset_world
+SIGNALLED=$(commit_tree "$EMPTY_TREE" "$(release_message toy-0001; printf 'Hive-Signal: splits 3\nHive-Signal: too_large\n')")
+STUB_HANDOVER="$(hand_over release hive/release/toy-0001 "$SIGNALLED" toy-0001)" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/release/toy-0001")" \
+  launch hive release --project Bee-ruche/toy --login alice --task toy-0001 --deal d --because out_of_reach --signal too_large --signal splits=3
+check "release with signals: each passed through as given, RELEASED (the bytes are hive.py's hand-over-check's to hold)" eval \
+  '[ "$CODE" -eq 0 ] && [ "$OUT" = "RELEASED $SIGNALLED" ] && grep -q -- "--because out_of_reach --signal too_large --signal splits=3 --state /hive/state" "$STUB_DIR/args.tool"'
 reset_world
 DUTY=$(commit_tree "$EMPTY_TREE" "$(duty_message)")
 STUB_HANDOVER="$(hand_over duty hive/duty "$DUTY")" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/duty")" launch hive duty --project Bee-ruche/toy --login alice

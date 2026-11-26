@@ -245,6 +245,42 @@ PROBE_ANSWERS_MOST = 5  # the most answers a probe may ask (its « answers », 1
 RELEASES = ("out_of_reach", "cannot_run")
 RELEASE_BRANCH = "hive/release/{task}"
 ACTIONS = ("ready", "submit", "release")
+# SIGNALS: what a member may say of a deal, beside its candidate or its release: codes of this file's own, each with at
+# most one value of a fixed kind, never text (docs/protocol.md, "What a worker pushes"). The worker's tool writes them,
+# « Hive-Signal: <code> » or « Hive-Signal: <code> <value> », one code a line, each code once, SIGNALS_MOST at most, in
+# the codes' order (signal_lines); the hive reads them with the marker (read_signals), keeps those that hold
+# (held_signals) and writes them on the line it writes for that ending anyway: the candidate's verdict, or the line of
+# the deal given back. A signal that does not hold is dropped alone: the candidate or the release stands as it would
+# without it. A SIGNAL CHANGES NOTHING THE HIVE DECIDES: no wait, no deal, no verdict, no day's count, no « stuck », no
+# hint reads one (the release's own code, RELEASES, keeps deciding what a release costs). It is counted for the
+# project's cutter and its page, and read by no worker: the feed lists the codes a run reads, never a count.
+# code -> (where it may be said: on a candidate, « submit », or on a release, by the release's code; the kind of its
+# value: None (no value), « word » (one of `values`), « number » (a whole number within `values`), « task » (a task of
+# the project's, as its tasks write it), « need » (the name of one of the project's needs); whether the value may be
+# left out).
+SIGNALS = {
+    "confidence": (("submit",), "word", ("low", "medium", "high"), False),
+    "duplicate": (("submit", "out_of_reach"), "task", None, False),
+    "effort": (("submit", "out_of_reach"), "word", ("lt15m", "lt1h", "lt3h", "ge3h"), False),
+    "felt": (("submit", "out_of_reach"), "word", ("easier", "as_sized", "harder"), False),
+    "flaky": (("submit", "out_of_reach"), None, None, False),
+    "goal_beyond": (("out_of_reach",), None, None, False),
+    "local_check": (("submit",), "word", ("passed", "failed", "not_run"), False),
+    "machine_failed": (("cannot_run",), "word", ("memory", "disk", "time", "crash", "tool"), False),
+    "more_gain": (("submit",), None, None, False),
+    "need_unlisted": (("cannot_run",), None, None, False),
+    "need_unmet": (("cannot_run",), "need", None, True),
+    "needs_first": (("out_of_reach",), "task", None, True),
+    "off_task_request": (("out_of_reach",), None, None, False),
+    "outlook": (("submit",), "word", ("promising", "dead_end", "inconclusive"), False),  # on a probe's candidate alone
+    "outside_files": (("submit", "out_of_reach"), None, None, False),
+    "sandbox_blocked": (("cannot_run",), "word", ("network", "file", "process", "memory", "time"), False),
+    "splits": (("submit", "out_of_reach"), "number", (2, 8), False),
+    "too_large": (("submit", "out_of_reach"), None, None, False),
+    "unclear": (("submit", "out_of_reach"), None, None, False),
+}
+SIGNALS_MOST = 4  # the most signals one candidate or one release carries: a message with more carries none
+SIGNAL_LINE = re.compile(r"Hive-Signal: ([a-z][a-z_]{0,23})(?: ([A-Za-z0-9][A-Za-z0-9._+-]{0,63}))?\Z")
 # TRUSTED ACCOUNTS AND THEIR DUTIES. A project's file may name accounts it trusts with a role, by their numbers
 # (« trusted », trusted_of): « cut », the project's cutting, is the one role there is. Such an account that is free
 # asks for a duty of its role in its own fork, at one branch (DUTY_BRANCH), as a member asks for a task (read_duty);
@@ -1796,6 +1832,67 @@ def read_marker(message):
             "because": found["Hive-Because"] if action == "release" else None}
 
 
+def read_signals(message):
+    """The signals a commit message says, as (code, value or None) pairs in the order of its lines: each line « Hive-Signal:
+    <code> » or « Hive-Signal: <code> <value> » alone on its line (SIGNAL_LINE), a code and a value of plain characters
+    and nothing else; a line of any other shape is none. What they mean, and whether they hold, is held_signals' to say:
+    this reads, and keeps nothing it could not hold."""
+    said = []
+    for line in message.split("\n"):
+        m = SIGNAL_LINE.match(line.rstrip("\r"))
+        if m:
+            said.append((m.group(1), m.group(2)))
+    return said
+
+
+def held_signals(said, where, task, tasks, config):
+    """The signals that hold, of those `said` ((code, value or None) pairs, as read_signals reads them, or as the
+    worker's tool takes them), for a candidate (where « submit ») or a release (where: its code) of `task`: a list of
+    {"code": …} or {"code": …, "value": …}, in the codes' order, the values the project's own strings or this file's.
+    More than SIGNALS_MOST, and none holds; a code said twice, and neither holds. Each other one holds if and only if
+    its code is one of SIGNALS, it may be said there, and its value is of its kind: none where it takes none (or may
+    leave it out); one of its words; a whole number within its bounds, written as one; a task of the project's tasks
+    (not the task itself, for « duplicate »); the name of one of the project's needs. « outlook » is said of a probe's
+    candidate alone. Whatever does not hold is dropped, and nothing of it is kept."""
+    if not isinstance(said, list) or len(said) > SIGNALS_MOST:
+        return []
+    codes = [code for code, _ in said]
+    held = []
+    for code, value in said:
+        spec = SIGNALS.get(code) if isinstance(code, str) else None
+        if spec is None or codes.count(code) != 1 or where not in spec[0] or not (value is None or isinstance(value, str)):
+            continue
+        _, kind, values, optional = spec
+        if code == "outlook" and task.get("kind") != "probe":
+            continue
+        if value is None:
+            if kind is None or optional:
+                held.append({"code": code})
+            continue
+        if kind == "word" and value in values:
+            held.append({"code": code, "value": values[values.index(value)]})
+        elif kind == "number" and re.fullmatch(r"[1-9][0-9]{0,2}", value) and values[0] <= int(value) <= values[1]:
+            held.append({"code": code, "value": int(value)})
+        elif kind == "task" and value in tasks and not (code == "duplicate" and value == task["id"]):
+            held.append({"code": code, "value": tasks[value]["id"]})
+        elif kind == "need":
+            name = next((need["name"] for need in config.get("needs", ()) if need.get("name") == value), None)
+            if name is not None:
+                held.append({"code": code, "value": name})
+    return sorted(held, key=lambda signal: signal["code"])
+
+
+def plain_signals(held):
+    """The (code, value or None) pairs of signals as held_signals gives them, a number written as one: what the worker's
+    tool writes, and what a step that writes holds again."""
+    return [(signal["code"], None if "value" not in signal else str(signal["value"])) for signal in held]
+
+
+def signal_lines(said):
+    """A marker's signal lines, as the worker's tool writes them: one a code, in the codes' order."""
+    return [f"Hive-Signal: {code}" + ("" if value is None else f" {value}") for code, value in sorted(said, key=lambda pair: pair[0])]
+
+
 def read_ruling(message):
     """The ruling a commit message carries, or None. Each line alone on its line; each key once, but « Hive-Waive »,
     which comes once for each figure waived, no figure twice:
@@ -2633,10 +2730,12 @@ def discover(repo, config, api, skip, instant, allow_local=False, known=None, ac
                 elif marker["member"].lower() != fork["login"].lower():
                     mine.append(sha)  # someone else's commit: nothing in THIS fork, for good
                 elif member:
+                    # (A candidate's or a release's signals, as the fork wrote them: the plan keeps those that hold.)
                     found.append({"sha": sha, "repo_id": fork["repo_id"], "login": fork["login"], "member_id": fork["id"],
                                   "task": marker["task"], "action": marker["action"], "model": marker["model"],
                                   "tier": marker["tier"], "deal": marker["deal"], "because": marker["because"],
-                                  "prefer": next((part for part in parts if part == marker["prefer"]), None)})
+                                  "prefer": next((part for part in parts if part == marker["prefer"]), None),
+                                  "signals": read_signals(message) if marker["action"] in ("submit", "release") else []})
                 # (An ask or a candidate in a fork read for its owner's rulings alone: nothing, and not remembered,
                 # so that it is read on the day the project reads that fork for a member.)
             entries.extend(found)
@@ -3183,8 +3282,9 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
             # The member gives the deal back: it ends now, whatever time it has left, or the grace (RELEASES). Of two
             # releases of one deal, the draw takes one, as it takes one candidate of several.
             given.sort(key=lambda e: draw(key, e["sha"]))
+            said = held_signals(given[0].get("signals", []), given[0]["because"], tasks[task_id], tasks, config)
             expiries.append({"task": task_id, "member_id": deal["member_id"], "deal": deal["at"], "fault": False,
-                             "released": given[0]["because"], "release": given[0]["sha"]})
+                             "released": given[0]["because"], "release": given[0]["sha"], **({"signals": said} if said else {})})
             continue
         over = parse_iso(deal["until"]) + dt.timedelta(hours=config["grace_hours"])
         if instant <= over:
@@ -3208,9 +3308,10 @@ def plan(repo, tip, config, tasks, ledger, api, state_folder, allow_local=False,
         if is_open(task_id):
             entry = group[0]
             marks = ledger.marks(task_id, member_id, deal["at"])
+            said = held_signals(entry.get("signals", []), "submit", tasks[task_id], tasks, config)
             queue.append({"sha": entry["sha"], "repo_id": entry["repo_id"], "login": entry["login"], "member_id": member_id,
                           "task": task_id, "model": entry["model"] if entry["model"] in models else None, "deal": deal["at"],
-                          "declined": any(kind == "push" for kind, _ in marks)})
+                          "declined": any(kind == "push" for kind, _ in marks), **({"signals": said} if said else {})})
             rank[entry["sha"]] = bool(marks)
     # 2a. rulings. Each is held against the project's file, its tasks and the ledger as it stands here, the deals just
     # found over included (admissible); of several that stand on one commit one is taken, by the draw, and the others
@@ -3884,9 +3985,11 @@ def as_the_plan_counted(ledger, plan_, expiries=True):
 def expired_line(expiry, at, run):
     """The ledger line of a deal the plan found over: its time was up, its task was closed, or its member gave it back
     (« released »: the release's code, RELEASES; « release »: the release's commit id, which anyone can look up in the
-    member's public fork). Every field is one the plan's own form holds (read_plan)."""
+    member's public fork). Every field is one the plan's own form holds (read_plan). A deal given back adds the release's
+    signals that hold, where it carries any (« signals »: held_signals, held again by the step that writes)."""
     return {"type": "expired", "at": at, "run": run, "task": expiry["task"], "member_id": expiry["member_id"], "deal": expiry["deal"],
-            "fault": expiry["fault"], **({"released": expiry["released"], "release": expiry["release"]} if "released" in expiry else {})}
+            "fault": expiry["fault"], **({"released": expiry["released"], "release": expiry["release"]} if "released" in expiry else {}),
+            **({"signals": expiry["signals"]} if expiry.get("signals") and "released" in expiry else {})}
 
 
 DUTY_END_FIELDS = ("because", "release", "proposal", "published", "repo_id", "digests", "reason")  # what an end adds, by its outcome
@@ -4060,7 +4163,8 @@ def process(repo, tip, queue, config, tasks, ledger, verdict_of, instant, starte
         member_id, admit = entry["member_id"], entry.get("admit")
         outcome = {"sha": entry["sha"], "login": entry["login"], "member_id": member_id, "repo_id": entry["repo_id"],
                    "task": entry["task"], "deal": entry["deal"], "model": entry["model"], "tip": tip, "result": "skipped",
-                   "judged": False, **({"admit": admit} if admit else {})}
+                   "judged": False, **({"admit": admit} if admit else {}),
+                   **({"signals": entry["signals"]} if entry.get("signals") and not admit else {})}
         outcomes.append(outcome)
         try:
             task = tasks.get(entry["task"])
@@ -4502,10 +4606,15 @@ def verdict_event(outcome, instant, kind="verdict", hive=None):
     job of the run checks is on the hive's main and runs: .github/workflows/run.yml), when the step was given one
     (cmd_apply). The line then says which commit of the hive judged it, and the promise (« intent ») says the same, so
     that the verdict a later run builds from it (settle) names the run that judged, not the one that settled. A line
-    written without it, or before this rule, has no `hive`: whatever reads the ledger takes both."""
+    written without it, or before this rule, has no `hive`: whatever reads the ledger takes both.
+
+    `signals`: what the candidate's member said of the deal beside it, the signals that hold (held_signals), on a
+    member's candidate alone (never on a commit a guardian admitted: its line is the ruling's). They change nothing of
+    the line's meaning: a line without them, written before this rule or for a candidate that said none, is the same."""
     event = {"type": kind, "at": iso(instant), "task": outcome["task"], "deal": outcome["deal"],
              "member_id": outcome["member_id"], "repo_id": outcome["repo_id"], "sha": outcome["sha"],
-             "result": outcome["result"], "judged": outcome["judged"], "model": outcome["model"], **({"hive": hive} if hive else {})}
+             "result": outcome["result"], "judged": outcome["judged"], "model": outcome["model"], **({"hive": hive} if hive else {}),
+             **({"signals": outcome["signals"]} if outcome.get("signals") and not outcome.get("admit") else {})}
     if outcome["result"] == "refused":
         event.update(reason=outcome["reason"], detail=outcome["detail"])
         if outcome["reason"] in MEASURED_REASONS:
@@ -4620,6 +4729,37 @@ def paused_between(repo, since, until):
     return False
 
 
+def signals_held_again(plan_, config, tasks):
+    """The plan, its candidates' and its deals given back's signals held again by the step that writes (held_signals),
+    against the project's file and tasks as this step reads them, whatever the plan says of them: a candidate's as said
+    beside a candidate (« submit »), a release's as said beside a release of its code. A signal that does not hold, or
+    a « signals » that is no list of signals, is dropped, the job's log counts it, and nothing else changes: unlike a
+    deal or a ruling the plan does not bear out, a signal never stops a step. What is written is this file's words and
+    the project's own strings, never the plan's."""
+    dropped = 0
+
+    def held(entry, where):
+        nonlocal dropped
+        said = entry.get("signals")
+        if said is None:
+            return entry
+        task = tasks.get(entry.get("task")) if isinstance(entry.get("task"), str) else None
+        pairs = said if isinstance(said, list) and all(isinstance(s, dict) and isinstance(s.get("code"), str)
+                                                       and set(s) <= {"code", "value"} for s in said) else None
+        # (A commit a guardian admitted: its line is the ruling's, and carries none.)
+        kept = held_signals(plain_signals(pairs), where, task, tasks, config) \
+            if pairs is not None and task is not None and where and not entry.get("admit") else []
+        dropped += (len(said) if isinstance(said, list) else 1) - len(kept)
+        entry = {key: value for key, value in entry.items() if key != "signals"}
+        return {**entry, "signals": kept} if kept else entry
+
+    plan_ = {**plan_, "queue": [held(c, "submit") for c in plan_["queue"]],
+             "expiries": [held(e, e.get("released")) for e in plan_["expiries"]]}
+    if dropped:
+        log(f"signals dropped: {dropped} (not borne out by the project's file and tasks)")
+    return plan_
+
+
 def expired_lines(plan_):
     """The ledger lines of the deals the plan found over (once per task and run, whichever step writes them)."""
     return [expired_line(e, iso(now()), plan_["key"]) for e in plan_["expiries"]]
@@ -4639,6 +4779,7 @@ def record(plan_, config, tasks, ledger, state_folder):
     _, plan_ = read_plan(plan_, config)
     if not same_ledger(ledger, plan_):
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is recorded")
+    plan_ = signals_held_again(plan_, config, tasks)  # (a signal the project's file and tasks do not bear out is dropped, and stops nothing)
     counted = as_the_plan_counted(ledger, plan_)
     for deal in (*plan_["deals"], *plan_["conditional"]):
         deal_prefer(deal, tasks, config, counted)  # a preference that is not the project's, or not true, stops the step before it writes anything
@@ -4698,6 +4839,7 @@ def apply(repo, remote, plan_, verdicts, config, tasks, ledger, state_folder, al
     plan_instant, plan_ = read_plan(plan_, config)
     if not same_ledger(ledger, plan_):
         raise HiveError("the ledger is not the one the plan read: another run wrote meanwhile; nothing is applied")
+    plan_ = signals_held_again(plan_, config, tasks)  # (a signal the project's file and tasks do not bear out is dropped, and stops nothing)
     counted = as_the_plan_counted(ledger, plan_)
     for deal in (*plan_["deals"], *plan_["conditional"]):
         deal_prefer(deal, tasks, config, counted)  # a preference that is not the project's, or not true, stops the step before it pushes or writes anything
@@ -4837,6 +4979,9 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
     « releases » lists the codes of a release this run reads (RELEASES): a run at a commit before releases writes no
     such key, and a worker's tool then gives nothing back (cmd_release). A task's releases are not in the feed: what a
     worker reads of a task is the judge's word on its candidates, never another member's that it could not do it.
+    « signals » lists, in the same way, the codes of a signal this run reads (SIGNALS): never a count of them, nor a
+    task's, for the same reason; a run at a commit before signals writes no such key, and a worker's tool then writes
+    none (signals_in_feed).
     « duties » holds each live duty (its role and its two instants) under the same hash of its account's login, and
     « duty_wait » until when each account that was dealt a duty is dealt none (Ledger.duty_wait), under the same hash:
     a run at a commit before duties writes neither key, and a trusted account's tool then asks for none (cmd_duty)."""
@@ -4905,7 +5050,7 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
             "generated_at": iso(instant), "tip": tip, "check": config.get("check", ""),
             "min_account_age_days": config["members"]["min_account_age_days"],
             "deals_per_day": config["members"]["deals_per_day"], "deals": held, "wait": waits, "tasks": listed,
-            "members": base, "releases": list(RELEASES), "duties": duties, "duty_wait": duty_waits}
+            "members": base, "releases": list(RELEASES), "signals": sorted(SIGNALS), "duties": duties, "duty_wait": duty_waits}
 
 
 def build_stats(ledger):
@@ -10853,16 +10998,16 @@ def ready_message(at, login, tier, prefer):
                      + ([f"Hive-Prefer: {prefer}"] if prefer is not None else [])) + "\n"
 
 
-def submit_message(task, deal, login, model):
-    """A candidate's marker, as submit writes it."""
+def submit_message(task, deal, login, model, signals=()):
+    """A candidate's marker, as submit writes it: signals, (code, value or None) pairs (signal_lines)."""
     return "\n".join([f"Hive submit: {task}", "", f"Hive-Task: {task}", "Hive-Action: submit", f"Hive-Deal: {deal}", f"Hive-Member: {login}"]
-                     + ([f"Hive-Model: {model}"] if model else [])) + "\n"
+                     + ([f"Hive-Model: {model}"] if model else []) + signal_lines(signals)) + "\n"
 
 
-def release_message(task, at, deal, login, because):
-    """A release's message, as release writes it: at, its instant."""
+def release_message(task, at, deal, login, because, signals=()):
+    """A release's message, as release writes it: at, its instant; signals, (code, value or None) pairs (signal_lines)."""
     return "\n".join([f"Hive release: {task} ({at})", "", f"Hive-Task: {task}", "Hive-Action: release", f"Hive-Deal: {deal}",
-                      f"Hive-Member: {login}", f"Hive-Because: {because}"]) + "\n"
+                      f"Hive-Member: {login}", f"Hive-Because: {because}"] + signal_lines(signals)) + "\n"
 
 
 def duty_message(role, at, login, deal=None, because=None):
@@ -10894,14 +11039,18 @@ def made_here(raw, action, marker=None):
         return message.endswith("\n") and bool(ONE_LINE.match(title)) and not MARKER_LINE.match(title)
     title = message.partition("\n")[0]
     at = title[title.rfind(" (") + 2:-1] if title.endswith(")") and " (" in title else None
+    said = [code for code, _ in read_signals(message)]
+    if len(said) > SIGNALS_MOST or len(set(said)) != len(said) or any(code not in SIGNALS for code in said) \
+            or (said and action not in ("submit", "release")):
+        return False  # (signals the tool never writes: more than it writes, a code twice, a code not its own, or beside an ask)
     if action == "submit":
-        wanted = submit_message(marker["task"], marker["deal"], marker["member"], marker["model"])
+        wanted = submit_message(marker["task"], marker["deal"], marker["member"], marker["model"], read_signals(message))
     elif not stamp(at):
         return False
     elif action == "ready":
         wanted = ready_message(at, marker["member"], marker["tier"], marker["prefer"])
     elif action == "release":
-        wanted = release_message(marker["task"], at, marker["deal"], marker["member"], marker["because"])
+        wanted = release_message(marker["task"], at, marker["deal"], marker["member"], marker["because"], read_signals(message))
     else:  # (a duty, or its release)
         wanted = duty_message(marker["role"], at, marker["member"], marker["deal"], marker["because"])
     return wanted.encode("utf-8") == body
@@ -11524,6 +11673,55 @@ def releases_in_feed(feed):
     back to it, and nothing the fork holds is taken for a release by the worker's tool either."""
     listed = feed.get("releases")
     return tuple(code for code in RELEASES if isinstance(listed, list) and code in listed)
+
+
+def signals_in_feed(feed):
+    """The codes of a signal (SIGNALS) the project's own run reads, as its feed lists them (build_feed): those of this
+    file's own list that it names, and no other. A run at a commit before signals lists none: the worker's tool then
+    writes no signal."""
+    listed = feed.get("signals")
+    return tuple(code for code in SIGNALS if isinstance(listed, list) and code in listed)
+
+
+def said_signals(args, where, task, tasks, config, feed):
+    """The signals a worker's command writes, from its --signal options (« code » or « code=value »), as held_signals
+    holds them for a candidate (where « submit ») or a release (where: its code): all of them, or the command stops
+    before it makes anything, and says which code (one of this file's own) does not hold, or that a code is not one."""
+    said = []
+    for option in args.signal or ():
+        code, _, value = option.partition("=")
+        said.append((code, value if "=" in option else None))
+    if not said:
+        return []
+    if feed is None:
+        raise HiveError("--signal needs --state, a clone of the project's branch hive-state: nothing was pushed")
+    read = signals_in_feed(feed)
+    if len(said) > SIGNALS_MOST:
+        raise HiveError(f"--signal: {SIGNALS_MOST} at most, each code once: nothing was pushed")
+    for code, _ in said:
+        if code not in SIGNALS:
+            raise HiveError("--signal: one of them is not a code of the hive's own (the worker's guide lists them): nothing was pushed")
+        if code not in read:
+            raise HiveError(f"--signal {code}: the project's hive does not read it yet (its run is at an older commit of the hive): "
+                            "nothing was pushed. Leave the signals out")
+    held = held_signals(said, where, task, tasks, config)
+    for code, _ in said:
+        if code not in [signal["code"] for signal in held]:
+            raise HiveError(f"--signal {code}: not said this way here (twice, beside another kind of ending, or with a value it does "
+                            "not take: the worker's guide says each code's place and values): nothing was pushed")
+    return plain_signals(held)
+
+
+def project_feed(args, config):
+    """The project's feed, from the clone of its state that --state names, held as a worker's command holds it: this
+    protocol's, and this project's. Otherwise the command stops before it makes anything."""
+    status, feed = read_untrusted(Path(args.state) / "feed.json", STATE_BYTES)
+    if status != "ok" or not isinstance(feed, dict) or type(feed.get("protocol")) is not int or feed["protocol"] != PROTOCOL:
+        raise HiveError("the hive's feed is missing, or is not one this tool reads: nothing was pushed. Run hive.py next, and do what it says")
+    if not (isinstance(feed.get("repo"), str) and feed["repo"].casefold() == config["repo"].casefold()):
+        raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: nothing was pushed. Clone the "
+                        f"state of this project (the branch hive-state of https://github.com/{config['repo']}) into a folder of its own, and give that folder")
+    return feed
 
 
 def pushed_release(clone, url, task, deal_at):
@@ -12160,8 +12358,9 @@ def cmd_submit(args):
     if args.model and not MODEL.match(args.model):
         raise HiveError("--model: the model's identifier, without spaces (claude-fable-5-2); leave it out if you are not sure")
     title = args.message or f"Work on {task['id']}"
-    if not ONE_LINE.match(title) or MARKER_LINE.match(title):
+    if not ONE_LINE.match(title) or MARKER_LINE.match(title) or SIGNAL_LINE.match(title):
         raise HiveError("--message: one plain line (200 characters at most) that says what you changed")
+    signals = said_signals(args, "submit", task, tasks, config, project_feed(args, config) if args.signal and args.state else None)
     address = project_address(config["repo"], args.upstream_url)
     restart = "start the task again (hive.py start), which sets the work aside; if start stops too, tell the user"
     head = in_words(lambda: clone.git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip(),
@@ -12183,7 +12382,7 @@ def cmd_submit(args):
         print(f"REFUSED (path_outside_task): {REASONS['path_outside_task']} {json.dumps(detail)}")
         sys.exit(1)
     who = clone.identity(login)
-    message = submit_message(args.task, args.deal, login, args.model)
+    message = submit_message(args.task, args.deal, login, args.model, signals)
     branch = SUBMIT_BRANCH.format(task=task["id"])
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         # The candidate is made in a store of this tool's own, which holds the project's two commits (the one the work
@@ -12291,12 +12490,7 @@ def cmd_release(args):
         raise HiveError(f"task {task['id']} is closed: the hive ends its deal at no cost to you, and there is nothing to give back")
     if not instant(args.deal):
         raise HiveError("--deal: the instant 'next' printed after DEAL")
-    status, feed = read_untrusted(Path(args.state) / "feed.json", STATE_BYTES)
-    if status != "ok" or not isinstance(feed, dict) or type(feed.get("protocol")) is not int or feed["protocol"] != PROTOCOL:
-        raise HiveError("the hive's feed is missing, or is not one this tool reads: nothing was pushed. Run hive.py next, and do what it says")
-    if not (isinstance(feed.get("repo"), str) and feed["repo"].casefold() == config["repo"].casefold()):
-        raise HiveError(f"the folder given to --state holds another project's state, not {config['repo']}'s: nothing was pushed. Clone the "
-                        f"state of this project (the branch hive-state of https://github.com/{config['repo']}) into a folder of its own, and give that folder")
+    feed = project_feed(args, config)
     if args.because not in releases_in_feed(feed):
         raise HiveError("the project's hive does not read a deal given back yet (its run is at an older commit of the hive): nothing was "
                         "pushed. Stop without submitting, as the worker's guide says: the deal runs out by itself")
@@ -12314,8 +12508,9 @@ def cmd_release(args):
     if deal.get("candidate") is True or pushed_candidate(clone, fork, task["id"], args.deal):
         raise HiveError("your candidate for this deal is pushed: the hive answers it, and giving the deal back would change nothing. "
                         "Nothing was pushed")
+    signals = said_signals(args, args.because, task, tasks, config, feed)
     released = now()  # (the instant makes each release a new commit)
-    message = release_message(task["id"], iso(released), args.deal, login, args.because)
+    message = release_message(task["id"], iso(released), args.deal, login, args.because, signals)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
         store = own_store(clone, folder)
         commit = store.commit(EMPTY_TREE, None, message, clone.identity(login, released))
@@ -12758,6 +12953,10 @@ def main(argv=None):
         p.add_argument("--hand-over", help="the local bee's launcher only: write what would be pushed into this empty folder, for the "
                                            "launcher to push, in place of the push")
 
+    def signal_flags(p):
+        p.add_argument("--signal", action="append", help="a signal of the deal, « code » or « code=value », from the worker's guide's list "
+                                                         f"(SIGNALS): {SIGNALS_MOST} at most, each code once; repeat the option for each")
+
     def needs_flags(p):
         p.add_argument("--needs-accepted", type=needs_accepted, help="the digest of the project's needs your user accepted, as hive.py needs "
                                                                      "printed it (NEEDS-DIGEST): its files and documents may then be fetched, and its packages installed")
@@ -12816,6 +13015,8 @@ def main(argv=None):
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
     p.add_argument("--message", help="one plain line that says what you changed (the work commit's title)")
     p.add_argument("--model", help="your model's identifier, if the project lists it; leave it out if you are not sure")
+    signal_flags(p)
+    p.add_argument("--state", help="a clone of the project's branch hive-state, which --signal needs (the codes the project's run reads)")
     p.set_defaults(run=cmd_submit)
     p = sub.add_parser("release", help="volunteer: give back the deal you hold, when the task is out of your reach or this machine cannot "
                                        "run the project's sandbox (pushes the release to your fork)")
@@ -12827,6 +13028,7 @@ def main(argv=None):
     p.add_argument("--because", required=True, choices=RELEASES, help="out_of_reach: an honest try, checked as the task's check allows, "
                                                                     "showed that you cannot do it; cannot_run: this machine cannot run the "
                                                                     "project's sandbox")
+    signal_flags(p)
     p.set_defaults(run=cmd_release)
     p = sub.add_parser("admit", help="guardian: admit one commit the hive refused for a figure the project lets its guardians waive "
                                      "(pushes the ruling to your fork)")
