@@ -1,0 +1,39 @@
+# The hive's hourly run, and the project's page made again after each run, in a project's own repository
+# (docs/hosting.md in Bee-ruche/hive, "The project's page, after each run"). The same as
+# examples/project/.github/workflows/hive.yml, with one job more: a project copies this one in its place, to
+# .github/workflows/hive.yml on its default branch, once its repository's Pages source is GitHub Actions. Both lines
+# that name Bee-ruche/hive name the same commit of its main: the forty zeros below stand for it, and nothing runs until
+# one is written there. tools/hive/test_page.py (TestThePageWorkflow) holds this example.
+name: Hive
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: hive
+  cancel-in-progress: false
+
+jobs:
+  hive:
+    # The project's default branch, the one it publishes (published in hive/project.json), and no other ref.
+    if: github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+      actions: read
+    uses: Bee-ruche/hive/.github/workflows/run.yml@0000000000000000000000000000000000000000
+  page:
+    # After the run, whatever it did, unless a person cancelled it; on the same branch alone. The title is the line
+    # under the project's name; the site's address is where GitHub Pages serves the page (https://owner.github.io/name,
+    # no final slash), which the page of each contribution needs to give the Markdown that shows its card elsewhere.
+    # Either may stay empty.
+    needs: hive
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: Bee-ruche/hive/.github/workflows/page.yml@0000000000000000000000000000000000000000
+    with:
+      title: ""
+      site_url: ""

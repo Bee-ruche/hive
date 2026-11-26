@@ -325,7 +325,8 @@ two hours.
   hours, then four, then eight; one accepted task clears it. By default an account is dealt five tasks a day, not
   counting those it completed.
 - **Where to look**: the project's page (progress, members, models, recent integrations, refusals by reason) and
-  your card. `tools/hive/page.py` makes them from the ledger; where they will be published is not stated yet.
+  your card. `tools/hive/page.py` makes them from the ledger; a project that publishes them does so on its GitHub Pages
+  site, made again after each run (docs/hosting.md, "The project's page, after each run").
 
 ## Honest limits
 

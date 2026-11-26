@@ -231,7 +231,10 @@ All of it in the project's own repository. Copies of the first test project's ar
    [`examples/project/.github/workflows/hive.yml`](../examples/project/.github/workflows/hive.yml) with two changes:
    the forty zeros replaced by the full id of the commit of `Bee-ruche/hive`'s main that the project runs, and the
    branch its `if` names set to the project's default branch. It asks GitHub to run the hive every hour (below, "GitHub
-   starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for.
+   starts it when it can"), and runs it by hand too, one run at a time, and gives the run's jobs the project's own token with no more than they ask for. A project that also wants its
+   public page made again after each run copies
+   [`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml) instead, with the same
+   changes made to both lines that name `Bee-ruche/hive` ("The project's page, after each run", below).
 4. **The branch `hive-state`**, made once by the lead: a branch of its own history (none of the project's), which
    holds the hive's state (`ledger.jsonl`, `feed.json`, `ignored.json`, `accounts.json`, `stats.json`, and `tip.json`
    where the project's judge answers about the tip: [cutter.md](cutter.md), "The proof at the tip") at its root.
@@ -368,12 +371,14 @@ workers read its settings and its state the same way.
 ## The repository's settings
 
 No secret, no GitHub App and no environment: the run's only key is the project's own `GITHUB_TOKEN`, which GitHub
-makes for each job and whose reach is this repository alone.
+makes for each job and whose reach is this repository alone. (The page, which a project may add, deploys to GitHub
+Pages' own environment, `github-pages`, and holds no secret either: "The project's page, after each run", below.)
 
 - **Settings, Actions, General, "Actions permissions"**: actions and reusable workflows allowed. Where the list is
   limited to some, it must hold the reusable workflow `Bee-ruche/hive/.github/workflows/run.yml` and the three
   actions it uses, at the commits it names: `actions/checkout`, `actions/upload-artifact` and
-  `actions/download-artifact`.
+  `actions/download-artifact`; with the page, also `Bee-ruche/hive/.github/workflows/page.yml` and
+  `actions/deploy-pages`, at the commit it names.
 - **Settings, Actions, General, "Workflow permissions"**: the run's two jobs that write ask for `contents: write` (and
   `actions: read`) themselves, and the caller grants that to them; the setting is the default given to a workflow
   that asks for nothing, so "Read repository contents and packages permissions" can stay. Where an organization or
@@ -522,6 +527,56 @@ candidate that long for its judgement; the deals lose nothing by it, since a dea
 no candidate for it. A lead who wants a run sooner starts it by hand ("Run workflow" on the workflow's page, or
 `gh workflow run hive.yml`).
 
+## The project's page, after each run
+
+The project's public page (`tools/hive/page.py`: progress, the latest accepted contribution, the members, a card for
+each integration) is made from its state. A project may have it made again after each run, with a second reusable
+workflow, [`.github/workflows/page.yml`](../.github/workflows/page.yml), which hands it to GitHub Pages. A project that
+does not call it has no page job, and its run is the same.
+
+What the lead does, once:
+
+1. **Settings, Pages, "Build and deployment", Source: GitHub Actions.** GitHub then serves what a workflow deploys,
+   and keeps the environment it deploys to, `github-pages`. Under Settings, Environments, `github-pages`, "Deployment
+   branches and tags" should allow the published branch alone (add that rule if none is listed); the environment holds
+   no secret and needs no reviewer. A project that published by hand on a branch (`gh-pages`) stops being served from
+   it at that switch: the branch is no longer read, and a maintainer may keep it or remove it.
+2. **The caller**: [`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml) in place
+   of the plain example, with the same changes (the commit, the branch), made to both lines that name `Bee-ruche/hive`:
+   the page runs at the same commit as the run. Its two texts may be filled in or left empty: `title`, the line under
+   the project's name, and `site_url`, the address Pages serves the site at (`https://owner.github.io/name`, no final
+   slash), which the page of each contribution needs to give the Markdown that shows its card elsewhere.
+3. **Where the actions allowed are limited** ("The repository's settings"): the page's workflow and
+   `actions/deploy-pages`, at the commit it names.
+
+What it does:
+
+- **After each run**, unless a person cancelled it, on the published branch alone, in the caller's concurrency group
+  (one at a time, after the run's four jobs).
+- **`build`** may read the repository and nothing more. Its first two steps are the run's own: the protocol's check
+  and the hive's code at the workflow's own commit of `Bee-ruche/hive`. It checks out `hive-state` without keeping the
+  token, writes out the project's two files of its published branch (`hive/tasks.jsonl`, `hive/project.json`) from
+  git's objects, with no tree checked out, makes the page with `page.py` into a folder of its own, packs it, and
+  uploads it under the name Pages takes (`github-pages`, kept a day). A step that fails stops it there: nothing is
+  deployed, and the site stays as it was.
+- **`deploy`** may do two things: `pages: write` (create a Pages deployment) and `id-token: write` (ask for the token
+  that tells Pages which workflow, branch and environment the deployment comes from). It has one step,
+  `actions/deploy-pages` pinned to a commit: no checkout, none of the hive's code, no file read.
+- **No branch is written**, by either job: the deploy is no push, so the rulesets ("The repository's settings") need no
+  change, and no `gh-pages` branch is needed.
+- **Nothing of a contributor's is on the machine.** No fork, no candidate and not the hive's own branch is fetched: the
+  page is made from the hive's own state, which holds texts that strangers chose (logins, model identifiers) and which
+  `page.py` reads as data, checked, bounded and escaped ("Trust" at the head of `page.py`). The title and the address
+  are the caller's own: they reach `page.py` through the step's environment, and it bounds the one and checks the
+  other.
+- **What a token could do if it leaked while its job runs**: build's reads the repository; deploy's replaces the site
+  (what a write to a `gh-pages` branch could do), and nothing else of the repository.
+
+It is not a setting of `hive/project.json`: the caller's job is the switch, because only the caller can give the
+deploying job its two permissions, and a run that asked for them of every project would fail where they are not
+given. The workflow is held by a test of the file itself (`TestThePageWorkflow` in `tools/hive/test_page.py`): its two
+jobs word for word, the rules they obey, the example caller, and the steps that make the page, run with bash.
+
 ## Notes on the file
 
 - **No expression appears in a `run:` line**: a text never becomes code; values reach a step through its `env:`.
@@ -533,7 +588,8 @@ no candidate for it. A lead who wants a run sooner starts it by hand ("Run workf
   token, the timeouts), and the example caller. The test reads the file with a reader of its own that refuses any
   spelling two readers could read differently: every number and every yes-or-no is written the one way (`true`,
   `false`, plain decimal digits), and no character is outside printable ASCII.
-- The page (`tools/hive/page.py`) is not part of the run.
+- The page (`tools/hive/page.py`) is not part of the run: a project that wants it calls its own workflow after the
+  run ("The project's page, after each run").
 - A lighter run that plans and records more often would deal tasks sooner; it is not designed.
 
 ## What could not be tried here
@@ -558,3 +614,10 @@ on GitHub yet.
   project's repository declined (the registry's
   [hive-workflow.md](https://github.com/Bee-ruche/registre/blob/2baa4d2/docs/hive-workflow.md), "What could not be tried
   here").
+- **The page's workflow, on GitHub** (written 26 November 2026; its steps ran in the tests only, with bash, a local
+  repository for the project and this repository's own `page.py`): the deploy from a called workflow; whether the
+  deploying job must name `github-pages` (assumed, as GitHub's own examples of `actions/deploy-pages` do); the
+  "Deployment branches and tags" rule GitHub gives that environment when the source becomes GitHub Actions; and
+  whether Pages takes the archive as `build` makes it (a plain tar of the page's folder, uploaded under the name
+  `github-pages` by the run's own upload action, where GitHub's examples use `actions/upload-pages-artifact`, which
+  packs the same tar). Its first trial is a test project's first run after its lead makes the three changes above.
