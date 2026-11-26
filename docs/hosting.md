@@ -125,9 +125,11 @@ ends with one line, `hive: …`, and 2, when it cannot start:
 ## Measuring a project
 
 `hive.py measure` judges the project's tip with the project's own kind of judge, a few times, on the architect's own
-machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker. A relay judge also
-needs root, or sudo that runs `mount` and `umount` without asking a password, as on a hosted runner: it mounts a memory
-file system for each phase. It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
+machine, and proposes the step and the bounds from what it measured. It needs Linux and Docker, and root or sudo that
+runs `mount` and `umount` without asking a password, as on a hosted runner: every kind of judge mounts memory file
+systems for its containers (the common judge for each execution of the builds, the reference judge for each
+container's output, cases and answers, the relay judge for each phase), and `measure` checks this before it starts.
+It reads the clone as `doctor` does, writes nothing to it and pushes nothing.
 
 ```bash
 python3 tools/hive/hive.py measure --project <owner/name> --repo <a full clone of the project> [--times 3] [--factor 2]
@@ -201,7 +203,8 @@ decides:
 It ends with 1 when a judgement fails to judge (code 2) or a phase passes its bound, and 0 otherwise: a refusal
 (code 1) alone fails nothing. It ends with one line, `hive: …`, and 2, when it cannot start:
 - another system than Linux;
-- no Docker, or, for a relay judge, neither root nor sudo for `mount` and `umount` without a password;
+- no Docker, or neither root nor sudo for `mount` and `umount` without a password (the line names the kind of judge
+  and what it mounts);
 - a common project without `--plugin-runs-here`;
 - settings or a manifest that do not load;
 - a `--workdir` that does not exist;

@@ -7432,6 +7432,12 @@ REPOSITORY_SETTINGS = (("actions-permissions", "Settings, Actions, General, \"Ac
                        ("rulesets", "Settings, Rules, Rulesets"))
 HOLDS = "docs/hosting.md, \"What a project holds\""
 JUDGE_MODULES = {"common": "judge", "reference": "reference", "relay": "relay"}  # each kind's module in the hive's tools/judge
+# What each kind's judge mounts for its containers (container.mount_point: as root, or through sudo -n), and so why measure
+# asks for root or sudo before it starts; a kind whose judge mounts nothing is not named (TestTheMeasure reads the judges'
+# code for the calls).
+JUDGE_MOUNTS = {"common": "a memory file system for each execution of the builds (container.Execution)",
+                "reference": "a memory file system for each container's output, cases and answers (reference.bounded_folder)",
+                "relay": "a memory file system for each phase (relay.Judgement, reference.bounded_folder)"}
 ONLY_ON_LINUX_DOCTOR = ("the doctor runs on Linux only, as the hive's run does (each git it starts is bounded in a way other systems "
                         "do not offer): run it on a Linux machine, in a Linux container or in a cloud session")
 
@@ -8447,7 +8453,8 @@ def cmd_measure(args):
     WRONG, CANNOT lines), and proposals for the step and the bounds (DECIDE), each with its rule and its numbers. Read
     from the clone (--repo, as its last fetch left it) and the hive's own tree (--registry); the judge's image is made
     first, the one step with the network. Exit code 1 when a judgement failed or a phase passed its bound; 2 when it
-    cannot start (another system than Linux, no Docker, settings that do not load, the image not made)."""
+    cannot start (another system than Linux, no Docker, neither root nor sudo -n for a judge that mounts (JUDGE_MOUNTS), settings
+    that do not load, the image not made)."""
     if not sys.platform.startswith("linux"):
         raise HiveError(ONLY_ON_LINUX_DOCTOR.replace("the doctor", "measure"))
     if not 1 <= args.times <= MEASURE_TIMES_MOST:
@@ -8479,8 +8486,8 @@ def cmd_measure(args):
             raise HiveError(f"{module.MANIFEST}: not JSON ({type(error).__name__})") from None
         except module.JudgeError as error:
             raise HiveError(f"{module.MANIFEST}: {safe_text(error, 200)}") from None
-    if kind == "relay" and not root_or_sudo():
-        raise HiveError("the relay judge mounts a memory file system for each phase: it needs root, or sudo that asks no password (sudo -n)")
+    if kind in JUDGE_MOUNTS and not root_or_sudo():
+        raise HiveError(f"the {kind} judge mounts {JUDGE_MOUNTS[kind]}: it needs root, or sudo that asks no password (sudo -n) for mount and umount")
     if args.workdir and not os.path.isdir(args.workdir):
         raise HiveError("--workdir: no such folder")
     if kind == "common" and not args.plugin_runs_here:

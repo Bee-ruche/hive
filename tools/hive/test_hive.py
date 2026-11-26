@@ -6,6 +6,7 @@ the hive's clone. No network, no GitHub: the API is a fake, and the judge is a f
 """
 
 import argparse
+import ast
 import base64
 import contextlib
 import hashlib
@@ -17173,6 +17174,72 @@ class TestTheMeasure(Base):
                         return mock.Mock(returncode=answer)
                     with mock.patch.object(hive.subprocess, "run", side_effect=run):
                         self.assertIs(hive.root_or_sudo(), expected)
+
+    def measure_kind(self, kind):
+        """The project set up with a judge of `kind`, and (the words measure is given, the answers of one judgement)."""
+        if kind == "common":
+            self.healthy()
+            return ("--plugin-runs-here",), [{"code": 0, "report": {"gain": 0.0, "sure_gain": 0, "outputs_compared": 1}}]
+        if kind == "reference":
+            self.reference_project([{"id": "toy-0001", "title": "Port upper", "files": ["port/upper.c"], "options": {"unit": "upper"}}])
+            self.manifest(json.loads((self.TOY / "bee/reference/project.json").read_text()))
+            return (), [{"code": 0, "report": {"cases_compared": 1200, "builds": 2, "runs": 4}}]
+        self.relay()
+        return (), [{"code": 0, "report": {**self.RELAY, "encode_seconds": 1.0}}]
+
+    def mounting_kind_asks_for_root_or_sudo(self, kind):
+        """A kind whose judge mounts (JUDGE_MOUNTS): without root or sudo -n, measure says so, naming the kind and what its
+        judge mounts, and ends with 2, nothing made or judged; with them, it judges."""
+        words, answers = self.measure_kind(kind)
+        code, lines, err = self.measure(answers, "--times", "1", *words, root=False)
+        self.assertEqual((code, lines, err.strip()), (2, [], f"hive: the {kind} judge mounts {hive.JUDGE_MOUNTS[kind]}: it needs root, or sudo that "
+                                                             "asks no password (sudo -n) for mount and umount"))
+        self.assertEqual((self.asked, self.made), ([], []), "nothing judged, no image made")
+        code, lines, err = self.measure(answers, "--times", "1", *words, root=True)
+        self.assertEqual((code, err), (0, ""), lines)
+        self.assertEqual(len(self.asked), 1, "judged once it may mount")
+
+    def test_the_common_judge_mounts_and_asks_for_root_or_sudo(self):
+        self.mounting_kind_asks_for_root_or_sudo("common")
+
+    def test_the_reference_judge_mounts_and_asks_for_root_or_sudo(self):
+        self.mounting_kind_asks_for_root_or_sudo("reference")
+
+    def test_the_relay_judge_mounts_and_asks_for_root_or_sudo(self):
+        self.mounting_kind_asks_for_root_or_sudo("relay")
+
+    def test_a_kind_whose_judge_mounts_nothing_is_not_asked_for_root(self):
+        """The refusal is the kind's: a kind JUDGE_MOUNTS does not name is judged without root or sudo (no kind is such
+        today: here the relay kind is taken out of the table for the test)."""
+        words, answers = self.measure_kind("relay")
+        with mock.patch.dict(hive.JUDGE_MOUNTS, clear=False):
+            del hive.JUDGE_MOUNTS["relay"]
+            code, lines, err = self.measure(answers, "--times", "1", *words, root=False)
+        self.assertEqual((code, err), (0, ""), lines)
+        self.assertEqual(len(self.asked), 1)
+
+    def test_the_kinds_named_as_mounting_are_those_whose_judges_code_mounts(self):
+        """JUDGE_MOUNTS names exactly the kinds whose judge's module calls container.mount_point, directly or through a
+        function or class of the judges' code that does (read from their source, test files aside), so that a judge that
+        comes to mount, or stops, is seen here."""
+        trees = {path.stem: ast.parse(path.read_text(encoding="utf-8")) for path in (REGISTRY / "tools/judge").glob("*.py")
+                 if not path.name.startswith("test_")}
+
+        def called(node):
+            return {call.func.id if isinstance(call.func, ast.Name) else call.func.attr for call in ast.walk(node)
+                    if isinstance(call, ast.Call) and isinstance(call.func, (ast.Name, ast.Attribute))}
+
+        mounting = {"mount_point"}
+        while True:
+            more = {d.name for tree in trees.values() for d in tree.body
+                    if isinstance(d, (ast.FunctionDef, ast.ClassDef)) and d.name not in mounting and called(d) & mounting}
+            if not more:
+                break
+            mounting |= more
+        self.assertTrue({"Execution", "bounded_folder"} <= mounting, sorted(mounting))
+        self.assertTrue(set(hive.JUDGE_MODULES.values()) <= set(trees), sorted(trees))
+        self.assertEqual({kind for kind, name in hive.JUDGE_MODULES.items() if called(trees[name]) & mounting}, set(hive.JUDGE_MOUNTS),
+                         sorted(mounting))
 
     def test_the_time_of_a_judgement_holds_with_the_manifests_bounds_as_they_are(self):
         """Bounds proposed below the manifest's own make a smaller worst case: the time proposed for a judgement still

@@ -268,8 +268,8 @@ as the run's judging job does, `--times` times, in the judge's containers withou
 the clone (`docs/hosting.md`, "Measuring a project"). More judgements tell the noise better (20 at most).
 
 - **Every kind needs root**, or `sudo` for `mount` and `umount` without a password: each judge mounts memory file
-  systems for its containers. `measure` checks it beforehand for `relay` alone; for `common` and `reference` a
-  judgement without it fails. Never use `sudo` or root yourself.
+  systems for its containers, and `measure` checks it before it starts, for every kind. Never use `sudo` or root
+  yourself.
 - **A `common` project's plug-in runs on this machine**, in the judge's own process, as it does on the run's.
   `measure` stops unless given `--plugin-runs-here`. That flag is the architect's to give, once they have read
   `bee/judge/project.py` at the tip of `<branch>`, which no candidate can change; never add it yourself.
