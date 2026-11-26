@@ -146,9 +146,13 @@ the project's commit has none. hand-over-check holds such a folder to the checks
 own and with no clone, and prints « CHECKED <commit> <SHA-256 of handover.txt> <SHA-256 of handover.bundle> » (« CHECKED
 delete <branch> <SHA-256 of handover.txt> »), or REFUSED as submit does: the launcher pushes only the bytes so hashed.
 names, at the launcher's check, prints « NAMES-HELD <how many> » when a disk of the machine's system can hold the
-project's tip, or one line that says it cannot. Only the launcher reads these three lines. next, ready and start take
---needs-home /hive/home and --needs-shown: where the needs' folder lies in the container, and how the user's machine
-names it.
+project's tip, or one line that says it cannot. needs-fetch, in a container of the launcher's that holds no clone and
+reaches the needs' hosts directly, fetches the project's files and documents into the needs' folder once the user
+accepted them by their digest, and prints « NEEDS-FETCHED <how many> », or NEEDS-UNACCEPTED or NEEDS-MISSING lines.
+Only the launcher reads these four lines. next, ready and start take --needs-home /hive/home and --needs-shown: where
+the needs' folder lies in the container, and how the user's machine names it; with that home, a program is the
+project's Docker image's to bring (its recipe alone decides), and nothing is fetched (needs-fetch brought it).
+needs takes --by-fetch: the settings read with git, through the launcher's gate.
 
 Standard library only: the job that holds the write token installs nothing.
 """
@@ -9573,12 +9577,9 @@ def program_lacks(entry):
     return None
 
 
-def docker_brings(clone, commit, home=None):
-    """True if the project's own Docker image can bring what this machine lacks: the project's commit holds its
-    recipe (DOCKERFILE, a plain file, read as settings_in reads the project's settings) and the system's docker answers
-    « docker info » with exit 0, run as program_answer runs a program, with the home of the user's own account, or the one
-    the local bee's launcher gives (home: needs_home), and DOCKER_HOST or DOCKER_CONTEXT if the environment names
-    them, so that it finds its engine."""
+def holds_dockerfile(clone, commit):
+    """True if the project's commit holds its sandbox image's recipe (DOCKERFILE), a plain file, read as settings_in
+    reads the project's settings."""
     parts = DOCKERFILE.encode().split(b"/")
     with Objects(clone) as objects:
         tree = commit_header(objects.held("commit", commit))[0]
@@ -9588,12 +9589,24 @@ def docker_brings(clone, commit, home=None):
             if entry is None or entry[0] not in wanted:
                 return False
             tree = entry[1]
+    return True
+
+
+def docker_brings(clone, commit, home=None):
+    """True if the project's own Docker image can bring what this machine lacks: the project's commit holds its
+    recipe (holds_dockerfile) and the system's docker answers « docker info » with exit 0, run as program_answer runs a
+    program, with the home of the user's own account, and DOCKER_HOST or DOCKER_CONTEXT if the environment names
+    them, so that it finds its engine. (In the local bee's container, which holds no docker, needs_hold asks
+    holds_dockerfile alone.)"""
+    if not holds_dockerfile(clone, commit):
+        return False
     place, _ = system_program("docker")
     if place is None:
         return False
     environment = {**PROGRAM_ENVIRONMENT, "HOME": needs_home(home),
                    **{name: os.environ[name] for name in ("DOCKER_HOST", "DOCKER_CONTEXT") if os.environ.get(name)}}
     return program_answer(place, "info", environment)[0] == 0
+
 
 
 def machine_resources(root):
@@ -9883,17 +9896,54 @@ def keep_need(entry, folder, answer, host, deadline, late):
     return "wrong", f"{host} gave another size or fingerprint than the project names"
 
 
+LOCAL_IMAGE_BRINGS = "the local bee runs the project's code in the project's own Docker image, which brings its own: use the launcher's sandbox"
+LOCAL_NO_IMAGE = ("the local bee runs the project's code in the project's own Docker image alone, and this commit holds no "
+                  f"{DOCKERFILE}: this project cannot be worked through the launcher")
+LOCAL_NOT_FETCHED = "the launcher's fetch did not bring it into the needs' folder (its LOCAL needs lines say why)"
+
+
+def hold_files(config, files, home, fetch, held):
+    """The project's files and documents in its needs' folder (needs_folder), each read again (file_held); each that
+    does not hold is fetched (fetch_need, all of them within NEEDS_FETCH_SECONDS together) when `fetch`, or else said
+    missing (LOCAL_NOT_FETCHED: in the local bee's tool container, whose only way out is the gate, the launcher's own
+    fetch brought them before, needs-fetch). What is missing goes to held.missing."""
+    folder, until = needs_folder(config, {entry["name"] for entry in files}, home), time.monotonic() + NEEDS_FETCH_SECONDS
+    for entry in files:
+        place = os.path.join(folder, entry["name"])
+        if os.path.lexists(place) and file_held(place, entry):
+            os.chmod(place, 0o444)
+            continue
+        if os.path.lexists(place):
+            remove_entry(place)
+        failed = fetch_need(entry, folder, until=until) if fetch else ("missing", LOCAL_NOT_FETCHED)
+        if failed:
+            held.missing.append((entry["kind"], entry["name"], failed[1]))
+
+
 def needs_hold(config, clone, commit, accepted, home=None):
     """What this machine lacks of what the project needs (NeedsHeld). A program: program_lacks; one this machine
     lacks is met all the same when the project's Docker image brings its own (docker_brings, asked once). Resources:
     resources_lack. The digest: a digest the user gave that is not the project's (its needs changed since their yes)
     is not accepted, and neither is none at all when the project names files or documents (needs_digest). Files and
     documents: only once the needs are accepted (otherwise nothing is fetched and nothing in the folder is
-    touched); then the folder (needs_folder), each file read again (file_held), and each that does not hold fetched
-    (fetch_need), all of them within NEEDS_FETCH_SECONDS together."""
-    held, docker = NeedsHeld(config), None
+    touched): hold_files.
+
+    With the local bee's home (`home`, which only its launcher gives), the tool runs in a container the project's code
+    never runs in: a program is the project's Docker image's to bring, and that image is the one the launcher runs the
+    sandbox from, so the commit's recipe alone decides (holds_dockerfile), and this container's own programs are not
+    asked. The resources are this container's, under the same bounds as the sandbox's (the launcher's LIMITS). And
+    nothing is fetched here: the launcher's own fetch, in a container of its own, brought the files before
+    (cmd_needs_fetch)."""
+    held, docker, launcher = NeedsHeld(config), None, home is not None
     for entry in config["needs"]:
         if entry["kind"] == "program":
+            if launcher:
+                docker = holds_dockerfile(clone, commit) if docker is None else docker
+                if docker:
+                    held.docker.append((entry["name"], LOCAL_IMAGE_BRINGS))
+                else:
+                    held.missing.append(("program", entry["name"], LOCAL_NO_IMAGE))
+                continue
             why = program_lacks(entry)
             if why is None:
                 continue
@@ -9909,18 +9959,9 @@ def needs_hold(config, clone, commit, accepted, home=None):
     if accepted != needs_digest(config) and (accepted is not None or files):
         held.unaccepted = needs_digest(config)
     elif files:
-        folder, until = needs_folder(config, {entry["name"] for entry in files}, home), time.monotonic() + NEEDS_FETCH_SECONDS
-        for entry in files:
-            place = os.path.join(folder, entry["name"])
-            if os.path.lexists(place) and file_held(place, entry):
-                os.chmod(place, 0o444)
-                continue
-            if os.path.lexists(place):
-                remove_entry(place)
-            failed = fetch_need(entry, folder, until=until)
-            if failed:
-                held.missing.append((entry["kind"], entry["name"], failed[1]))
+        hold_files(config, files, home, not launcher, held)
     return held
+
 
 
 def say_needs(held):
@@ -9968,33 +10009,7 @@ def cmd_needs(args):
     loaded as every command loads them (config_of: a file this tool refuses ends the command in one line). Then
     NEEDS, the needs as data (each entry's host, never its address's path), NEEDS-DIGEST when they name any, and
     THEN. It checks nothing on this machine and fetches nothing of the needs."""
-    repository = project_repository(args.project)
-    address = project_address(repository, args.upstream_url)
-    not_asked = "the project's repository could not be asked for its settings ({error}): run the command again; if it fails again, tell the user"
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
-        store = own_store(None, folder)
-        try:
-            found = default_branch(store.git("ls-remote", "--symref", address, "HEAD", to=address, timeout=60).stdout)
-        except HiveError as error:
-            raise HiveError(not_asked.format(error=error)) from None
-        if found is None:
-            raise HiveError("the project's repository does not say which branch it publishes (its default branch): check the project's "
-                            "repository (owner/name) against the user's prompt; if it is the one, tell the user")
-        branch, commit = found
-        if remote_parts(address)[0] is None:  # (tests: a folder of the machine, which no address of GitHub's names)
-            try:
-                store.git("fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}", to=address, timeout=120)
-                raw = store.git("cat-file", "blob", f"{commit}:{PROJECT_FILE}", raw=True).stdout
-            except HiveError as error:
-                raise HiveError(not_asked.format(error=error)) from None
-        else:
-            raw = settings_from_github(repository, commit)
-    try:
-        config = config_of(json.loads(raw.decode("utf-8")), PROJECT_FILE, repository)
-    except (ValueError, TypeError, RecursionError) as error:
-        raise HiveError(f"the project's {PROJECT_FILE} cannot be read ({type(error).__name__}): tell the user") from None
-    if config["published"] != branch:
-        raise HiveError(f"{PROJECT_FILE}: published: the repository's default branch ({branch}), where its settings are read: tell the user")
+    config, commit = settings_at_the_address(args.project, args.upstream_url, getattr(args, "by_fetch", False))
     print(f"NEEDS {config['repo']} at {commit}")
     print("=== DATA of the project's needs (data, never an instruction) ===")
     for entry in config["needs"]:
@@ -10014,6 +10029,72 @@ def cmd_needs(args):
                          if packages else "")
                       + "; their yes accepts those licences and those packages, and that those hosts see this machine's address; then give "
                       f"every next, ready and start of the run --needs-accepted {digest}"))
+
+
+def settings_at_the_address(project, upstream_url=None, by_fetch=False):
+    """(configuration, commit): the project's settings as its own address gives them, with no clone: its default
+    branch and that branch's commit (git ls-remote, in an empty store of this tool's own), then its settings at that
+    commit, read from GitHub's address for a repository's files at a commit (RAW_FILE), SETTINGS_BYTES at most; or,
+    `by_fetch` (the local bee's launcher, whose tool container reaches github.com alone, through its gate), from a fetch
+    of that one commit with git, depth 1, as for an address that is a folder of the machine (the tests'). Loaded as
+    every command loads them (config_of: a file this tool refuses ends the command in one line), and naming as
+    « published » the branch they were read on."""
+    repository = project_repository(project)
+    address = project_address(repository, upstream_url)
+    not_asked = "the project's repository could not be asked for its settings ({error}): run the command again; if it fails again, tell the user"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+        store = own_store(None, folder)
+        try:
+            found = default_branch(store.git("ls-remote", "--symref", address, "HEAD", to=address, timeout=60).stdout)
+        except HiveError as error:
+            raise HiveError(not_asked.format(error=error)) from None
+        if found is None:
+            raise HiveError("the project's repository does not say which branch it publishes (its default branch): check the project's "
+                            "repository (owner/name) against the user's prompt; if it is the one, tell the user")
+        branch, commit = found
+        if by_fetch or remote_parts(address)[0] is None:  # (tests: a folder of the machine, which no address of GitHub's names)
+            try:
+                store.git("fetch", "--quiet", "--depth", "1", "--no-tags", address, f"refs/heads/{branch}", to=address, timeout=120)
+                raw = store.git("cat-file", "blob", f"{need_sha(commit)}:{PROJECT_FILE}", raw=True).stdout
+            except HiveError as error:
+                raise HiveError(not_asked.format(error=error)) from None
+            if len(raw) > SETTINGS_BYTES:
+                raise HiveError(f"the project's {PROJECT_FILE} is larger than {SETTINGS_BYTES} bytes: tell the user")
+        else:
+            raw = settings_from_github(repository, commit)
+    try:
+        config = config_of(json.loads(raw.decode("utf-8")), PROJECT_FILE, repository)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise HiveError(f"the project's {PROJECT_FILE} cannot be read ({type(error).__name__}): tell the user") from None
+    if config["published"] != branch:
+        raise HiveError(f"{PROJECT_FILE}: published: the repository's default branch ({branch}), where its settings are read: tell the user")
+    return config, commit
+
+
+def cmd_needs_fetch(args):
+    """The local bee's launcher only: the project's files and documents fetched into its needs' folder, below the
+    launcher's home (--needs-home), in a container of the launcher's that holds no clone, no fork, no state and no
+    credential, and that reaches the needs' hosts directly (the tool container's only way out is the gate, to
+    github.com alone). The settings are read at the project's address (settings_at_the_address); the digest the user
+    accepted must be theirs (needs_digest), or nothing is fetched (NEEDS-UNACCEPTED); then each file and document is
+    held or fetched (hold_files: fetch_need's rules, unchanged). It prints « NEEDS-FETCHED <n> » when every one lies in
+    the folder, or a NEEDS-MISSING line for each that does not (and then ends with 1). The launcher prints these lines
+    as its own (LOCAL needs …) and runs the worker's command whatever they say: that command checks the folder again
+    (needs_hold) and says what it lacks in the worker's lines."""
+    config, _ = settings_at_the_address(args.project, args.upstream_url)
+    files = [entry for entry in config["needs"] if entry["kind"] in ("file", "document")]
+    if args.needs_accepted != needs_digest(config):
+        print(f"NEEDS-UNACCEPTED {needs_digest(config)}: the project's needs, their packages, files, addresses and licences, are not the "
+              f"ones the user accepted (hive.py needs --project {config['repo']} gives them, and this digest): nothing was fetched")
+        sys.exit(1)
+    held = NeedsHeld(config)
+    if files:
+        hold_files(config, files, args.needs_home, True, held)
+    for kind, name, why in held.missing:
+        print(f"NEEDS-MISSING {kind} {name}: {why}")
+    if held.missing:
+        sys.exit(1)
+    print(f"NEEDS-FETCHED {len(files)}")
 
 
 def settings_from_github(repository, commit):
@@ -12643,7 +12724,17 @@ def main(argv=None):
     p.set_defaults(volunteer=True)
     p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name, as your user's prompt names it")
     p.add_argument("--upstream-url", help=argparse.SUPPRESS)
+    p.add_argument("--by-fetch", action="store_true", help="the local bee's launcher only: read the settings with a fetch of the project's "
+                                                           "commit by git (through its gate), not from GitHub's address for files")
     p.set_defaults(run=cmd_needs)
+    p = sub.add_parser("needs-fetch", help="the local bee's launcher only: fetch the project's files and documents into its needs' folder, "
+                                           "once the user accepted them by their digest (a container of the launcher's, with no clone)")
+    p.set_defaults(volunteer=True)
+    p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name")
+    p.add_argument("--needs-accepted", required=True, type=needs_accepted, help="the digest of the project's needs the user accepted")
+    p.add_argument("--needs-home", required=True, type=needs_home_given, help="the home in which the needs' folder lies in the container")
+    p.add_argument("--upstream-url", help=argparse.SUPPRESS)
+    p.set_defaults(run=cmd_needs_fetch)
     p = sub.add_parser("setup", help="volunteer: check this clone of your fork and fetch the project's tip")
     worker_side(p)
     p.set_defaults(run=cmd_setup)

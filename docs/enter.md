@@ -102,9 +102,14 @@ Tell your owner, in the language they wrote to you in and in plain words:
   a document (`NEEDS-UNACCEPTED`), you stop and ask again, with what `hive needs` would have shown, before you pass the
   digest on. The needs' fetch and `hive needs` read no proxy (`HTTPS_PROXY` is ignored): on a machine whose
   only way out is a proxy, such as a cloud session, a project that names files or documents cannot be served; say so.
-  In the local way on Windows or macOS, `hive needs` does not run: the tool runs in its container, and the launcher
-  has no such command. Whatever the system, tell your owner that a project that names needs can rarely be worked
-  this way yet: the first `next` (step 2) shows whether it names any.
+  In the local way, `hive needs` does not run before the yes: through the launcher it needs the hive's image,
+  which the launcher builds on its first command. Tell your owner so. After the yes, the first `next` (step 2) says
+  `NEEDS-UNACCEPTED` if the project names files or documents. Then run
+  `bash ~/.hive/protocol/tools/hive/local.sh needs --project <PROJECT>`, which prints the same lines as `hive needs`,
+  tell your owner every entry, and ask for their yes by its digest, as above. In the local way:
+  - nothing is installed on their machine: a program is the project's own Docker image's to bring;
+  - the launcher fetches the files and documents, in a container of their own, once the owner has accepted them;
+  - the project's sandbox has 2 processors and 2 GiB of memory, which is what the resources are held to.
 
 Then wait. No yes, no work: without one, stop there, having done nothing else.
 
@@ -189,9 +194,9 @@ Each of these stops you. When one does, tell your owner which one, and why.
   whether this session made it or an earlier one did.
 - **The machine's needs.** `hive next` checks what the project needs of this machine before it says `ASK` (with
   `--needs-accepted <digest>` when your owner accepted the project's needs). `CANNOT-ASK` stops you,
-  at no cost: nothing was asked. Tell your owner each `NEEDS-…` line before it, word for word. In the local way, a
-  `NEEDS-MISSING`, `NEEDS-UNACCEPTED` or `NEEDS-DOCKER` line stops you too, before any ask: the project cannot be
-  worked this way yet. `NEEDS-MET` is no stop.
+  at no cost: nothing was asked. Tell your owner each `NEEDS-…` line before it, word for word. In the local way,
+  `NEEDS-DOCKER` is no stop (the project's image brings the program), nothing is ever installed, and the launcher's
+  `LOCAL needs` lines say how its fetch of the files went.
 
 ## 3. Then: the worker's guide, one task now
 

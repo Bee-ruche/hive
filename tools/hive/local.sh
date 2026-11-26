@@ -13,6 +13,7 @@
 #   local.sh check   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
 #   local.sh refresh --project <owner/name>
+#   local.sh needs   --project <owner/name>             (what the project needs of a worker's machine, after the yes)
 #   local.sh hive    <setup|next|start|ready|submit|release|duty> --project … --login … [--fork …] [the tool's options]
 #   local.sh sandbox --project <owner/name> --login <login> [--fork <name>] -- <command…>
 #
@@ -26,7 +27,8 @@
 #   protocol/                      the hive's protocol, a clone the owner keeps (the guide's « The run »): hive.py from here
 #   work/<login>/<fork>/           the fork's clone, made by the tool's container (clone), never by this machine's git
 #   state/<owner>/<name>/          the project's state (refresh)
-#   needs/<owner>/<name>/          the project's needs (lower case), shown to the tool and, read-only, to the sandbox
+#   needs/<owner>/<name>/          the project's needs (lower case), fetched by the needs' own container (needs-fetch),
+#                                  shown to the tool and, read-only, to the sandbox
 #   outbox/<owner>/<name>/         the one hand-over slot: never shown to the sandbox, emptied after every pushing command
 #   started/<owner>/<name>         what the last « start » printed: the sandbox runs only after it
 #   push/<owner>/<name>.git        this launcher's store: the only place this machine's git fetches into and pushes from
@@ -161,7 +163,7 @@ fi
 
 SUB=""
 case "$COMMAND" in
-  check|clone|refresh|sandbox) ;;
+  check|clone|refresh|needs|sandbox) ;;
   hive)
     SUB="${1:-}"
     [ $# -gt 0 ] && shift
@@ -169,13 +171,13 @@ case "$COMMAND" in
       setup|next|start|ready|submit|release|duty) ;;
       *) die "local.sh hive takes one of setup, next, start, ready, submit, release, duty: the worker's commands, and no other" ;;
     esac ;;
-  *) die "local.sh takes login, check, clone, refresh, hive or sandbox" ;;
+  *) die "local.sh takes login, check, clone, refresh, needs, hive or sandbox" ;;
 esac
 
 # The options each command takes: « name » takes a value, « name! » is a flag.
 case "$COMMAND:$SUB" in
   check:|clone:) KNOWN="project login fork" ;;
-  refresh:) KNOWN="project" ;;
+  refresh:|needs:) KNOWN="project" ;;
   sandbox:) KNOWN="project login fork" ;;
   hive:setup) KNOWN="project login fork" ;;
   hive:next) KNOWN="project login fork needs-accepted despite-needs!" ;;
@@ -186,7 +188,7 @@ case "$COMMAND:$SUB" in
   hive:duty) KNOWN="project login fork role release withdraw!" ;;
 esac
 
-PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE=""
+PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED=""
 PASS=()       # the tool's options, as given
 SANDBOXED=()  # the sandbox's command, after --
 while [ $# -gt 0 ]; do
@@ -221,6 +223,7 @@ while [ $# -gt 0 ]; do
     *)
       [ "$name" = task ] && TASK="$value"
       [ "$name" = release ] && DUTY_RELEASE="$value"
+      [ "$name" = needs-accepted ] && NEEDS_ACCEPTED="$value"
       PASS+=("$word" "$value") ;;
   esac
 done
@@ -231,7 +234,7 @@ NAME="${PROJECT#*/}"
 if [ "$OWNER/$NAME" != "$PROJECT" ] || ! [[ $OWNER =~ $LOGIN_RE ]] || ! [[ $NAME =~ $NAME_RE ]] || [ "$NAME" = . ] || [ "$NAME" = .. ]; then
   die "--project: the project's repository on GitHub, owner/name"
 fi
-if [ "$COMMAND" != refresh ]; then
+if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
   [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
   # The login is the user's, recorded once by the user (local.sh login): a fork of any other account is never written.
   [ -f "$HIVE/login" ] || die "no login is recorded on this machine: stop, and tell the user. The user (never an assistant) types « local.sh login <their GitHub login> » once, in a terminal of their own"
@@ -243,6 +246,7 @@ if [ "$COMMAND" != refresh ]; then
 fi
 if [ "$COMMAND" = sandbox ] && [ ${#SANDBOXED[@]} -eq 0 ]; then die "local.sh sandbox runs the command given after --"; fi
 if [ -n "$TASK" ] && ! [[ $TASK =~ $TASK_RE ]]; then die "--task: the task's id, as the hive's lines give it"; fi
+if [ -n "$NEEDS_ACCEPTED" ] && ! [[ $NEEDS_ACCEPTED =~ ^[0-9a-f]{64}$ ]]; then die "--needs-accepted: the digest of the project's needs the user accepted, as local.sh needs printed it"; fi
 
 PROTOCOL="$HIVE/protocol"
 CLONE="$HIVE/work/$LOGIN/$FORK"
@@ -305,7 +309,7 @@ needs_own() {  # the needs' folder and the two above it: the user's own, written
 PROTOCOL_TOOLS=$(below_hive "$PROTOCOL/tools/hive" "the protocol's tools") || exit 2
 HERE=$(pwd -P)
 if [ -d "$CLONE" ]; then CLONE_REAL=$(cd -P "$CLONE" && pwd -P); else CLONE_REAL="$CLONE"; fi
-if [ "$COMMAND" != refresh ]; then
+if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
   if same_or_below "$HERE" "$CLONE_REAL" || same_or_below "$CLONE_REAL" "$HERE"; then
     die "this session's folder ($HERE) is the clone, lies inside it or above it: start the assistant in a folder of its own (~/hive-desk), and run local.sh from there"
   fi
@@ -700,6 +704,14 @@ case "$COMMAND" in
       || die "the fork could not be cloned from $FORK_URL: check that the fork exists under your account, then run the command again"
     say "LOCAL clone $CLONE"
     ;;
+  needs)
+    # What the project needs of a worker's machine, read by the tool in its container, through the gate: the
+    # settings with git (--by-fetch), for raw.githubusercontent.com does not pass the gate. Nothing of the user's.
+    egress_up
+    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=needs --user 65534:65534 --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
+      "${PROTOCOL_MOUNT[@]}" "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py needs --project "$PROJECT" --by-fetch
+    exit $?
+    ;;
   refresh)
     mkdir -p "$STATE" || die "no room under $HIVE"
     egress_up
@@ -739,6 +751,22 @@ case "$COMMAND" in
     egress_up
     [ -n "$PUSHING" ] && EMPTY_ON_EXIT=1
     watch_clock_and_owner "$CLONE"  # (with no network, reading an owner and a clock: the places are checked after it)
+    if [ -n "$NEEDS_ACCEPTED" ]; then
+      # The project's files and documents, fetched by the tool's own code (needs-fetch: https, each file held to its
+      # size and SHA-256) in a container of their own: Docker's default network, which reaches the needs' hosts (the
+      # gate passes github.com alone, and the fetch reads no proxy), and nothing but the protocol's tools and the
+      # needs' folder: no clone, no fork, no state, no slot, no credential. Its lines are said as the launcher's own
+      # (LOCAL needs …), and the tool runs whatever they say: it reads the folder again, and its own lines say what
+      # the project lacks (with a deal held, the deal is shown and given back as the guide says).
+      NEEDS_SOURCE=$(below_hive "$NEEDS" "the needs' folder") || exit 2
+      needs_own
+      fetched=$("$DOCKER" run "${LIMITS[@]}" --network bridge --label hive.role=needs-fetch --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g \
+        --tmpfs "/hive/home:rw,uid=${OWNER_IDS%%:*},gid=${OWNER_IDS##*:},mode=700" -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" \
+        --mount "type=bind,source=$(host_path "$NEEDS_SOURCE"),target=/hive/home/.hive/needs/$(lower "$OWNER")/$(lower "$NAME")" \
+        "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py needs-fetch --project "$PROJECT" --needs-accepted "$NEEDS_ACCEPTED" \
+        --needs-home /hive/home 2>&1 | head -n 40)
+      printf '%s\n' "$fetched" | while IFS= read -r line; do [ -z "$line" ] || say "LOCAL needs $line"; done
+    fi
     # Right before the tool runs: each place resolved, each mount built.
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
     case "$SUB" in

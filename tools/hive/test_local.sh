@@ -164,6 +164,10 @@ case "$role" in
     [ -z "${STUB_CHECK_SWAP:-}" ] || cp "$STUB_CHECK_SWAP" "$folder/handover.bundle"
     [ -z "${STUB_CHECK_SWAP_TXT:-}" ] || echo "task x" >> "$folder/handover.txt"
     exit 0 ;;
+  needs) printf 'NEEDS Bee-ruche/toy at %s\nNEEDS-DIGEST %s\n' "$(printf a%.0s $(seq 40))" "${STUB_NEEDS_DIGEST:-0}" ;;
+  needs-fetch)
+    [ -z "${STUB_FETCH_OUT:-}" ] || cat "$STUB_FETCH_OUT"
+    exit "${STUB_FETCH_CODE:-0}" ;;
   sandbox)
     work=$(source_of /work)
     [ -z "${STUB_SANDBOX_MAKES:-}" ] || mkdir -p "$work/$STUB_SANDBOX_MAKES"
@@ -353,9 +357,10 @@ check "refused: an outside name resolves from the network" eval 'refused 2 "a na
 # What the tool is given.
 
 reset_world
-STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted abc
+DIGEST=$(printf "d%.0s" $(seq 64))  # (a digest of the needs the user accepted, as local.sh needs prints one)
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
 check "next: its lines passed through, its exit code kept" eval '[ "$CODE" -eq 0 ] && [ "$OUT" = "WAIT until later" ]'
-check "next: the tool's command line" grep -qx "python3 -I /hive/protocol/tools/hive/hive.py next --project Bee-ruche/toy --login alice --fork toy --needs-accepted abc --state /hive/state --needs-home /hive/home --needs-shown $HOME/.hive/needs/bee-ruche/toy" "$STUB_DIR/args.tool"
+check "next: the tool's command line" grep -qx "python3 -I /hive/protocol/tools/hive/hive.py next --project Bee-ruche/toy --login alice --fork toy --needs-accepted $DIGEST --state /hive/state --needs-home /hive/home --needs-shown $HOME/.hive/needs/bee-ruche/toy" "$STUB_DIR/args.tool"
 check "next: the clone, the protocol read-only, the state read-only, the needs' folder below the launcher's home" eval \
   'grep -qx "type=bind,source=$CLONE,target=/work" "$STUB_DIR/mounts.tool" && grep -qx "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" "$STUB_DIR/mounts.tool" \
    && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state,readonly" "$STUB_DIR/mounts.tool" \
@@ -367,6 +372,39 @@ check "next: every container the run started runs under an init" eval \
   '[ "$(grep -c "^run " "$STUB_DIR/calls")" -ge 4 ] && ! grep "^run " "$STUB_DIR/calls" | grep -qv "^run \(--rm\|-d\) --init "'
 check "next: the gate runs under an init, read-only, unprivileged, its processes bounded, on the default bridge" \
   grep -q "^run -d --init --name hive-egress-[0-9]*-[0-9]* --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --cpus 1 --memory 256m --user 65534:65534 --network bridge " "$STUB_DIR/calls"
+# The project's needs: fetched by needs-fetch in a container of their own before the tool, when the user accepted them.
+check "next given the digest: needs-fetch first, then the tool" eval \
+  'grep -n "^run " "$STUB_DIR/calls" | grep -m1 "hive.role=needs-fetch" | cut -d: -f1 > "$T/fetch-at" && grep -n "^run " "$STUB_DIR/calls" | grep -m1 "hive.role=tool" | cut -d: -f1 > "$T/tool-at" \
+   && [ -s "$T/fetch-at" ] && [ "$(cat "$T/fetch-at")" -lt "$(cat "$T/tool-at")" ]'
+check "needs-fetch: on Docker's default network, as the clone's owner, under the container limits, with no proxy and nothing of the user's but the needs" \
+  grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network bridge --label hive.role=needs-fetch --user 1000:1000 --tmpfs /tmp:rw,size=1g --tmpfs /hive/home:rw,uid=1000,gid=1000,mode=700 -e HOME=/tmp -e LANG=C.UTF-8 -e TZ=UTC -w /tmp " "$STUB_DIR/calls"
+check "needs-fetch: the protocol's tools read-only and the needs' folder, nothing else (no clone, no state, no slot)" eval \
+  'grep -qx "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" "$STUB_DIR/mounts.needs-fetch" \
+   && grep -qx "type=bind,source=$HOME/.hive/needs/bee-ruche/toy,target=/hive/home/.hive/needs/bee-ruche/toy" "$STUB_DIR/mounts.needs-fetch" \
+   && [ "$(wc -l < "$STUB_DIR/mounts.needs-fetch")" -eq 2 ] && ! grep -q "hive.role=needs-fetch.*https_proxy" "$STUB_DIR/calls"'
+check "needs-fetch: the tool's command line" grep -qx "python3 -I /hive/protocol/tools/hive/hive.py needs-fetch --project Bee-ruche/toy --needs-accepted $DIGEST --needs-home /hive/home" "$STUB_DIR/args.needs-fetch"
+STUB_FETCH_OUT="$(said "NEEDS-MISSING file corpus.bin: github.com answered 404")" STUB_FETCH_CODE=1 STUB_TOOL_OUT="$(said "TASK toy-0001" "NEEDS-MISSING file corpus.bin: x")" \
+  launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "a fetch that fails: its lines said as the launcher's own, and the tool run all the same (a dealt task still shows)" eval \
+  '[ "$CODE" -eq 0 ] && [ "$OUT" = "$(printf "LOCAL needs NEEDS-MISSING file corpus.bin: github.com answered 404\nTASK toy-0001\nNEEDS-MISSING file corpus.bin: x")" ] && ran tool'
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice
+check "next given no digest: no fetch" eval '[ "$CODE" -eq 0 ] && ! ran needs-fetch && ran tool'
+for given in abc "$(printf "D%.0s" $(seq 64))" "${DIGEST}0"; do
+  launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$given"
+  check "refused: a digest of another shape ($given)" eval 'refused 2 "--needs-accepted:" && nothing_ran'
+done
+launch needs --project Bee-ruche/toy
+check "needs: the tool's needs, behind the gate, its settings read with git, as nobody, nothing of the user's mounted" eval \
+  '[ "$CODE" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "NEEDS-DIGEST 0" \
+   && grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=needs --user 65534:65534 --tmpfs /tmp:rw,size=1g .* -e https_proxy=http://hive-egress-[0-9]*-[0-9]*:3128 -w /tmp " "$STUB_DIR/calls" \
+   && grep -qx "python3 -I /hive/protocol/tools/hive/hive.py needs --project Bee-ruche/toy --by-fetch" "$STUB_DIR/args.needs" \
+   && [ "$(cat "$STUB_DIR/mounts.needs")" = "type=bind,source=$PROTOCOL/tools/hive,target=/hive/protocol/tools/hive,readonly" ]'
+launch needs --project Bee-ruche/toy --login alice
+check "refused: needs takes no login" eval 'refused 2 "--login is not an option of local.sh needs" && nothing_ran'
+mv "$HOME/.hive/needs/bee-ruche/toy" "$T/needs-real" && ln -s "$T/needs-real" "$HOME/.hive/needs/bee-ruche/toy"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy --login alice --needs-accepted "$DIGEST"
+check "refused: the needs' folder a link, before the fetch" eval '[ "$CODE" -eq 2 ] && ! ran needs-fetch && ! ran tool'
+rm "$HOME/.hive/needs/bee-ruche/toy" && mv "$T/needs-real" "$HOME/.hive/needs/bee-ruche/toy"
 STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d
 check "submit: a refusal's line and exit code passed through, the slot emptied" eval '[ "$CODE" -eq 1 ] && [ "$OUT" = "REFUSED (x): y" ] && untouched'
 check "submit: the slot mounted, --hand-over given, no state, no needs" eval \
@@ -826,7 +864,7 @@ while IFS= read -r line; do
   # takes no login: it must stop on none of the launcher's readings of a command line.
   case "$words" in
     login\ *) want="hive: local.sh login is the user's own step" ;;
-    refresh\ *) want="" ;;
+    refresh\ *|needs\ *) want="" ;;
     *) want="hive: no login is recorded on this machine" ;;
   esac
   if [ -n "$want" ]; then
@@ -852,12 +890,12 @@ done < "$T/doc-lines"
 docs_read() {  # every line read, and each of the launcher's commands given at least once
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
-  for word in check clone refresh sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  for word in check clone refresh needs sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
   # No PowerShell command line in the volunteer's docs: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a
   # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
-check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, sandbox and login" docs_read
+check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, needs, sandbox and login" docs_read
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

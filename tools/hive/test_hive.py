@@ -13478,7 +13478,7 @@ class TestTheSettingsList(unittest.TestCase):
             self.assertFalse(self.loads(self.laid(self.MINIMAL, "members.per_guardian", covered)), "and do not load where it names none")
 
 
-LAUNCHER_LINES = {"HANDED-OVER", "CHECKED", "NAMES-HELD"}  # what hand-overs print, for the local bee's launcher alone (docs: the module's own)
+LAUNCHER_LINES = {"HANDED-OVER", "CHECKED", "NAMES-HELD", "NEEDS-FETCHED"}  # what hand-overs print, for the local bee's launcher alone (docs: the module's own)
 
 
 class TestTheWorkersGuide(unittest.TestCase):
@@ -20898,20 +20898,38 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         patch.start()
         self.addCleanup(patch.stop)
 
+    def fetched(self, digest, cwd=None):
+        """(exit code, lines) of the launcher's fetch, needs-fetch, run where no clone is."""
+        elsewhere = Path(self.tmp.name) / "not-a-clone"
+        elsewhere.mkdir(exist_ok=True)
+        code, text = self.run_cli("needs-fetch", "--project", "Bee-ruche/toy", "--needs-accepted", digest, "--needs-home", str(self.mounted),
+                                  "--upstream-url", str(self.w.upstream), cwd=cwd or elsewhere)
+        return code, text.splitlines()  # (NEEDS-FETCHED is the launcher's line, no worker's: not held to WORKER_LINES)
+
     def test_the_needs_folder_and_its_name_on_the_machine(self):
         digest = self.needs(NEED_DOCUMENT, NEED_PROGRAM)
         self.w.deal(self.alice, "toy-0001")
         self.w.run()
         shown = "C:/Users/Rom\u00e9o/.hive/needs/bee-ruche/toy"
-        code, text = self.run_cli("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-accepted", digest,
-                                  "--needs-home", str(self.mounted), "--needs-shown", shown)
+        base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice", "--needs-accepted", digest,
+                "--needs-home", str(self.mounted), "--needs-shown", shown)
+        code, text = self.run_cli(*base)
+        self.assertEqual(code, 0, self.err)
+        self.assertIn(f"NEEDS-MISSING document format.md: {hive.LOCAL_NOT_FETCHED}", self.spoken(text),
+                      "with the launcher's home, the tool fetches nothing: the launcher's own fetch did not run")
+        self.assertEqual(self.host.asked, [], "no host asked from the tool's container")
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 1"]))
+        self.assertEqual((self.mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT, "fetched where the launcher mounts the folder")
+        self.assertEqual(len(self.host.asked), 1)
+        code, text = self.run_cli(*base)
         self.assertEqual(code, 0, self.err)
         data = [json.loads(line[2:]) for line in self.spoken(text) if line.startswith('| {"needs"')]
         self.assertEqual([entry["at"] for entry in data[0]["needs"]], [f"{shown}/format.md"])
-        self.assertEqual((self.mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT, "fetched where the launcher mounts the folder")
+        self.assertNotIn("NEEDS-MISSING document", text, "held: read again, byte for byte")
+        self.assertIn(f"NEEDS-MISSING program toyc: {hive.LOCAL_NO_IMAGE}", text, "and the program is the image's, which this project has none of")
+        self.assertEqual(len(self.host.asked), 1, "and not fetched again")
         self.assertFalse((self.home / ".hive").exists(), "not in the home of the user's account")
-        self.assertEqual([found.args[2:] for found in hive.docker_brings.call_args_list], [(str(self.mounted),)],
-                         "docker is asked with the home the launcher gives")
+        hive.docker_brings.assert_not_called()
         self.assertNotIn("--needs-home", text, "the launcher gives it: no THEN line repeats it")
         base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice")
         self.one_line(self.run_cli(*base, "--needs-shown", shown), "--needs-shown names the folder that --needs-home holds: it goes with --needs-home")
@@ -20919,12 +20937,13 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
     def test_ready_with_the_launchers_home_on_a_machine_that_lists_no_such_user(self):
         digest = self.needs(NEED_DOCUMENT)
         self.w.run()
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 1"]))
         code, text = self.ready("--needs-accepted", digest, "--needs-home", str(self.mounted), "--no-push")
         self.assertEqual((code, text.split(" ")[0]), (0, "NEEDS-MET"), self.err)
         self.assertIn("\nNOT-PUSHED ", text)
         self.assertEqual((self.mounted / ".hive/needs/bee-ruche/toy/format.md").read_bytes(), FORMAT)
 
-    def test_docker_is_asked_with_the_home_given(self):
+    def test_the_projects_image_brings_a_program_with_the_launchers_home(self):
         clone = hive.Clone(self.alice.work.resolve(), {})
         leads = self.w.published / "bee/sandbox"
         leads.mkdir(parents=True)
@@ -20935,10 +20954,21 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         self.w.last_published = (None, None)
         with mock.patch.object(hive, "LOCAL_REMOTES", True):
             commit = hive.hive_project(clone, "Bee-ruche/toy", str(self.w.upstream), with_commit=True)[2]
-        self.program("docker", f"#!/bin/sh\n[ \"$1\" = info ] && [ \"$HOME\" = {shlex.quote(str(self.mounted))} ]\n")
-        self.assertTrue(REAL_DOCKER_BRINGS(clone, commit, str(self.mounted)))
+        self.program("docker", f"#!/bin/sh\n[ \"$1\" = info ] && [ \"$HOME\" = {shlex.quote(str(self.home))} ]\n")
         with mock.patch.object(hive, "NEEDS_HOME", str(self.home)):
-            self.assertFalse(REAL_DOCKER_BRINGS(clone, commit), "the user's own home, when none is given")
+            self.assertTrue(REAL_DOCKER_BRINGS(clone, commit), "on the user's machine: the recipe, and docker answering with the user's home")
+        self.program("docker", "#!/bin/sh\nexit 1\n")
+        self.program("toyc", "#!/bin/sh\necho 'toyc 1.75.0'\n")
+        config = {"repo": "Bee-ruche/toy", "needs": [NEED_PROGRAM]}
+        with mock.patch.object(hive, "docker_brings", side_effect=AssertionError("docker asked")):
+            held = hive.needs_hold(config, clone, commit, hive.needs_digest(config), str(self.mounted))
+        self.assertEqual((held.docker, held.missing, held.held), ([("toyc", hive.LOCAL_IMAGE_BRINGS)], [], True),
+                         "with the launcher's home: the image brings it, docker is not asked, and this container's own toyc is not taken")
+        with mock.patch.object(hive, "docker_brings", side_effect=AssertionError("docker asked")), \
+                mock.patch.object(hive, "holds_dockerfile", return_value=False):
+            held = hive.needs_hold(config, clone, commit, hive.needs_digest(config), str(self.mounted))
+        self.assertEqual((held.docker, held.missing, held.held), ([], [("program", "toyc", hive.LOCAL_NO_IMAGE)], False),
+                         "no recipe: the launcher has no sandbox to give, whatever this container holds")
 
     def test_the_home_is_the_launchers_alone(self):
         base = ("next", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "Alice")
@@ -20974,6 +21004,66 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         for given in ("/c/Users/x", "C:/Users/x/", "/" + "x" * 299):
             with self.subTest(given=given):
                 self.assertEqual(hive.needs_shown_given(given), given)
+
+    def test_the_launchers_fetch_takes_the_users_digest_alone(self):
+        digest = self.needs(NEED_FILE, NEED_DOCUMENT)
+        folder = self.mounted / ".hive/needs/bee-ruche/toy"
+        for name, given in (("another project's digest", "0" * 64), ("an older digest of this project's", hive.needs_digest({"needs": [NEED_FILE]}))):
+            with self.subTest(name=name):
+                code, lines = self.fetched(given)
+                self.assertEqual((code, lines[0].startswith(f"NEEDS-UNACCEPTED {digest}: ")), (1, True), lines)
+                self.assertEqual((self.host.asked, folder.exists()), ([], False), "nothing fetched, nothing written")
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 2"]))
+        self.assertEqual(sorted(os.listdir(folder)), ["corpus.bin", "format.md"])
+        for name, data in (("corpus.bin", CORPUS), ("format.md", FORMAT)):
+            self.assertEqual(((folder / name).read_bytes(), (folder / name).stat().st_mode & 0o777), (data, 0o444))
+        asked = len(self.host.asked)
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 2"]))
+        self.assertEqual(len(self.host.asked), asked, "files that hold are read again, not fetched again")
+
+    def test_the_launchers_fetch_holds_each_file_to_its_size_and_fingerprint(self):
+        digest = self.needs(NEED_FILE, NEED_DOCUMENT)
+        self.host.answers[NEED_FILE["url"]] = CORPUS[:-1] + b"x"
+        code, lines = self.fetched(digest)
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split(":")[0] for line in lines], ["NEEDS-MISSING file corpus.bin"])
+        folder = self.mounted / ".hive/needs/bee-ruche/toy"
+        self.assertEqual(os.listdir(folder), ["format.md"], "the wrong bytes are not kept; the document is")
+
+    def test_the_launchers_fetch_of_a_project_with_no_file(self):
+        digest = self.needs(NEED_PROGRAM, NEED_RESOURCES)
+        self.assertEqual(self.fetched(digest), (0, ["NEEDS-FETCHED 0"]))
+        self.assertEqual(self.host.asked, [])
+
+    def test_the_launchers_fetch_takes_the_launchers_home_alone(self):
+        digest = self.needs(NEED_DOCUMENT)
+        base = ("needs-fetch", "--project", "Bee-ruche/toy", "--needs-accepted", digest, "--upstream-url", str(self.w.upstream))
+        self.one_line(self.run_cli(*base, "--needs-home", str(self.home)),
+                      f"argument --needs-home: {self.mounted}, the folder of this account's that the local bee's launcher makes in its container (the "
+                      "launcher gives it)")
+        self.one_line(self.run_cli(*base[:3], *base[5:], "--needs-home", str(self.mounted)), "the following arguments are required: --needs-accepted",
+                      begins=True)
+
+    def test_needs_by_fetch_reads_the_settings_with_git_never_from_githubs_address(self):
+        digest = self.needs(NEED_DOCUMENT)
+        self.w.publish()
+        real = hive.remote_parts
+
+        def as_githubs(address):  # (the tests' project is a folder: here, settings_at_the_address takes it for an address of GitHub's)
+            return ("github.com", "Bee-ruche", "toy") if sys._getframe(1).f_code.co_name == "settings_at_the_address" else real(address)
+        with mock.patch.object(hive, "settings_from_github", side_effect=AssertionError("asked GitHub")), mock.patch.object(hive, "LOCAL_REMOTES", True), \
+                mock.patch.object(hive, "remote_parts", new=as_githubs):
+            config, commit = hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
+            with self.assertRaisesRegex(AssertionError, "asked GitHub"):
+                hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream))
+        self.assertEqual((hive.needs_digest(config), commit), (digest, self.w.publish()),
+                         "an address of GitHub's: by_fetch reads it with git, and without it the settings come from GitHub's address for files")
+        with mock.patch.object(hive, "SETTINGS_BYTES", 10), mock.patch.object(hive, "LOCAL_REMOTES", True), \
+                self.assertRaisesRegex(hive.HiveError, "the project's hive/project.json is larger than 10 bytes"):
+            hive.settings_at_the_address("Bee-ruche/toy", str(self.w.upstream), by_fetch=True)
+        code, text = self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), "--by-fetch",
+                                  cwd=Path(self.tmp.name))
+        self.assertEqual((code, self.spoken(text)[-2]), (0, f"NEEDS-DIGEST {digest}"), self.err)
 
 
 if __name__ == "__main__":

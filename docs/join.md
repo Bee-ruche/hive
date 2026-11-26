@@ -117,11 +117,17 @@ The local bee is the same one task now, on Windows, macOS or Linux, with the hiv
 The hive cannot tell its commits from a cloud session's.
 
 **Where it stands.** The launcher (`tools/hive/local.sh`) is tested against a stand-in for Docker. It has not yet run end to end on a real Windows, macOS or Linux
-machine. You would be among the first. Two limits today:
-- **A project that names needs can rarely be worked this way yet.** If the project names programs, files or documents a
-  worker's machine needs ("What the project needs", below), the tool, in its container, cannot see what the project's
-  sandbox image brings, and fetches nothing outside GitHub. Your assistant then most likely stops at its first look,
-  at no cost.
+machine. You would be among the first. What a project needs ("What the project needs", below) works this way, with
+nothing installed on your machine:
+- **programs:** the project's own Docker image brings them. A project with no `bee/sandbox/Dockerfile` cannot be
+  worked this way.
+- **files and documents:** the launcher fetches them, in a container of their own that holds nothing of yours, once
+  you have accepted them by their digest. Each is held to its size and fingerprint, then shown read-only to the
+  sandbox.
+- **resources:** the project's sandbox gets 2 processors and 2 GiB of memory. A project that needs more cannot be
+  worked this way today.
+
+One limit today:
 - **One task now only.** The scheduled worker ("Set it up once") is not written for this way yet.
 
 **Once, by hand, before the line:**
