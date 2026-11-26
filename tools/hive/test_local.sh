@@ -143,7 +143,7 @@ case "${1:-}" in
     if [ -n "${STUB_BUILD_FAILS:-}" ]; then
       for i in $(seq 50); do if [ $((i % 2)) -eq 0 ]; then echo "step line $i" >&2; else echo "step line $i"; fi; done
       [ -z "${STUB_BUILD_HUGE:-}" ] || { head -c 1048576 /dev/zero | tr '\0' x; echo; } >&2
-      [ -z "${STUB_BUILD_ESC:-}" ] || printf 'ERROR: \033[31mred\033[0m and a bell\a\n' >&2
+      [ -z "${STUB_BUILD_ESC:-}" ] || printf 'ERROR: \033[31mred\033[0m and a bell\a,\ta mark \342\200\256 turned\n' >&2
       exit 1
     fi
     [ "${*: -1}" = - ] || cat "${*: -1}/Dockerfile" > "$S/built.Dockerfile"
@@ -375,10 +375,10 @@ check "refused: the image cannot be built, the build's last 30 lines kept under 
    && [ ! -L "$HOME/.hive/build-tool.log" ] && [ "$(wc -l < "$HOME/.hive/build-tool.log")" -eq 30 ] \
    && [ "$(head -n 1 "$HOME/.hive/build-tool.log")" = "step line 21" ] && [ "$(tail -n 1 "$HOME/.hive/build-tool.log")" = "step line 50" ] \
    && [ "$(cat "$T/elsewhere-log/target")" = "not the launcher'"'"'s" ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.build\.")" ]'
-dockerfile_holds() {  # the tool's Dockerfile (a real build proves it; this holds its rules where no Docker builds)
+dockerfile_holds() {  # [file]: the tool's Dockerfile (a real build proves it; this holds its rules where no Docker builds)
   local code certs drop snapshot valid tools
-  code=$(grep -v '^ *#' "$ROOT/tools/hive/Dockerfile")
-  ! printf '%s\n' "$code" | grep -qi "http://snapshot\|Verify-Peer\|Verify-Host\|AllowInsecure\|allow-insecure\|AllowUnauthenticated\|allow-unauthenticated\|force-yes\|trusted=yes\|apt-key\|Acquire::https" || return 1
+  code=$(grep -v '^ *#' "${1:-$ROOT/tools/hive/Dockerfile}")
+  ! printf '%s\n' "$code" | grep -qi "http://snapshot\|Verify-Peer\|Verify-Host\|AllowInsecure\|allow-insecure\|AllowDowngradeToInsecure\|allow-downgrade-to-insecure\|AllowUnauthenticated\|allow-unauthenticated\|force-yes\|trusted=yes\|apt-key\|Acquire::https" || return 1
   certs=$(printf '%s\n' "$code" | grep -n "install .*--no-install-recommends ca-certificates" | cut -d: -f1)
   drop=$(printf '%s\n' "$code" | grep -n "rm -f /etc/apt/sources.list.d/ubuntu.sources" | cut -d: -f1)
   snapshot=$(printf '%s\n' "$code" | grep -n 'deb https://snapshot\.ubuntu\.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' | cut -d: -f1)
@@ -389,14 +389,35 @@ dockerfile_holds() {  # the tool's Dockerfile (a real build proves it; this hold
     && [ "$certs" -lt "$drop" ] && [ "$drop" -lt "$snapshot" ] && [ "$snapshot" -lt "$valid" ] && [ "$valid" -lt "$tools" ]
 }
 check "the tool's Dockerfile: ca-certificates first, then the snapshot over https, TLS checking never turned off" dockerfile_holds
+weakened=""
+for words in "http://snapshot.ubuntu.com" "Acquire::https::Verify-Peer false" "Acquire::https::Verify-Host false" \
+    "Acquire::AllowInsecureRepositories true" "--allow-insecure-repositories" \
+    "Acquire::AllowDowngradeToInsecureRepositories true" "--allow-downgrade-to-insecure-repositories" \
+    "APT::Get::AllowUnauthenticated true" "--allow-unauthenticated" "--force-yes" "deb [trusted=yes] https://x" \
+    "apt-key add k" "Acquire::https::CaInfo /k"; do
+  { cat "$ROOT/tools/hive/Dockerfile"; echo "RUN echo '$words' > /etc/apt/apt.conf.d/99x"; } > "$T/weakened.Dockerfile"
+  ! dockerfile_holds "$T/weakened.Dockerfile" || weakened="$weakened [$words]"
+done
+{ cat "$ROOT/tools/hive/Dockerfile"; echo "# a comment on --allow-unauthenticated, which is never used"; } > "$T/weakened.Dockerfile"
+check "the tool's Dockerfile: each way to weaken apt's checks refused, a comment that names one passed" \
+  eval '[ -z "$weakened" ] && dockerfile_holds "$T/weakened.Dockerfile"'
 rm -f "$STUB_DIR/built"
 STUB_BUILD_FAILS=1 STUB_BUILD_HUGE=1 STUB_BUILD_ESC=1 launch hive next --project Bee-ruche/toy --login alice
-check "a failed build's log: 4000 bytes at most, no character of control, its end kept (a line of a megabyte, escapes)" eval \
+check "a failed build's log: 4000 bytes at most, printable ASCII alone, its end kept (a line of a megabyte, escapes, a bidi mark)" eval \
   'refused 2 "Docker could not build the tool'"'"'s image: the build'"'"'s last lines are in" \
-   && [ "$(wc -c < "$HOME/.hive/build-tool.log")" -le 4000 ] && ! tr -d "\n" < "$HOME/.hive/build-tool.log" | LC_ALL=C grep -q "[[:cntrl:]]" \
-   && [ "$(tail -n 1 "$HOME/.hive/build-tool.log")" = "ERROR: [31mred[0m and a bell" ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.build\.\|^\.dockerfile\.")" ]'
+   && [ "$(wc -c < "$HOME/.hive/build-tool.log")" -le 4000 ] && [ "$(LC_ALL=C tr -d "\11\12\40-\176" < "$HOME/.hive/build-tool.log" | wc -c)" -eq 0 ] \
+   && [ "$(tail -n 1 "$HOME/.hive/build-tool.log")" = "$(printf "ERROR: [31mred[0m and a bell,\ta mark  turned")" ] && [ -z "$(ls -A "$HOME/.hive" | grep "^\.build\.\|^\.dockerfile\.")" ]'
 launch hive next --project Bee-ruche/toy --login alice
 check "a build that works: an earlier build's log removed, so that it is never taken for this one's" eval '[ ! -e "$HOME/.hive/build-tool.log" ]'
+mkdir -p "$T/sweep-elsewhere" && echo kept > "$T/sweep-elsewhere/target"
+for f in .build.old1 .dockerfile.old2 .build.fresh .other.old; do echo x > "$HOME/.hive/$f"; done
+touch -d "2 days ago" "$HOME/.hive/.build.old1" "$HOME/.hive/.dockerfile.old2" "$HOME/.hive/.other.old" "$T/sweep-elsewhere/target"
+ln -s "$T/sweep-elsewhere/target" "$HOME/.hive/.build.link" && touch -h -d "2 days ago" "$HOME/.hive/.build.link"
+launch hive next --project Bee-ruche/toy --login alice
+check "a killed launcher's build temporaries a day old removed at start; a fresh one, a link and other files left" eval \
+  '[ ! -e "$HOME/.hive/.build.old1" ] && [ ! -e "$HOME/.hive/.dockerfile.old2" ] && [ -f "$HOME/.hive/.build.fresh" ] \
+   && [ -f "$HOME/.hive/.other.old" ] && [ -L "$HOME/.hive/.build.link" ] && [ "$(cat "$T/sweep-elsewhere/target")" = kept ]'
+rm -f "$HOME/.hive/.build.fresh" "$HOME/.hive/.other.old" "$HOME/.hive/.build.link"
 rm -f "$STUB_DIR/built"
 launch hive next --project Bee-ruche/toy --login alice
 check "the image built from the protocol's commit, tagged by its Dockerfile's blob id, its whole output kept aside" \

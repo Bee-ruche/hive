@@ -340,6 +340,9 @@ trap leave EXIT
 
 mkdir -p "$HIVE" || die "no room under $HIVE"
 HIVE_REAL=$(cd -P "$HIVE" && pwd -P) || die "$HIVE cannot be read"
+# A launcher killed before it left kept its build's temporaries: those older than a day go (files alone, never a link;
+# a launcher running now has younger ones).
+find "$HIVE" -maxdepth 1 -type f \( -name '.build.*' -o -name '.dockerfile.*' \) -mtime +0 -exec rm -f {} + 2>/dev/null || true
 
 placed() {  # <place> <the place it must resolve to> <what it is>: prints the place resolved (no link on the way, nor at its end)
   local place="$1" real
@@ -427,8 +430,9 @@ IMAGE="hive-tool:$DOCKERFILE_ID"
 BUILD_OUT="" BUILD_KEPT=""  # the build's temporaries, removed as the launcher leaves, whatever happened
 build_or_say() {  # <log's name> <what is built> <docker build's words…>: the build (BuildKit, its output plain), its
   # output kept aside, 16 MB at most (a project's own build is the project's text); on a failure, its last 30 lines,
-  # 4000 bytes at most and with no character of control, in ~/.hive/<log's name>, put in place by a rename (a link
-  # planted there is replaced, never written through), and one line that says where they are, never a guess.
+  # 4000 bytes at most and of printable ASCII alone (tabs and line ends kept, no escape, no bidi mark), in
+  # ~/.hive/<log's name>, put in place by a rename (a link planted there is replaced, never written through), and one
+  # line that says where they are, never a guess.
   local name="$1" what="$2" code
   shift 2
   rm -f "$HIVE/$name"  # (an earlier build's log is never taken for this one's)
@@ -437,7 +441,7 @@ build_or_say() {  # <log's name> <what is built> <docker build's words…>: the 
   code=${PIPESTATUS[0]}
   if [ "$code" -eq 0 ]; then rm -f "$BUILD_OUT"; BUILD_OUT=""; return 0; fi
   BUILD_KEPT=$(mktemp "$HIVE/.build.XXXXXX") \
-    && tail -n 30 "$BUILD_OUT" | LC_ALL=C tr -d '\000-\010\013-\037\177' | tail -c 4000 > "$BUILD_KEPT" \
+    && tail -n 30 "$BUILD_OUT" | LC_ALL=C tr -cd '\11\12\40-\176' | tail -c 4000 > "$BUILD_KEPT" \
     && mv -f "$BUILD_KEPT" "$HIVE/$name" && BUILD_KEPT=""
   rm -f "$BUILD_OUT" ${BUILD_KEPT:+"$BUILD_KEPT"}; BUILD_OUT="" BUILD_KEPT=""
   [ -f "$HIVE/$name" ] || die "Docker could not build $what, and no log of it could be kept under $HIVE: tell the user, then run the command again"
