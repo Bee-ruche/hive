@@ -3030,8 +3030,9 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual(re.findall(r"git clone[^\n]*", runs), ['git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project'])
         self.assertEqual(re.findall(r"git -C project (\S+) (\S+)", runs), [("ls-tree", "HEAD"), ("cat-file", "-s"), ("cat-file", "blob")])
         for word in ("hive.py", "artifact.py", "fetch", "forks", "bundle", "candidate", "push", "git checkout", "curl", "wget", "pip ", "npm ", "docker",
-                     "sudo", "eval", "source "):
+                     "sudo", "eval"):
             self.assertNotIn(word, runs, word)
+        self.assertNotRegex(runs, r"(?m)^\s*(?:source|\.) ", "no file sourced")
         self.assertEqual(self.text.count("${{ job.workflow_sha }}"), 1)
         self.assertEqual(self.text.count("${{ job.workflow_repository }}"), 1)
         self.assertEqual(len(re.findall(r"\bref\b\s*:", self.text)), 2, "the protocol's commit and the state's branch: no other ref")
