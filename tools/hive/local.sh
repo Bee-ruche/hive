@@ -315,13 +315,11 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
 PUSH_SIGN_IN=()
 trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
 if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
-  # The login, before anything of the project's: read from what this machine's git pushes with, never typed. A stop
-  # meanwhile (TERM, INT, HUP) ends the launcher through its EXIT trap, once the program it waits on has ended (each
-  # is bounded: 30 seconds for git and gh, 20 for curl), so that found_login's temporaries go.
+  # The login, before anything of the project's: read from what this machine's git pushes with, never typed. (A stop
+  # meanwhile, TERM or INT, ends bash through its EXIT trap, which removes found_login's temporaries: the tests stop it
+  # while curl and while git's credential helper run.)
   [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
-  trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
   found_login
-  trap - TERM INT HUP
   if [ -n "$LOGIN" ] && [ "$(lower "$LOGIN")" != "$(lower "$FOUND_LOGIN")" ]; then
     die "this machine's git pushes to GitHub as $FOUND_LOGIN, not as --login $LOGIN: the worker works for the account it pushes as"
   fi

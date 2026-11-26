@@ -40,7 +40,7 @@ git config --global credential.https://github.com.helper \
 cat > "$T/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/curl-args"
-env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
+env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|SSLKEYLOGFILE|OPENSSL_CONF|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
 env | grep -v "^STUB_" | grep -q "gho_\|github_pat_" && echo "$0" >> "$STUB_DIR/env-token"
 config=$(cat)
 [ -z "${STUB_API_SLOW:-}" ] || { echo $$ > "$STUB_DIR/in-curl"; exec sleep 30; }
@@ -59,7 +59,7 @@ chmod +x "$T/bin/curl"
 cat > "$T/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/gh-args"
-env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
+env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|SSLKEYLOGFILE|OPENSSL_CONF|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
 env | grep -v "^STUB_" | grep -q "gho_\|github_pat_" && echo "$0" >> "$STUB_DIR/env-token"
 [ "$*" = "api --hostname github.com user --jq .login" ] && [ -n "${STUB_GH_LOGIN:-}" ] && { echo "$STUB_GH_LOGIN"; exit 0; }
 exit 1
@@ -816,7 +816,7 @@ check "the token traced by nothing and in no program's environment (bash -x, -v,
 # curl and gh: none of the caller's proxies, certificate places or debug logs.
 : > "$STUB_DIR/net-env"; : > "$STUB_DIR/curl-args"; : > "$STUB_DIR/gh-args"
 NET_VARS=(HTTPS_PROXY=http://x:1 https_proxy=http://x:1 ALL_PROXY=http://x:1 all_proxy=http://x:1 HTTP_PROXY=http://x:1 NO_PROXY=x no_proxy=x
-  CURL_CA_BUNDLE=/x CURL_HOME=/x SSL_CERT_FILE=/x SSL_CERT_DIR=/x GH_DEBUG=api DEBUG=1)
+  CURL_CA_BUNDLE=/x CURL_HOME=/x SSL_CERT_FILE=/x SSL_CERT_DIR=/x SSLKEYLOGFILE=/x OPENSSL_CONF=/x GH_DEBUG=api DEBUG=1)
 (export "${NET_VARS[@]}"; launch check --project Bee-ruche/toy)
 (export "${NET_VARS[@]}"; STUB_API_CODE=401 STUB_GH_LOGIN=alice launch check --project Bee-ruche/toy)
 check "curl and gh run with none of the caller's proxies, certificate places or debug logs, curl with no proxy at all" \
@@ -835,8 +835,8 @@ done
 rm -rf "$T/desk/bin" "$T/to-desk-bin"
 mkdir -p "$HOME/bin"
 HERE="$HOME" CASE_PATH="$HOME/bin:$BASE_PATH" launch needs --project Bee-ruche/toy
-check "a session in the home folder, with the user's own ~/bin on the PATH: not refused for it" eval \
-  'case "$ERR" in *"in this session'"'"'s folder"*) false ;; *) true ;; esac'
+check "a session in the home folder, with the user's own ~/bin on the PATH: not refused for it, needs read" eval \
+  'case "$ERR" in *"in this session'"'"'s folder"*) false ;; *) true ;; esac && grep -q "^run .* --label hive.role=needs " "$STUB_DIR/calls"'
 rmdir "$HOME/bin"
 # found_login's temporaries removed when the launcher is stopped (TERM) while a program it waits on runs: the stub
 # says when it runs, the launcher is stopped, then the stub's sleep, so that the launcher goes on to its trap.
