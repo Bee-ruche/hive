@@ -563,13 +563,17 @@ What it does:
   out the project's two files of its published branch (`hive/tasks.jsonl`, `hive/project.json`) from git's objects,
   with no tree checked out: each only if it is a file there (not a link, a folder or a submodule) and no larger than
   what is read of it anyway (16 MiB for the tasks, as the hive reads them; 1 MiB for the settings, as `page.py` reads
-  them). It makes the page with `page.py` into a folder of its own, checks that the folder holds plain files and
-  folders alone (no link, no file of several names), packs it, and uploads it under the name Pages takes
-  (`github-pages`, kept a day). A step that fails stops it there: nothing is deployed, and the site stays as it was.
+  them; the clone itself has fetched the published tip whole). It makes the page with `page.py` into a folder of its
+  own, checks that the folder holds plain files and folders alone (no link, no file of several names), packs it, and
+  uploads it under the name Pages takes (`github-pages`, kept a day). A step that fails stops it there: nothing is
+  deployed, and the site stays as it was.
 - **`deploy`** may do two things: `pages: write` (create a Pages deployment) and `id-token: write` (ask for the token
   that tells Pages which workflow, branch and environment the deployment comes from). It has one step,
   `actions/deploy-pages` pinned to a commit: no checkout, none of the hive's code, no file read. It deploys one at a
-  time (a concurrency group of its own, `pages`, never cancelled by a newer run), whatever the caller's workflow says.
+  time, whatever the caller's workflow says: a concurrency group of its own, `pages`, in which a deploy that runs is
+  never cancelled, and one that waits behind it gives way to a newer one. (The caller's own group, `hive` in the
+  example, already holds its runs one at a time; a caller whose group were named `pages` would hold the very group
+  its deploy waits for.)
 - **No branch is written**, by either job: the deploy is no push, so the rulesets ("The repository's settings") need no
   change, and no `gh-pages` branch is needed.
 - **Nothing of a contributor's is fetched, checked out or run.** No fork, no candidate and not the hive's own branch is

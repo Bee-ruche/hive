@@ -6,10 +6,9 @@
 # with tools/hive/page.py at this workflow's own commit of Bee-ruche/hive, holds it to plain files and folders, and
 # uploads it; its token reads, and is written nowhere. deploy hands that upload to GitHub Pages, one deploy at a time:
 # it alone may deploy, and it runs none of the hive's code and reads no file. Neither job writes a branch, and nothing
-# of a fork or a candidate is fetched:
-# the page is made from the hive's own state, which page.py reads as data. tools/hive/test_page.py
-# (TestThePageWorkflow) holds this file word for word: whoever changes a line here changes that test in the same
-# commit, in sight of a reviewer.
+# of a fork or a candidate is fetched: the page is made from the hive's own state, which page.py reads as data.
+# tools/hive/test_page.py (TestThePageWorkflow) holds this file word for word: whoever changes a line here changes
+# that test in the same commit, in sight of a reviewer.
 name: Hive page
 on:
   workflow_call:
@@ -70,7 +69,7 @@ jobs:
             read -r mode type object path <<< "$(git -C project ls-tree HEAD -- "hive/$name")"
             [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == "hive/$name" ]] || { echo "page: hive/$name is not a file of the published branch: nothing is made" >&2; exit 1; }
             size="$(git -C project cat-file -s "$object")"
-            (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }
+            [[ "$size" =~ ^[0-9]+$ ]] && (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }
             git -C project cat-file blob "$object" > "published/$name"
           done
       - name: The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages
@@ -83,7 +82,8 @@ jobs:
           [[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")
           python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \
             --tasks published/tasks.jsonl --project published/project.json "${site[@]}"
-          [[ -z "$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)" ]] || { echo "page: the page's folder holds a link or a file of several names: nothing is packed" >&2; exit 1; }
+          odd="$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)"
+          [[ -z "$odd" ]] || { echo "page: the page's folder holds a link or a file of several names ($odd): nothing is packed" >&2; exit 1; }
           tar --create --file artifact.tar --directory page .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

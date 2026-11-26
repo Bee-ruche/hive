@@ -2933,7 +2933,7 @@ class TestThePageWorkflow(unittest.TestCase):
                         '  [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == "hive/$name" ]] || { echo "page: hive/$name is not a file of the '
                         'published branch: nothing is made" >&2; exit 1; }\n'
                         '  size="$(git -C project cat-file -s "$object")"\n'
-                        '  (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }\n'
+                        '  [[ "$size" =~ ^[0-9]+$ ]] && (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }\n'
                         '  git -C project cat-file blob "$object" > "published/$name"\n'
                         "done\n"}
     PAGE = {"name": "The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages",
@@ -2942,8 +2942,8 @@ class TestThePageWorkflow(unittest.TestCase):
                    '[[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")\n'
                    'python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\\n'
                    '  --tasks published/tasks.jsonl --project published/project.json "${site[@]}"\n'
-                   r'[[ -z "$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)" ]] || '
-                   '{ echo "page: the page\'s folder holds a link or a file of several names: nothing is packed" >&2; exit 1; }\n'
+                   r'odd="$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)"' "\n"
+                   '[[ -z "$odd" ]] || { echo "page: the page\'s folder holds a link or a file of several names ($odd): nothing is packed" >&2; exit 1; }\n'
                    "tar --create --file artifact.tar --directory page .\n"}
     CONCURRENCY = {"group": "pages", "cancel-in-progress": False}  # one deploy at a time, whatever the caller says
 
@@ -3032,7 +3032,7 @@ class TestThePageWorkflow(unittest.TestCase):
         for word in ("hive.py", "artifact.py", "fetch", "forks", "bundle", "candidate", "push", "git checkout", "curl", "wget", "pip ", "npm ", "docker",
                      "sudo", "eval"):
             self.assertNotIn(word, runs, word)
-        self.assertNotRegex(runs, r"(?m)^\s*(?:source|\.) ", "no file sourced")
+        self.assertNotRegex(runs, r"(?m)(?:^|[;&|(`\"']|\$\()\s*(?:source|\.)\s", "no file sourced, wherever a command starts")
         self.assertEqual(self.text.count("${{ job.workflow_sha }}"), 1)
         self.assertEqual(self.text.count("${{ job.workflow_repository }}"), 1)
         self.assertEqual(len(re.findall(r"\bref\b\s*:", self.text)), 2, "the protocol's commit and the state's branch: no other ref")
@@ -3146,25 +3146,29 @@ class TestThePageWorkflow(unittest.TestCase):
                         self.assertFalse((folder / "published" / name).exists())
 
     def test_a_link_or_a_file_of_several_names_in_the_pages_folder_is_never_packed(self):
-        """Pages takes plain files and folders. The page's folder is checked before it is packed: a link there (to a
-        file of the machine, or dangling), or a file with a second name, stops the step, and nothing is packed."""
-        for kind in ("link", "dangling", "second name"):
+        """Pages takes plain files and folders. The page's folder is checked after page.py wrote it and before it is
+        packed: a link there (to a file of the machine, or dangling), a file with a second name, or a pipe stops the
+        step, saying what it found, and nothing is packed. (python3 is replaced, in the step's shell, by a function
+        that runs page.py and then plants the thing in what it wrote.)"""
+        run = self.making()[1]["run"]
+        self.assertLess(run.index("page.py"), run.index("find page"))
+        self.assertLess(run.index("find page"), run.index("tar --create"))
+        plant = ('() { command python3 "$@" || return $?; case "$PLANT" in link) ln -s /etc/passwd page/wins/planted;; dangling) ln -s nowhere page/planted;; '
+                 "second) ln page/index.html page/planted;; pipe) mkfifo page/planted;; esac; }")
+        for kind, found in (("link", "page/wins/planted"), ("dangling", "page/planted"), ("second", "page/"), ("pipe", "page/planted")):
             with self.subTest(kind=kind):
                 folder, environment = self.world()
-                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.making()[0])
-                self.assertEqual(code, 0, said)
-                (folder / "page/wins").mkdir(parents=True)
-                if kind == "link":
-                    (folder / "page/wins/extra").symlink_to("/etc/passwd")
-                elif kind == "dangling":
-                    (folder / "page/extra").symlink_to("nowhere")
-                else:
-                    (folder / "page/extra").write_text("x\n")
-                    os.link(folder / "page/extra", folder / "page/wins/again")
-                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, self.making()[1])
+                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": kind, "BASH_FUNC_python3%%": plant},
+                                            *self.making())
                 self.assertNotEqual(code, 0, said)
-                self.assertIn("page: the page's folder holds a link or a file of several names: nothing is packed", said)
+                self.assertIn(f"page: the page's folder holds a link or a file of several names ({found}", said)
+                self.assertIn("): nothing is packed", said)
+                self.assertTrue((folder / "page/index.html").is_file(), "page.py wrote the page before the check")
                 self.assertFalse((folder / "artifact.tar").exists())
+        folder, environment = self.world()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "PLANT": "none", "BASH_FUNC_python3%%": plant}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertTrue((folder / "artifact.tar").is_file(), "the function runs page.py as it is")
 
     def making(self):
         """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
@@ -3326,6 +3330,7 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual({job["uses"].split("@")[1] for job in self.caller["jobs"].values()}, {"0" * 40}, "the same commit for both")
         for word in ("secrets", "environment", "pull_request"):
             self.assertNotIn(word, re.sub(r"(?m)#.*$", "", self.caller_text))
+        self.assertNotEqual(self.caller["concurrency"]["group"], self.CONCURRENCY["group"], "the run would hold the group its deploy waits for")
 
     def test_the_document_says_what_a_project_sets_once(self):
         """docs/hosting.md, in a section of its own, says how a project takes the page: the Pages source and the
@@ -3341,7 +3346,9 @@ class TestThePageWorkflow(unittest.TestCase):
                       "[`examples/page/.github/workflows/hive.yml`](../examples/page/.github/workflows/hive.yml)",
                       "the commit in both `uses` lines", "the branch in both\n   `if` lines", "the host in lower case, no final slash",
                       "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "No branch is written", "`--title=...`", "start a run",
-                      "16 MiB for the tasks", "1 MiB for the settings", "no link, no file of several names", "a concurrency group of its own, `pages`",
+                      "16 MiB for the tasks", "1 MiB for the settings", "no link, no file of several names",
+                      "a concurrency group of its own, `pages`, in which a deploy that runs is\n  never cancelled, and one that waits behind it gives way to a newer one",
+                      "would hold the very group",
                       "stops with a sentence that says what to set", "deliberately not a setting"):
             self.assertIn(words, section)
         allowed = re.search(r"(?s)\n- \*\*Settings, Actions, General, \"Actions permissions\"\*\*.*?\n- ", hosting).group(0)
