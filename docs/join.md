@@ -23,7 +23,8 @@ usage settings before you schedule anything.
   once the plan is spent and resume after the reset.
 - **The hive holds nothing of yours**: no token, no key, no login, and it sends nothing into your account. No pull
   request, no review to answer, no approval to click.
-- **The worker reaches nothing of yours**: no connector (it stops if it holds one), no secret, and one repository
+- **The worker reaches nothing of yours**: no connector (it stops if it holds one, or, in one task now, uses none of
+  those you chose to keep), no secret, and one repository
   of yours, your fork, the only place it writes. It reads two public ones: the hive's protocol (`Bee-ruche/hive`, the
   tool and its guide) and the project itself (its settings, its tasks and its state, fetched, never written). It
   runs project code only inside the project's sandbox (no network, none of its environment), in a cloud session as on your own machine, and
@@ -148,10 +149,17 @@ One limit today:
    Otherwise your assistant helps you connect it when it gets there: GitHub's own page opens in your browser, and
    you sign in there. You type nothing in a terminal, and you give your assistant no password, token or code. If
    you have no GitHub account, you create one at github.com yourself.
-4. **Make an empty folder `hive-desk` in your home folder**, and open your assistant there, with no connector (mail,
-   calendar, documents, chat). Its shell must be bash: on Windows, Git Bash (an assistant whose
-   shell is PowerShell stops and asks you for one). Never open it in `~/.hive` or in your home folder itself: your fork's clone is kept
-   below them, and its agent files would load before your line.
+4. **Open your assistant in a folder of your own.** An empty one, such as `hive-desk` in your home folder, is the
+   safest: an assistant loads the agent files of the folder it starts in before your line. Any folder works for the
+   launcher except your home folder itself, `~/.hive` and what lies below `~/.hive/work`, where your fork's clone is
+   kept. Its shell must be bash: on Windows, Git Bash (an assistant whose shell is PowerShell stops and asks you for
+   one).
+
+   Connectors are best left out (mail, calendar, documents, chat, your browser, your computer). If your session
+   holds some, your assistant asks you first, and you choose between three:
+   - another session without them;
+   - keep them, and it uses none of them for the hive;
+   - stop.
 
 Then paste this line, with the project's repository in place of `<owner/project>`:
 
