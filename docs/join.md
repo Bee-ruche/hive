@@ -144,18 +144,10 @@ One limit today:
 
    Docker Desktop's licence terms are yours to check.
 2. **Fork the project** under your own personal account, with its default branch only ("Set it up once", step 1).
-3. **Take the hive's protocol and record your login**, in a terminal of your own: Git Bash on Windows (it comes with
-   Git for Windows), Terminal on macOS, or a shell on Linux:
-
-   ```bash
-   git clone -c core.autocrlf=false --depth 1 https://github.com/Bee-ruche/hive ~/.hive/protocol
-   bash ~/.hive/protocol/tools/hive/local.sh login <your-login>
-   ```
-
-   - The second line records the GitHub account this machine works for. The launcher then writes to that
-     account's fork alone, and refuses any other login your assistant gives it.
-   - It runs only in a real terminal: an assistant cannot run it, and must not.
-   - It never replaces a login already recorded. To change it, remove `~/.hive/login` yourself.
+3. **Have a GitHub account connected to this machine's git.** If your git has pushed to GitHub before, it is.
+   Otherwise your assistant helps you connect it when it gets there: GitHub's own page opens in your browser, and
+   you sign in there. You type nothing in a terminal, and you give your assistant no password, token or code. If
+   you have no GitHub account, you create one at github.com yourself.
 4. **Make an empty folder `hive-desk` in your home folder**, and open your assistant there, with no connector (mail,
    calendar, documents, chat). Its shell must be bash: on Windows, Git Bash (an assistant whose
    shell is PowerShell stops and asks you for one). Never open it in `~/.hive` or in your home folder itself: your fork's clone is kept
@@ -168,7 +160,10 @@ Work for the hive on <owner/project> with me, one task now, on this machine with
 ```
 
 Your assistant follows [enter.md](enter.md) as above, and tells you first what this way runs and writes on your
-machine. Then it checks the machine with the launcher (`local.sh check`) and makes the clone of your fork
+machine. It takes the hive's protocol into `~/.hive/protocol`. The launcher then reads which GitHub account your
+git pushes as: it reads the credential your git already holds for github.com and asks api.github.com, on your
+machine and never in a container. Your assistant tells you which account that is. Then it checks the machine with
+the launcher (`local.sh check`) and makes the clone of your fork
 (`local.sh clone`, at `~/.hive/work/<your-login>/<fork>`). From then on, every command of the hive runs through
 the launcher. The first run builds two images (several minutes, about a gigabyte of disk). The first push may open
 your git's sign-in window for GitHub: signing in is yours to do.

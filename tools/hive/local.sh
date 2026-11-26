@@ -7,15 +7,15 @@
 # (hive.py --hand-over) once it is checked twice: by hive.py hand-over-check in a fresh container that never sees the
 # clone, then here with git. The hive cannot tell the commits apart from pushed ones.
 #
-#   local.sh login   <login>             (the user, once, typed in a real terminal of their own, never by an
-#                                         assistant: the GitHub account this machine works for. On Windows, in Git
-#                                         Bash: started through local.ps1, bash may not see a terminal)
-#   local.sh check   --project <owner/name> --login <login> [--fork <name>]
-#   local.sh clone   --project <owner/name> --login <login> [--fork <name>]
+#   local.sh check   --project <owner/name> [--login <login>] [--fork <name>]
+#   local.sh clone   --project <owner/name> [--login <login>] [--fork <name>]
 #   local.sh refresh --project <owner/name>
 #   local.sh needs   --project <owner/name>             (what the project needs of a worker's machine, after the yes)
-#   local.sh hive    <setup|next|start|ready|submit|release|duty> --project … --login … [--fork …] [the tool's options]
-#   local.sh sandbox --project <owner/name> --login <login> [--fork <name>] -- <command…>
+#   local.sh hive    <setup|next|start|ready|submit|release|duty> --project … [--login …] [--fork …] [the tool's options]
+#   local.sh sandbox --project <owner/name> [--login <login>] [--fork <name>] -- <command…>
+#
+# The login is never typed: it is the GitHub account this machine's git pushes as, read on this machine from git's
+# own credential for github.com (or gh's), and asked of api.github.com (found_login). --login, given, must be it.
 #
 # Lines: « LOCAL <word> <value> », the tool's own lines passed through (ASKED, PUSHED, RELEASED and WITHDRAWN come
 # from here, once the push has landed, in place of the tool's HANDED-OVER), and errors as « hive: <sentence> » on
@@ -23,7 +23,6 @@
 #
 # Places, all under ~/.hive and built from the arguments alone, each matched by the tool's own patterns first, and
 # each shown to Docker by the very place it resolves to, which must be the place it names (placed: no link on the way):
-#   login                          the login the user recorded (local.sh login): every command's --login must be it
 #   protocol/                      the hive's protocol, a clone the owner keeps (the guide's « The run »): hive.py from here
 #   work/<login>/<fork>/           the fork's clone, made by the tool's container (clone), never by this machine's git
 #   state/<owner>/<name>/          the project's state (refresh)
@@ -145,22 +144,6 @@ HIVE="$HOME/.hive"
 COMMAND="${1:-}"
 [ $# -gt 0 ] && shift
 
-if [ "$COMMAND" = login ]; then
-  # The user's own step, once: an existing record is never replaced by this command (the user removes the file).
-  [ $# -eq 1 ] && [[ $1 =~ $LOGIN_RE ]] || die "local.sh login takes one word: the user's GitHub login"
-  # (In a terminal of the user's own: an assistant runs its commands with no terminal. This guards against an
-  # assistant's error, not against one that would pretend to be a terminal.)
-  [ -t 0 ] && [ -t 1 ] || die "local.sh login is the user's own step, typed in a terminal of their own (on Windows, in Git Bash, which bash sees as a terminal where PowerShell's console may not be): an assistant never runs it"
-  mkdir -p "$HIVE" || die "no room under $HIVE"
-  if [ -f "$HIVE/login" ]; then
-    [ "$(lower "$(cat "$HIVE/login")")" = "$(lower "$1")" ] \
-      || die "this machine works for $(printf %q "$(cat "$HIVE/login")") already: to work for another account, the user removes $HIVE/login by hand"
-  else
-    printf '%s\n' "$1" > "$HIVE/login" || die "no room under $HIVE"
-  fi
-  say "LOCAL login $(cat "$HIVE/login")"
-  exit 0
-fi
 
 
 SUB=""
@@ -173,7 +156,7 @@ case "$COMMAND" in
       setup|next|start|ready|submit|release|duty) ;;
       *) die "local.sh hive takes one of setup, next, start, ready, submit, release, duty: the worker's commands, and no other" ;;
     esac ;;
-  *) die "local.sh takes login, check, clone, refresh, needs, hive or sandbox" ;;
+  *) die "local.sh takes check, clone, refresh, needs, hive or sandbox" ;;
 esac
 
 # The options each command takes: « name » takes a value, « name! » is a flag.
@@ -236,12 +219,71 @@ NAME="${PROJECT#*/}"
 if [ "$OWNER/$NAME" != "$PROJECT" ] || ! [[ $OWNER =~ $LOGIN_RE ]] || ! [[ $NAME =~ $NAME_RE ]] || [ "$NAME" = . ] || [ "$NAME" = .. ]; then
   die "--project: the project's repository on GitHub, owner/name"
 fi
+NO_ACCOUNT="this machine's git has no GitHub account it can push with: stop, and tell the user. If they have no GitHub account, they create one at github.com themselves; then they connect it as the worker's guide says (nothing to type in a terminal)"
+AGAIN="the owner connects their GitHub account again, as the worker's guide says (nothing to type in a terminal)"
+found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as (LOGIN_VIA git), else gh's (LOGIN_VIA gh)
+  # git's own credential for github.com, as the push signs in, asking nothing: no terminal, no askpass, no window of
+  # the credential manager's. Its token stays in this function's variables: never printed, written, or in an argument.
+  local ask said token curl answer code login gh
+  FOUND_LOGIN="" LOGIN_VIA=""
+  command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
+  ask=$(mktemp "${TMPDIR:-/tmp}/hive-ask.XXXXXX") || die "no room for a temporary file"
+  printf 'protocol=https\nhost=github.com\n\n' > "$ask"
+  said=$(GIT_MEMORY_KB="" within 30 "$ask" env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never SSH_ASKPASS= \
+    "$GIT" -c core.askPass= -c credential.interactive=never credential fill 2>/dev/null)
+  rm -f "$ask"
+  token=$(printf '%s\n' "$said" | sed -n 's/^password=//p' | head -n 1)
+  said=""
+  if [ -n "$token" ]; then
+    [[ $token =~ ^[A-Za-z0-9_]{20,255}$ ]] || { token=""; die "the GitHub credential this machine's git holds is not of a token's shape this launcher sends: $AGAIN"; }
+    curl=$(command -v curl) && [ "${curl#/}" != "$curl" ] || { token=""; die "curl is not on this machine's PATH: it asks GitHub which account this machine's git pushes as"; }
+    answer=$(mktemp "${TMPDIR:-/tmp}/hive-user.XXXXXX") || { token=""; die "no room for a temporary file"; }
+    # (The header on curl's standard input, never in its arguments; no ~/.curlrc read; https only, no redirect.)
+    code=$(printf 'header = "Authorization: token %s"\nheader = "User-Agent: bee-hive-local"\nheader = "Accept: application/vnd.github+json"\nurl = "https://api.github.com/user"\n' "$token" \
+      | "$curl" -q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$answer" -w '%{http_code}' --config - 2>/dev/null)
+    token=""
+    case "$code" in
+      200) login=$(head -c 65536 "$answer" | tr -d '\r\n' | grep -o '"login" *: *"[A-Za-z0-9-]*"' | head -n 1 | sed 's/^.*"\([A-Za-z0-9-]*\)"$/\1/') ;;
+      401|403) rm -f "$answer"; die "GitHub refuses the credential this machine's git holds (it may have expired): $AGAIN" ;;
+      *) rm -f "$answer"; die "GitHub could not be asked which account this machine's git pushes as (the network, or GitHub): run the command again" ;;
+    esac
+    rm -f "$answer"
+    [[ $login =~ $LOGIN_RE ]] || die "GitHub's answer about this machine's account holds no login this launcher reads: run the command again; if it fails again, tell the user"
+    FOUND_LOGIN="$login" LOGIN_VIA=git
+    return 0
+  fi
+  # No credential of git's: gh's account, if gh is there and signed in (its token is gh's own, never seen here); the
+  # push then signs in through gh, for that push alone (PUSH_SIGN_IN), with no change to git's settings.
+  if gh=$(command -v gh 2>/dev/null) && [ "${gh#/}" != "$gh" ] && case "$gh" in *"'"*) false ;; *) true ;; esac \
+      && login=$(GIT_MEMORY_KB="" within 30 /dev/null "$gh" api user --jq .login 2>/dev/null) && [[ $login =~ $LOGIN_RE ]]; then
+    FOUND_LOGIN="$login" LOGIN_VIA=gh
+    PUSH_SIGN_IN=(-c credential.helper= -c "credential.helper=!'$gh' auth git-credential")
+    return 0
+  fi
+  die "$NO_ACCOUNT"
+}
+
+# The PATH, before any program is run: every entry named from the root, and none below ~/.hive, where the clones,
+# the store and the slot lie (nothing kept there, a clone's folder included, is run on this machine).
+mkdir -p "$HIVE" || die "no room under $HIVE"
+hive_real=$(cd -P "$HIVE" && pwd -P) || die "$HIVE cannot be read"
+set -f; old_ifs="$IFS"; IFS=: read -r -a early_path <<< "$PATH"; IFS="$old_ifs"; set +f
+for entry in ${early_path[@]+"${early_path[@]}"}; do
+  case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
+  [ -d "$entry" ] || continue
+  resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
+  if same_or_below "$resolved" "$hive_real"; then die "the PATH holds a folder below $HIVE ($entry): nothing kept there is run on this machine"; fi
+done
+
+PUSH_SIGN_IN=()
 if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
-  [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
-  # The login is the user's, recorded once by the user (local.sh login): a fork of any other account is never written.
-  [ -f "$HIVE/login" ] || die "no login is recorded on this machine: stop, and tell the user. The user (never an assistant) types « local.sh login <their GitHub login> » once, in a terminal of their own"
-  [ "$(lower "$(cat "$HIVE/login")")" = "$(lower "$LOGIN")" ] \
-    || die "--login is not the login the user recorded on this machine ($(printf %q "$(cat "$HIVE/login")")): this machine works for that account alone"
+  # The login, before anything of the project's: read from what this machine's git pushes with, never typed.
+  [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
+  found_login
+  if [ -n "$LOGIN" ] && [ "$(lower "$LOGIN")" != "$(lower "$FOUND_LOGIN")" ]; then
+    die "this machine's git pushes to GitHub as $FOUND_LOGIN, not as --login $LOGIN: the worker works for the account it pushes as"
+  fi
+  LOGIN="$FOUND_LOGIN"
   FORK="${FORK:-$NAME}"
   if ! [[ $FORK =~ $NAME_RE ]] || [ "$FORK" = . ] || [ "$FORK" = .. ]; then die "--fork: the name of your fork's repository"; fi
   [ "$(lower "$LOGIN/$FORK")" != "$(lower "$PROJECT")" ] || die "the fork named is the project's own repository: the worker pushes to their own fork only"
@@ -318,17 +360,6 @@ if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
     die "this session's folder ($HERE) is the clone, lies inside it or above it: start the assistant in a folder of its own (~/hive-desk), and run local.sh from there"
   fi
 fi
-set -f
-old_ifs="$IFS"
-IFS=: read -r -a PATH_ENTRIES <<< "$PATH"
-IFS="$old_ifs"
-set +f
-for entry in ${PATH_ENTRIES[@]+"${PATH_ENTRIES[@]}"}; do
-  case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
-  [ -d "$entry" ] || continue
-  resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
-  if same_or_below "$resolved" "$CLONE_REAL"; then die "the PATH holds a folder of the clone ($entry): nothing of the clone is run on this machine"; fi
-done
 command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
 command -v "$DOCKER" >/dev/null 2>&1 || die "docker is not on this machine's PATH: install Docker (Docker Desktop on Windows and macOS) and start it"
 
@@ -654,6 +685,7 @@ push_hand_over() {  # after the tool printed HANDED-OVER: everything, or one lin
   # bounded in memory: a credential manager (.NET's, on Windows) may reserve more address space than git does.
   if ! GIT_MEMORY_KB="" within "$GIT_SECONDS" /dev/null env GIT_TERMINAL_PROMPT=0 "$GIT" -C "$(host_path "$STORE")" -c core.hooksPath=/dev/null \
       -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow="$FILE_PROTOCOL" \
+      ${PUSH_SIGN_IN[@]+"${PUSH_SIGN_IN[@]}"} \
       push --quiet --porcelain --no-verify --no-follow-tags --no-signed --recurse-submodules=no fork "$refspec" >/dev/null 2>&1; then
     die "the push to your fork did not land: nothing was pushed. Run the command again; if it fails again, stop and tell the user to check that this machine's git may push to the fork${SET_ASIDE:+ (this launcher set aside$SET_ASIDE, which git's sign-in may need: the push signs in with git's own credential helper alone)}"
   fi
@@ -686,6 +718,7 @@ case "$COMMAND" in
     say "LOCAL git $("$GIT" version | sed 's/^git version //')"
     say "LOCAL docker $("$DOCKER" version --format '{{.Server.Version}}' 2>/dev/null)"
     say "LOCAL tool-image $IMAGE"
+    say "LOCAL login $LOGIN"
     mkdir -p "$HIVE/work" || die "no room under $HIVE"
     egress_up
     WORK=$(below_hive "$HIVE/work" "the clones' folder") || exit 2

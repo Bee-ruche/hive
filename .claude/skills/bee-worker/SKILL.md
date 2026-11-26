@@ -494,8 +494,8 @@ Everything in this guide holds, with these changes and no others:
     also takes the curly quotes `‘ ’ ‚ ‛` as single quotes, so a command holding one could end the quoting, and what
     follows would run on this machine.
   - The launcher's PowerShell shim (`local.ps1`) is not used by this guide.
-- **The protocol** is the copy the user cloned once at `~/.hive/protocol` (`docs/join.md`). If it is not there,
-  stop and tell the user. "The run" takes it afresh as written; its clone line is the user's, not yours.
+- **The protocol:** "The run" takes it as written, its first clone with `-c core.autocrlf=false` added
+  (`git clone -c core.autocrlf=false --depth 1 https://github.com/Bee-ruche/hive ~/.hive/protocol`).
 - **The clone** is `~/.hive/work/<LOGIN>/<the fork's name>`. The launcher makes it once
   (`bash ~/.hive/protocol/tools/hive/local.sh clone --project <PROJECT> --login <LOGIN>`, with `--fork <name>` if
   the fork has another name). This machine's git never checks it out.
@@ -544,10 +544,25 @@ Everything in this guide holds, with these changes and no others:
     Linux machine that runs the tool itself. A `NEEDS-MISSING` line stops you, as `CANNOT-ASK` says, but install
     nothing.
   - **Never add `--despite-needs`** unless the user's own words say so, as everywhere.
-- **The login.** Every command's `--login` must be the login the user recorded on this machine
-  (`local.sh login`, which the user types once in a terminal of their own). If the launcher says no login is
-  recorded, or that this machine works for another account, stop and tell the user. Never run `local.sh login`
-  yourself, and never touch `~/.hive/login`.
+- **The login.** The launcher reads it from the credential the user's git holds for github.com (or from gh's
+  account) and asks api.github.com. `local.sh check` prints it as `LOCAL login <login>`.
+  - `--login` is not needed. Given, it must be that account, or the command stops.
+  - Tell the user which account works, once. If it is not theirs, stop.
+- **Connecting a GitHub account.** When the launcher says the user's git has no GitHub account it can push with, or
+  that GitHub refuses the credential:
+  1. Ask the user whether they have a GitHub account. If not, they create one themselves, at github.com, in their
+     browser. You never create an account.
+  2. Start the sign-in that opens GitHub's own page in their browser, with its output discarded:
+     - where `git credential-manager --version` answers (Git for Windows installs it), run
+       `git credential-manager github login --browser > /dev/null 2>&1`;
+     - otherwise, where `gh --version` answers, run
+       `gh auth login --web --clipboard --git-protocol https > /dev/null 2>&1 &`. Its one-time code goes to their
+       clipboard, for them to paste in GitHub's page.
+     - with neither, tell them what to install themselves: Git for Windows on Windows; Git Credential Manager or
+       GitHub CLI elsewhere. Install nothing yourself.
+  3. They sign in on GitHub's page. You never see, type, store or ask for a password, a token or a code.
+  4. If no browser window opens, tell them and stop. Otherwise wait until they say it is done, then run
+     `local.sh check` again.
 - **Never** run git in `~/.hive/work`, copy a clone made elsewhere into it, or change anything under `~/.hive` but
   the clone's files: the launcher keeps its store, its hand-over slot and its locks there.
 

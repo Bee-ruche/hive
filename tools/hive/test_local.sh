@@ -30,6 +30,40 @@ export GIT_CONFIG_NOSYSTEM=1
 git config --global init.defaultBranch main
 git config --global user.name tester
 git config --global user.email tester@example.com
+# The account this machine's git pushes as: a credential helper of the tests' own for github.com (STUB_NO_CREDENTIAL:
+# none; STUB_TOKEN: the token it holds), a stub curl for api.github.com/user (it takes the token from its standard
+# input alone, and answers STUB_API_LOGIN, or STUB_API_CODE, or nothing with STUB_API_DOWN), and a stub gh
+# (STUB_GH_LOGIN: signed in as that account). The launcher reads the login from them: the user types nothing.
+TOKEN="gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+git config --global credential.https://github.com.helper \
+  '!f() { test "$1" = get || exit 0; [ -z "${STUB_NO_CREDENTIAL:-}" ] || exit 0; printf "username=%s\npassword=%s\n" "${STUB_CRED_USER:-alice}" "${STUB_TOKEN:-gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; }; f'
+cat > "$T/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_DIR/curl-args"
+config=$(cat)
+out=""
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+printf '%s\n' "$config" | sed -n 's/^header = "Authorization: token \(.*\)"$/\1/p' > "$STUB_DIR/curl-token"
+printf '%s\n' "$config" | grep -qx 'url = "https://api.github.com/user"' || { printf 000; exit 3; }
+[ -z "${STUB_API_DOWN:-}" ] || { printf 000; exit 7; }
+if [ -n "${STUB_API_CODE:-}" ]; then printf '{"message": "Bad credentials"}' > "$out"; printf '%s' "$STUB_API_CODE"; exit 0; fi
+printf '{\n  "login": "%s",\n  "id": 1001,\n  "organizations_url": "https://api.github.com/users/x/orgs"\n}\n' "${STUB_API_LOGIN:-alice}" > "$out"
+printf 200
+STUB
+chmod +x "$T/bin/curl"
+cat > "$T/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_DIR/gh-args"
+[ "$1 $2 $3 $4" = "api user --jq .login" ] && [ -n "${STUB_GH_LOGIN:-}" ] && { echo "$STUB_GH_LOGIN"; exit 0; }
+exit 1
+STUB
+chmod +x "$T/bin/gh"
+cat > "$T/bin/askpass-stub" <<'STUB'
+#!/usr/bin/env bash
+echo called >> "$STUB_DIR/askpass-called"
+echo nobody
+STUB
+chmod +x "$T/bin/askpass-stub"
 cp "$HOME/.gitconfig" "$T/gitconfig"
 
 PROTOCOL="$HOME/.hive/protocol"
@@ -66,7 +100,6 @@ mkdir -p "$CLONE" "$HOME/.hive/state/Bee-ruche/toy"
 git -C "$CLONE" init -q
 git -C "$HOME/.hive/state/Bee-ruche/toy" init -q
 SLOT="$HOME/.hive/outbox/Bee-ruche/toy"
-echo alice > "$HOME/.hive/login"
 mkdir -p "$T/gitbin"
 cat > "$T/gitbin/git" <<GIT
 #!/usr/bin/env bash
@@ -301,9 +334,7 @@ launch hive next --project Bee-ruche/toy --login "al ice"
 check "refused: a login of another form" eval 'refused 2 "--login:" && nothing_ran'
 launch hive next --project Bee-ruche/toy --login alice --fork ..
 check "refused: a fork named .." eval 'refused 2 "--fork:" && nothing_ran'
-echo bee-ruche > "$HOME/.hive/login"
-launch hive next --project Bee-ruche/toy --login bee-ruche
-echo alice > "$HOME/.hive/login"
+STUB_API_LOGIN=bee-ruche launch hive next --project Bee-ruche/toy --login bee-ruche
 check "refused: the project's own repository as the fork" eval 'refused 2 "the fork named is the project" && nothing_ran'
 launch hive submit --project Bee-ruche/toy --login alice --task Toy-1 --deal x
 check "refused: a task of another form" eval 'refused 2 "--task:" && nothing_ran'
@@ -320,9 +351,9 @@ check "refused: the session above the clone" eval 'refused 2 "this session" && n
 CASE_PATH="bin:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
 check "refused: a relative entry in the PATH" eval 'refused 2 "the PATH holds a relative entry" && nothing_ran'
 CASE_PATH="$CLONE/src:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
-check "refused: a folder of the clone in the PATH" eval 'refused 2 "the PATH holds a folder of the clone" && nothing_ran'
+check "refused: a folder of the clone in the PATH" eval 'refused 2 "the PATH holds a folder below $HOME/.hive" && nothing_ran'
 mkdir -p "$T/nodocker"
-ln -s "$(command -v git)" "$T/nodocker/git"
+ln -s "$(command -v git)" "$T/nodocker/git" && ln -s "$T/bin/curl" "$T/nodocker/curl"
 CASE_PATH="$T/nodocker:/usr/bin:/bin" launch hive next --project Bee-ruche/toy --login alice
 check "refused: no docker" eval '{ refused 2 "docker is not on this machine" || [ -x /usr/bin/docker ]; }'
 STUB_DOWN=1 launch hive next --project Bee-ruche/toy --login alice
@@ -662,7 +693,8 @@ check "refused: a guarded name that is a link" eval 'refused 2 "the clone'"'"'s 
 rm "$CLONE/.cursor"
 
 launch check --project Bee-ruche/toy --login alice
-check "check: its lines" eval '[ "$CODE" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "NAMES-HELD 3" && printf "%s\n" "$OUT" | grep -qx "LOCAL clone $CLONE" \
+check "check: its lines, the account git pushes as among them" eval '[ "$CODE" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "NAMES-HELD 3" && printf "%s\n" "$OUT" | grep -qx "LOCAL clone $CLONE" \
+  && printf "%s\n" "$OUT" | grep -qx "LOCAL login alice" \
   && grep -q -- "names --project Bee-ruche/toy --system linux\$" "$STUB_DIR/args.names"'
 STUB_NAMES_REFUSE=1 launch check --project Bee-ruche/toy --login alice
 check "refused: check, the tip's names" eval '[ "$CODE" -eq 2 ] && case "$ERR" in "hive: the project'"'"'s tip holds two names"*) true ;; *) false ;; esac'
@@ -679,29 +711,49 @@ check "refresh: the state, read-write for this command alone" eval '[ "$CODE" -e
 # The second review: the login, the environment, the PATH, the lock, links, the gate, the order of the checks.
 
 reset_world
-mv "$HOME/.hive/login" "$T/login-aside"
-launch hive next --project Bee-ruche/toy --login alice
-check "refused: no login recorded" eval 'refused 2 "no login is recorded on this machine" && nothing_ran'
-launch_tty() {  # <words…>: the launcher typed in a terminal (script gives it one); OUT holds both its outputs
-  (cd "$T/desk" && PATH="$BASE_PATH" timeout 60 script -qec "bash $(printf %q "$LAUNCHER") $(printf '%q ' "$@")" /dev/null < /dev/null > "$T/out" 2>&1)
-  CODE=$?
-  OUT=$(tr -d '\r' < "$T/out")
-  ERR="$OUT"
-}
+# The login is read from what this machine's git pushes with: never typed, never recorded by a command.
+STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy --login alice
+check "refused: no GitHub account git can push with, and no gh: one plain line, nothing run" eval \
+  'refused 2 "this machine'"'"'s git has no GitHub account it can push with: stop, and tell the user. If they have no GitHub account, they create one at github.com themselves" && nothing_ran'
+: > "$STUB_DIR/curl-args"; rm -f "$STUB_DIR/curl-token"
+STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy
+check "the login read from git's credential and asked of GitHub: no --login needed, the tool given it" eval \
+  '[ "$CODE" -eq 0 ] && grep -q -- "--login alice --fork toy" "$STUB_DIR/args.tool"'
+check "the token: sent on curl's standard input, never in an argument, an output, a log or a file" eval \
+  '[ "$(cat "$STUB_DIR/curl-token")" = "$TOKEN" ] && ! grep -q "$TOKEN" "$STUB_DIR/curl-args" "$T/git.log" "$STUB_DIR/calls" \
+   && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" 2>/dev/null)" ] \
+   && grep -q -- "-q -sS --proto =https --max-redirs 0 " "$STUB_DIR/curl-args"'
+check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
+  grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
+printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"
+rm -f "$STUB_DIR/askpass-called"
+SSH_ASKPASS="$T/bin/askpass-stub" STUB_NO_CREDENTIAL=1 launch hive next --project Bee-ruche/toy
+check "no askpass program run while git's credential is asked" eval '[ ! -e "$STUB_DIR/askpass-called" ] && refused 2 "this machine'"'"'s git has no GitHub account"'
+cp "$T/gitconfig" "$HOME/.gitconfig"
+STUB_NO_CREDENTIAL=1 STUB_GH_LOGIN=alice STUB_TOOL_OUT="$(said "WAIT until later")" launch hive next --project Bee-ruche/toy
+check "no credential of git's: gh's account, if gh is signed in" eval '[ "$CODE" -eq 0 ] && grep -q -- "--login alice " "$STUB_DIR/args.tool"'
+reset_world
+STUB_NO_CREDENTIAL=1 STUB_GH_LOGIN=alice STUB_HANDOVER="$GOOD" STUB_TOOL_OUT="$(said "HANDED-OVER x hive/ready")" launch hive ready --project Bee-ruche/toy
+check "the login gh's: the push signs in through gh, for that push alone" eval \
+  '[ "$CODE" -eq 0 ] && grep -q "^-C .* -c credential.helper= -c credential.helper=!'"'"'$T/bin/gh'"'"' auth git-credential push " "$T/git.log"'
+STUB_API_CODE=401 launch hive next --project Bee-ruche/toy
+check "refused: GitHub refuses the credential (expired): connect again" eval 'refused 2 "GitHub refuses the credential this machine'"'"'s git holds" && nothing_ran'
+STUB_API_DOWN=1 launch hive next --project Bee-ruche/toy
+check "refused: GitHub not reached: run again (no connect path for a blip)" eval 'refused 2 "GitHub could not be asked which account" && nothing_ran'
+STUB_API_LOGIN="-alice" launch hive next --project Bee-ruche/toy
+check "refused: GitHub's answer with no login of a login's shape" eval 'refused 2 "GitHub'"'"'s answer about this machine'"'"'s account holds no login" && nothing_ran'
+STUB_TOKEN='abc"def' launch hive next --project Bee-ruche/toy
+check "refused: a credential of another shape than a token's, never sent" eval 'refused 2 "the GitHub credential this machine'"'"'s git holds is not of a token'"'"'s shape" && nothing_ran'
+STUB_API_LOGIN=Alice STUB_TOOL_OUT="$(said "WAIT")" launch hive next --project Bee-ruche/toy --login alice
+check "the API's spelling of the login is the one used (--login compared without case)" eval 'refused 2 "there is no clone at $HOME/.hive/work/Alice/toy"'
+STUB_API_LOGIN=bob launch hive next --project Bee-ruche/toy
+check "the account changed since the last run: its own clone's place, never the other's" eval 'refused 2 "there is no clone at $HOME/.hive/work/bob/toy"'
 launch login Alice
-check "refused: login with no terminal (an assistant's command)" eval 'refused 2 "local.sh login is the user'"'"'s own step" && [ ! -e "$HOME/.hive/login" ]'
-launch_tty login Alice
-check "login: typed in a terminal, recorded once" eval '[ "$CODE" -eq 0 ] && [ "$OUT" = "LOCAL login Alice" ] && [ "$(cat "$HOME/.hive/login")" = Alice ]'
-launch_tty login bob
-check "refused: login replacing the one recorded" eval '[ "$CODE" -eq 2 ] && [ "$OUT" = "hive: this machine works for Alice already: to work for another account, the user removes $HOME/.hive/login by hand" ] \
-  && [ "$(cat "$HOME/.hive/login")" = Alice ]'
-launch login "al ice"
-check "refused: login of another form" eval 'refused 2 "local.sh login takes one word"'
-mv "$T/login-aside" "$HOME/.hive/login"
+check "refused: login is no command of the launcher's any more" eval 'refused 2 "local.sh takes check, clone, refresh, needs, hive or sandbox" && nothing_ran'
 launch hive next --project Bee-ruche/toy --login bob
-check "refused: a login that is not the one recorded" eval 'refused 2 "--login is not the login the user recorded" && nothing_ran'
+check "refused: a --login that is not the account git pushes as" eval 'refused 2 "this machine'"'"'s git pushes to GitHub as alice, not as --login bob" && nothing_ran'
 launch clone --project Bee-ruche/toy --login bob
-check "refused: clone for a login that is not the one recorded" eval 'refused 2 "--login is not the login the user recorded" && nothing_ran'
+check "refused: clone for a --login that is not the account git pushes as" eval 'refused 2 "this machine'"'"'s git pushes to GitHub as alice, not as --login bob" && nothing_ran'
 
 DOCKER_HOST=tcp://example.com:2375 launch hive next --project Bee-ruche/toy --login alice
 check "refused: a DOCKER_HOST of another machine" eval 'refused 2 "DOCKER_HOST names a daemon" && nothing_ran'
@@ -715,10 +767,10 @@ check "a local DOCKER_HOST taken, git's variables set aside" eval '[ "$CODE" -eq
 
 ln -s "$CLONE/src" "$T/into-clone"
 CASE_PATH="$T/into-clone:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
-check "refused: a folder of the clone in the PATH, reached through a link" eval 'refused 2 "the PATH holds a folder of the clone" && nothing_ran'
+check "refused: a folder of the clone in the PATH, reached through a link" eval 'refused 2 "the PATH holds a folder below $HOME/.hive" && nothing_ran'
 mkdir -p "$HOME/.hive/work/alice/beside"
 CASE_PATH="$HOME/.hive/work/alice/beside/../toy/src:$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
-check "refused: a folder of the clone in the PATH, reached through .." eval 'refused 2 "the PATH holds a folder of the clone" && nothing_ran'
+check "refused: a folder of the clone in the PATH, reached through .." eval 'refused 2 "the PATH holds a folder below $HOME/.hive" && nothing_ran'
 rmdir "$HOME/.hive/work/alice/beside"
 CASE_PATH="/usr/bin::$BASE_PATH" launch hive next --project Bee-ruche/toy --login alice
 check "refused: an empty entry in the PATH" eval 'refused 2 "the PATH holds a relative entry" && nothing_ran'
@@ -902,9 +954,8 @@ while IFS= read -r line; do
   # The one line each must stop on once its words are read: no login recorded, or, for login, no terminal. refresh
   # takes no login: it must stop on none of the launcher's readings of a command line.
   case "$words" in
-    login\ *) want="hive: local.sh login is the user's own step" ;;
     refresh\ *|needs\ *) want="" ;;
-    *) want="hive: no login is recorded on this machine" ;;
+    *) want="hive: this machine's git has no GitHub account it can push with" ;;
   esac
   if [ -n "$want" ]; then
     [ "$(grep -c . "$T/doc-err")" -eq 1 ] && grep -q "^$want" "$T/doc-err" || printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
@@ -915,21 +966,25 @@ done < "$T/doc-lines"
 # Then with the login recorded, so that the readings after it are reached too (the fork's name, the sandbox's --
 # and its command): each line stops on none of them.
 DOCS_HOME2="$T/docs-home2"
-mkdir -p "$DOCS_HOME2/.hive" && printf 'alice\n' > "$DOCS_HOME2/.hive/login"
+mkdir -p "$DOCS_HOME2/.hive" && cp "$T/gitconfig" "$DOCS_HOME2/.gitconfig"  # (a GitHub account git pushes as)
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
     | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<owner/project>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g' -e "s|<DIGEST>|$DIGEST|g; s|<digest>|$DIGEST|g")
   case "$words" in login\ *|*"<"*) continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME2" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
-  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|runs the command given after --\|the fork named is the project\|no login is recorded\|is not the login the user recorded" "$T/doc-err"; then
+  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|runs the command given after --\|the fork named is the project\|has no GitHub account it can push with\|not as --login" "$T/doc-err"; then
     printf '%s (login recorded): %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
   fi
 done < "$T/doc-lines"
 docs_read() {  # every line read, and each of the launcher's commands given at least once
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
-  for word in check clone refresh needs sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  for word in check clone refresh needs sandbox; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  ! grep -n "local\.sh login" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  # The account: connected by the user in GitHub's own page, the agent seeing no secret (the founder's word).
+  grep -q "^- \*\*Connecting a GitHub account\.\*\*" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  grep -q "You never see, type, store or ask for a password, a token or a code" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   # The needs' digest is the user's own sentence, and the docs say what it opens (the founder's word: no terminal step).
   grep -q "The digest comes from the user's own message, and from nothing else" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -q "If the user has not written that sentence, do not give \`--needs-accepted\`" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
@@ -938,7 +993,7 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
-check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, needs, sandbox and login" docs_read
+check "the docs: every launcher command they give is one the launcher reads, they give check, clone, refresh, needs and sandbox, and no login step" docs_read
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]
