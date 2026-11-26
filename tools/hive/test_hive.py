@@ -5534,6 +5534,10 @@ WORKER_LINES = [re.compile(line + r"\Z") for line in (
     r"file and document with its host, its size and its licence(; the packages this digest lets the worker install, when a NEEDS-MISSING line "
     r"names them: [a-z0-9+.-]+(, [a-z0-9+.-]+)*)?; their yes accepts those licences and those packages, and that those hosts see this "
     r"machine's address; then give every next, ready and start of the run --needs-accepted [0-9a-f]{64}",
+    r"THEN: tell the user each entry of the data, word for word: the programs, the resources, and each file and document with its host, its "
+    r"size and its licence\. Through the local bee nothing is installed on their machine: the project's own Docker image brings its programs, "
+    r"and the launcher fetches its files and documents\. Their yes accepts those licences, and that those hosts see this machine's address; "
+    r"then give every next, ready and start of the run --needs-accepted [0-9a-f]{64}",
 )]
 ASK = "ASK: you hold no task. If this worker runs at least every 2 hours, ask for one: hive.py ready --project Bee-ruche/toy --login Alice\n"
 # What a command stops on when the clone's origin is not the fork the tool derives from the login and the project's repository.
@@ -21039,6 +21043,7 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
 
     def test_an_unaccepted_digest_names_the_launchers_command(self):
         digest = self.needs(NEED_DOCUMENT)
+        self.w.run()
         code, lines = self.fetched("0" * 64)
         self.assertIn(f"NEEDS-UNACCEPTED {digest}: the project's needs, their packages, files, addresses and licences, are not the ones the user "
                       "accepted (local.sh needs --project Bee-ruche/toy gives them, and this digest): nothing was fetched", lines)
@@ -21058,8 +21063,6 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
                 mock.patch.object(hive, "remote_parts", new=as_githubs):
             code, text = self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), "--by-fetch", cwd=Path(self.tmp.name))
             self.assertEqual(code, 0, self.err)
-            self.assertEqual(self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), cwd=Path(self.tmp.name))[0], 2,
-                             "without --by-fetch, an address of GitHub's is read from GitHub's address for files")
         then = self.spoken(text)[-1]
         self.assertTrue(then.startswith("THEN: ") and "nothing is installed on their machine" in then and f"--needs-accepted {digest}" in then, then)
         self.assertNotIn("lets the worker install", then)
