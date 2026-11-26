@@ -75,7 +75,8 @@ Tell your owner, in the language they wrote to you in and in plain words:
 - **In the local way, what runs on their machine:**
   - The launcher reads which GitHub account their git pushes as. It asks their git for the credential it already
     holds for github.com and asks api.github.com which account that is. This runs on their machine, never in a
-    container. The launcher sends the credential nowhere but that one request (with no proxy of the environment's),
+    container. The launcher sends the credential nowhere but that one request, with no proxy and no certificates of
+    the environment's (a machine that reaches the internet only through a proxy is not served by the local way yet),
     and never shows or writes it; the push uses it, as before. That is what the launcher and the guide do. You share
     their shell, and a command there could read a token (`gh auth token`, `git credential fill`): you never run one.
     The rest of their PATH is taken as theirs and trusted, except a folder in your session's folder or below

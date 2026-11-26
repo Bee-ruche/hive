@@ -36,13 +36,14 @@ git config --global user.email tester@example.com
 # (STUB_GH_LOGIN: signed in as that account). The launcher reads the login from them: the user types nothing.
 TOKEN="gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 git config --global credential.https://github.com.helper \
-  '!f() { test "$1" = get || exit 0; [ -z "${STUB_NO_CREDENTIAL:-}" ] || exit 0; [ -z "${STUB_CRED_SLOW:-}" ] || sleep 30; printf "username=%s\npassword=%s\n" "${STUB_CRED_USER:-alice}" "${STUB_TOKEN:-gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; }; f'
+  '!f() { test "$1" = get || exit 0; [ -z "${STUB_NO_CREDENTIAL:-}" ] || exit 0; [ -z "${STUB_CRED_SLOW:-}" ] || { echo $$ > "$STUB_DIR/in-cred"; exec sleep 30; }; printf "username=%s\npassword=%s\n" "${STUB_CRED_USER:-alice}" "${STUB_TOKEN:-gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; }; f'
 cat > "$T/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/curl-args"
 env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
+env | grep -v "^STUB_" | grep -q "gho_\|github_pat_" && echo "$0" >> "$STUB_DIR/env-token"
 config=$(cat)
-[ -z "${STUB_API_SLOW:-}" ] || sleep 30
+[ -z "${STUB_API_SLOW:-}" ] || { echo $$ > "$STUB_DIR/in-curl"; exec sleep 30; }
 out=""
 while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
 printf '%s\n' "$config" | sed -n 's/^header = "Authorization: token \(.*\)"$/\1/p' > "$STUB_DIR/curl-token"
@@ -59,6 +60,7 @@ cat > "$T/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/gh-args"
 env | grep -E '^(HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|CURL_CA_BUNDLE|CURL_HOME|SSL_CERT_FILE|SSL_CERT_DIR|GH_DEBUG|DEBUG)=' >> "$STUB_DIR/net-env"
+env | grep -v "^STUB_" | grep -q "gho_\|github_pat_" && echo "$0" >> "$STUB_DIR/env-token"
 [ "$*" = "api --hostname github.com user --jq .login" ] && [ -n "${STUB_GH_LOGIN:-}" ] && { echo "$STUB_GH_LOGIN"; exit 0; }
 exit 1
 STUB
@@ -792,32 +794,38 @@ check "the token: sent on curl's standard input, never in an argument, an output
   '[ "$(cat "$STUB_DIR/curl-token")" = "$TOKEN" ] && ! grep -q "$TOKEN" "$STUB_DIR/curl-args" "$T/git.log" "$STUB_DIR/calls" \
    && ! printf "%s%s" "$OUT" "$ERR" | grep -q "$TOKEN" && [ -z "$(grep -rl "$TOKEN" "$HOME/.hive" "$T/tmpd" 2>/dev/null)" ] \
    && [ -z "$(ls -A "$T/tmpd")" ] \
-   && grep -qx -- "-q -sS --noproxy * --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o $T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"'
+   && grep -qx -- "-q -sS --noproxy \* --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o $T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"'
 : > "$STUB_DIR/curl-args"
 TMPDIR="$T/tmpd" STUB_UNAME=MINGW64_NT-10.0-26100 STUB_CYGPATH_MARK=1 launch check --project Bee-ruche/toy
 check "on Windows, curl given the answer's place in Windows' form (the launcher turns Git Bash's conversion off: curl.exe wrote nothing, the real smoke)" \
-  grep -qx -- "-q -sS --noproxy * --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o W:$T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"
+  grep -qx -- "-q -sS --noproxy \* --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o W:$T/tmpd/hive-user\.[A-Za-z0-9]* -w %{http_code} --config -" "$STUB_DIR/curl-args"
 rm -f "$T/tmpd"/hive-user.*
-# The token traced by nothing: bash -x, bash -v, SHELLOPTS=xtrace, a function exported under a program's name.
-leaked=""
-for how in "bash -x" "bash -v" "env SHELLOPTS=xtrace bash" "env SHELLOPTS=xtrace:verbose BASH_XTRACEFD=1 bash"; do
+# The token traced by nothing, in no program's environment: bash -x, bash -v, SHELLOPTS (xtrace, verbose, allexport),
+# bash -a, and given to no function exported under a program's name.
+leaked=""; rm -f "$STUB_DIR/env-token"
+for how in "bash -x" "bash -v" "bash -a" "env SHELLOPTS=xtrace bash" "env SHELLOPTS=allexport bash" \
+    "env SHELLOPTS=xtrace:verbose:allexport BASH_XTRACEFD=1 bash"; do
   (cd "$T/desk" && PATH="$BASE_PATH" timeout 120 $how "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > "$T/out" 2> "$T/err")
   ! grep -q "$TOKEN" "$T/out" "$T/err" || leaked="$leaked [$how]"
   grep -qx "LOCAL login alice" "$T/out" || leaked="$leaked [$how: no login read]"
 done
 rm -f "$T/sed-saw"
 (sed() { cat > "$T/sed-saw"; }; export -f sed; launch check --project Bee-ruche/toy)
-check "the token traced by nothing (bash -x, bash -v, SHELLOPTS, BASH_XTRACEFD) and given to no function the caller exported" \
-  eval '[ -z "$leaked" ] && [ ! -e "$T/sed-saw" ]'
+check "the token traced by nothing and in no program's environment (bash -x, -v, -a, SHELLOPTS, BASH_XTRACEFD), given to no function the caller exported" \
+  eval '[ -z "$leaked" ] && [ ! -e "$STUB_DIR/env-token" ] && [ ! -e "$T/sed-saw" ] && grep -qx "LOCAL login alice" "$T/out"'
 # curl and gh: none of the caller's proxies, certificate places or debug logs.
-: > "$STUB_DIR/net-env"; : > "$STUB_DIR/curl-args"
+: > "$STUB_DIR/net-env"; : > "$STUB_DIR/curl-args"; : > "$STUB_DIR/gh-args"
 NET_VARS=(HTTPS_PROXY=http://x:1 https_proxy=http://x:1 ALL_PROXY=http://x:1 all_proxy=http://x:1 HTTP_PROXY=http://x:1 NO_PROXY=x no_proxy=x
   CURL_CA_BUNDLE=/x CURL_HOME=/x SSL_CERT_FILE=/x SSL_CERT_DIR=/x GH_DEBUG=api DEBUG=1)
 (export "${NET_VARS[@]}"; launch check --project Bee-ruche/toy)
 (export "${NET_VARS[@]}"; STUB_API_CODE=401 STUB_GH_LOGIN=alice launch check --project Bee-ruche/toy)
 check "curl and gh run with none of the caller's proxies, certificate places or debug logs, curl with no proxy at all" \
   eval '[ ! -s "$STUB_DIR/net-env" ] && grep -q -- "--noproxy \*" "$STUB_DIR/curl-args" && grep -q "^api --hostname github.com user" "$STUB_DIR/gh-args"'
-# The PATH: no folder in the session's folder, where a project's or an agent's files may lie.
+STUB_API_DOWN=1 launch check --project Bee-ruche/toy
+check "refused: GitHub not reached, and the line says the launcher uses no proxy" eval \
+  'refused 2 "GitHub could not be asked which account this machine'"'"'s git pushes as. This launcher reaches api.github.com directly, with no proxy"'
+# The PATH: no folder in the session's folder, where a project's or an agent's files may lie; a session in the home
+# folder itself (refresh, needs) keeps the user's own folders of programs.
 mkdir -p "$T/desk/bin" && ln -sfn "$T/desk/bin" "$T/to-desk-bin"
 for entry in "$T/desk/bin" "$T/to-desk-bin"; do
   CASE_PATH="$entry:$BASE_PATH" launch check --project Bee-ruche/toy
@@ -825,12 +833,28 @@ for entry in "$T/desk/bin" "$T/to-desk-bin"; do
     'refused 2 "the PATH holds a folder in this session'"'"'s folder" && nothing_ran'
 done
 rm -rf "$T/desk/bin" "$T/to-desk-bin"
-# found_login's temporaries removed when the launcher is stopped while GitHub is asked.
-mkdir -p "$T/tmpd2"
-(cd "$T/desk" && PATH="$BASE_PATH" TMPDIR="$T/tmpd2" STUB_API_SLOW=1 timeout -s TERM 3 bash "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > /dev/null 2>&1)
-check "found_login's folder and answer removed when the launcher is stopped while GitHub is asked" eval '[ -z "$(ls -A "$T/tmpd2")" ]'
-(cd "$T/desk" && PATH="$BASE_PATH" TMPDIR="$T/tmpd2" STUB_CRED_SLOW=1 timeout -s TERM 3 bash "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > /dev/null 2>&1)
-check "found_login's folder removed when the launcher is stopped while git is asked for its credential" eval '[ -z "$(ls -A "$T/tmpd2")" ]'
+mkdir -p "$HOME/bin"
+HERE="$HOME" CASE_PATH="$HOME/bin:$BASE_PATH" launch needs --project Bee-ruche/toy
+check "a session in the home folder, with the user's own ~/bin on the PATH: not refused for it" eval \
+  'case "$ERR" in *"in this session'"'"'s folder"*) false ;; *) true ;; esac'
+rmdir "$HOME/bin"
+# found_login's temporaries removed when the launcher is stopped (TERM) while a program it waits on runs: the stub
+# says when it runs, the launcher is stopped, then the stub's sleep, so that the launcher goes on to its trap.
+stopped_while() {  # <the stub's knob> <its marker> <the temporary that must be there then>
+  local pid i
+  rm -rf "$T/tmpd2"; mkdir -p "$T/tmpd2"; rm -f "$STUB_DIR/$2"
+  (cd "$T/desk" && exec env PATH="$BASE_PATH" TMPDIR="$T/tmpd2" "$1=1" bash "$LAUNCHER" check --project Bee-ruche/toy < /dev/null > /dev/null 2>&1) &
+  pid=$!
+  for i in $(seq 150); do [ -s "$STUB_DIR/$2" ] && break; sleep 0.2; done
+  if ! ls "$T/tmpd2" | grep -q "^$3"; then kill -9 "$pid" 2>/dev/null; [ ! -s "$STUB_DIR/$2" ] || kill "$(cat "$STUB_DIR/$2")" 2>/dev/null; wait "$pid"; return 1; fi
+  kill -TERM "$pid"
+  sleep 0.5
+  kill "$(cat "$STUB_DIR/$2")" 2>/dev/null
+  wait "$pid"
+  [ -z "$(ls -A "$T/tmpd2")" ]
+}
+check "found_login's answer removed when the launcher is stopped while GitHub is asked" stopped_while STUB_API_SLOW in-curl hive-user.
+check "found_login's folder removed when the launcher is stopped while git is asked for its credential" stopped_while STUB_CRED_SLOW in-cred hive-ask.
 check "git asked for its credential asking nothing (no terminal, no askpass, no window)" \
   grep -q -- "-c core.askPass= -c credential.interactive=never credential fill" "$T/git.log"
 printf '[core]\n\taskPass = %s\n' "$T/bin/askpass-stub" >> "$HOME/.gitconfig"

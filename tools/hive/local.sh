@@ -38,11 +38,12 @@
 # (every pilot's installs packages): that file is one of the project's protected ones.
 #
 # Written for bash 3.2 (macOS's own) and Git Bash: no associative array, no ${x,,}, no mapfile.
-# Nothing of the caller's shell traces or stands in for a program here: no xtrace or verbose (bash -x, SHELLOPTS),
-# which would print the token found_login holds, and no function brought in from the environment under a program's
-# name.
-{ builtin set +x +v; } 2>/dev/null
-builtin unset BASH_XTRACEFD BASH_ENV ENV
+# Nothing of the caller's shell traces, exports or stands in for a program here: no xtrace or verbose (bash -x,
+# SHELLOPTS), which would print the token found_login holds, no allexport (bash -a), which would hand it to every
+# program in its environment, and no function brought in from the environment under a program's name. (Beyond these,
+# the caller's environment is trusted: what it sets on purpose, the launcher does not undo.)
+{ builtin set +x +v +a; } 2>/dev/null
+builtin unset BASH_ENV ENV  # (not BASH_XTRACEFD: unsetting it closes the descriptor it names, stdout itself if 1)
 for imported in $(builtin compgen -A function); do builtin unset -f "$imported"; done
 set -u
 
@@ -94,6 +95,7 @@ under_ci() {  # true if $1 is $2 or lies below it, without case
 }
 if [ -d "$HOME/.hive" ]; then hive_real=$(cd -P "$HOME/.hive" && pwd -P) || die "$HOME/.hive cannot be read"; else hive_real=""; fi
 here_real=$(pwd -P) || die "this session's folder cannot be read"
+home_real=$(cd -P "$HOME" 2>/dev/null && pwd -P) || home_real=""
 set -f; old_ifs="$IFS"; IFS=: read -r -a early_path <<< "$PATH"; IFS="$old_ifs"; set +f
 for entry in ${early_path[@]+"${early_path[@]}"}; do
   case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
@@ -101,8 +103,9 @@ for entry in ${early_path[@]+"${early_path[@]}"}; do
   resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
   if [ -n "$hive_real" ] && under_ci "$resolved" "$hive_real"; then die "the PATH holds a folder below $HOME/.hive ($entry): nothing kept there is run on this machine"; fi
   # Nor in the session's folder, where a project's or an agent's files may lie: a program there named curl, gh or git
-  # would be given the token or run in their place. (The rest of the PATH is this machine's, and trusted.)
-  if under_ci "$resolved" "$here_real"; then die "the PATH holds a folder in this session's folder ($entry): nothing there is run by this launcher. Start the assistant in a folder of its own, out of the PATH"; fi
+  # would be given the token or run in their place. (The rest of the PATH is this machine's, and trusted. A session in
+  # the home folder itself, which only refresh and needs take, keeps the user's own folders of programs.)
+  if [ "$here_real" != "$home_real" ] && under_ci "$resolved" "$here_real"; then die "the PATH holds a folder in this session's folder ($entry): nothing there is run by this launcher. Start the assistant in a folder of its own, out of the PATH"; fi
 done
 
 case "$(uname -s 2>/dev/null)" in
@@ -253,13 +256,14 @@ AGAIN="the owner connects their GitHub account again, as the worker's guide says
 # What curl and gh run with: none of the caller's proxies, certificate places or debug logs, through which a token
 # could be seen or its answer changed.
 NET_OWN=(env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy
-  -u CURL_CA_BUNDLE -u CURL_HOME -u SSL_CERT_FILE -u SSL_CERT_DIR -u GH_DEBUG -u DEBUG -u GH_HOST -u GH_ENTERPRISE_TOKEN)
+  -u CURL_CA_BUNDLE -u CURL_HOME -u SSL_CERT_FILE -u SSL_CERT_DIR -u SSLKEYLOGFILE -u OPENSSL_CONF -u GH_DEBUG -u DEBUG -u GH_HOST
+  -u GH_ENTERPRISE_TOKEN)
 LOGIN_ASK="" LOGIN_ANSWER=""  # found_login's temporaries, removed whatever happens (and by leave, later)
 found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as (LOGIN_VIA git), else gh's (LOGIN_VIA gh)
   # git's own credential for github.com, as the push signs in, asking nothing: no terminal, no askpass, no window of
   # the credential manager's. Its token stays in this function's variables: never printed, written, or in an argument.
   local askdir said token curl answer code login gh why=""
-  { builtin set +x +v; } 2>/dev/null  # (and again here, whatever ran before: a trace would print the token)
+  { builtin set +x +v +a; } 2>/dev/null  # (and again here, whatever ran before: a trace would print the token)
   FOUND_LOGIN="" LOGIN_VIA=""
   command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
   # (In an empty folder of its own, which git does not climb out of: no repository's settings are read, the session's
@@ -292,7 +296,7 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
            FOUND_LOGIN="$login" LOGIN_VIA=git
            return 0 ;;
       401|403) why="GitHub refuses the credential this machine's git holds (it may have expired): $AGAIN" ;;
-      *) why="GitHub could not be asked which account this machine's git pushes as (the network, or GitHub): run the command again" ;;
+      *) why="GitHub could not be asked which account this machine's git pushes as. This launcher reaches api.github.com directly, with no proxy and no certificates of the environment's: if this machine reaches the internet only through a proxy, tell the user that the local way does not serve it yet; otherwise run the command again" ;;
     esac
     rm -f "$answer"; LOGIN_ANSWER=""
   fi
@@ -311,9 +315,13 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
 PUSH_SIGN_IN=()
 trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
 if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
-  # The login, before anything of the project's: read from what this machine's git pushes with, never typed.
+  # The login, before anything of the project's: read from what this machine's git pushes with, never typed. A stop
+  # meanwhile (TERM, INT, HUP) ends the launcher through its EXIT trap, once the program it waits on has ended (each
+  # is bounded: 30 seconds for git and gh, 20 for curl), so that found_login's temporaries go.
   [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
+  trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
   found_login
+  trap - TERM INT HUP
   if [ -n "$LOGIN" ] && [ "$(lower "$LOGIN")" != "$(lower "$FOUND_LOGIN")" ]; then
     die "this machine's git pushes to GitHub as $FOUND_LOGIN, not as --login $LOGIN: the worker works for the account it pushes as"
   fi
