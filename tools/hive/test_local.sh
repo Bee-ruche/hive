@@ -107,7 +107,7 @@ case "${1:-}" in
     [ "${*: -1}" != - ] || cat > /dev/null
     if [ -n "${STUB_BUILD_FAILS:-}" ]; then
       for i in $(seq 50); do if [ $((i % 2)) -eq 0 ]; then echo "step line $i" >&2; else echo "step line $i"; fi; done
-      [ -z "${STUB_BUILD_HUGE:-}" ] || head -c 1048576 /dev/zero | tr '\0' x >&2
+      [ -z "${STUB_BUILD_HUGE:-}" ] || { head -c 1048576 /dev/zero | tr '\0' x; echo; } >&2
       [ -z "${STUB_BUILD_ESC:-}" ] || printf 'ERROR: \033[31mred\033[0m and a bell\a\n' >&2
       exit 1
     fi
