@@ -75,8 +75,11 @@ Tell your owner, in the language they wrote to you in and in plain words:
 - **In the local way, what runs on their machine:**
   - The launcher reads which GitHub account their git pushes as. It asks their git for the credential it already
     holds for github.com and asks api.github.com which account that is. This runs on their machine, never in a
-    container. The credential goes no further than that one request and is never shown or written; the push uses
-    it, as before.
+    container. The launcher sends the credential nowhere but that one request (with no proxy of the environment's),
+    and never shows or writes it; the push uses it, as before. That is what the launcher and the guide do. You share
+    their shell, and a command there could read a token (`gh auth token`, `git credential fill`): you never run one.
+    The rest of their PATH is taken as theirs and trusted, except a folder in your session's folder or below
+    `~/.hive`, which the launcher refuses.
   - Docker starts the hive's containers there: the hive's tool, its network gate, and the project's sandbox.
   - The first time, it builds two images, which takes several minutes, about a gigabyte of disk, and the network.
   - It writes files under `~/.hive` only (Docker also keeps the images it builds and one network, `hive-inner`,

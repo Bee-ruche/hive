@@ -565,11 +565,14 @@ Everything in this guide holds, with these changes and no others:
      - where `git credential-manager --version` answers (Git for Windows installs it), run
        `git credential-manager github login --browser > /dev/null 2>&1 &`;
      - otherwise, where `gh --version` answers, run
-       `gh auth login --web --clipboard --git-protocol https > /dev/null 2>&1 &`. Its one-time code goes to their
-       clipboard, for them to paste in GitHub's page.
+       `gh auth login --hostname github.com --web --clipboard --git-protocol https > /dev/null 2>&1 &`. Its one-time
+       code goes to their clipboard, for them to paste in GitHub's page. With no terminal, it may open no browser:
+       then step 4 holds.
      - with neither, tell them what to install themselves: Git for Windows on Windows; Git Credential Manager or
        GitHub CLI elsewhere. Install nothing yourself.
-  3. They sign in on GitHub's page. You never see, type, store or ask for a password, a token or a code.
+  3. They sign in on GitHub's page. You never see, type, store or ask for a password, a token or a code, and you
+     run no command that reads one (`gh auth token`, `git credential fill`): you share their shell, so this rests on
+     you, as the launcher's own care rests on it.
   4. If no browser window opens, or (with gh) no code reaches their clipboard, tell them and stop. Otherwise wait until they say it is done, then run
      `local.sh check` again.
 - **Never** run git in `~/.hive/work`, copy a clone made elsewhere into it, or change anything under `~/.hive` but

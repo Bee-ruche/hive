@@ -38,6 +38,12 @@
 # (every pilot's installs packages): that file is one of the project's protected ones.
 #
 # Written for bash 3.2 (macOS's own) and Git Bash: no associative array, no ${x,,}, no mapfile.
+# Nothing of the caller's shell traces or stands in for a program here: no xtrace or verbose (bash -x, SHELLOPTS),
+# which would print the token found_login holds, and no function brought in from the environment under a program's
+# name.
+{ builtin set +x +v; } 2>/dev/null
+builtin unset BASH_XTRACEFD BASH_ENV ENV
+for imported in $(builtin compgen -A function); do builtin unset -f "$imported"; done
 set -u
 
 # (The tests' copy, test_local.sh, replaces these lines and no other: a folder of bare repositories for GitHub, the rule
@@ -76,9 +82,9 @@ die() { printf 'hive: %s\n' "$*" >&2; exit 2; }
 say() { printf '%s\n' "$*"; }
 lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 
-# The PATH, before any program is run (uname, tr, mkdir included): every entry named from the root, and none below
+# The PATH, before any program is run (uname, tr, mkdir included): every entry named from the root, none below
 # ~/.hive, where the clones, the store and the slot lie (nothing kept there, a clone's folder included, is run on this
-# machine). Compared without case on every system (bash's own nocasematch: no program), which refuses more, never less.
+# machine), and none in the session's folder. Compared without case on every system (bash's own nocasematch: no program), which refuses more, never less.
 under_ci() {  # true if $1 is $2 or lies below it, without case
   local r=1
   shopt -s nocasematch
@@ -87,12 +93,16 @@ under_ci() {  # true if $1 is $2 or lies below it, without case
   return $r
 }
 if [ -d "$HOME/.hive" ]; then hive_real=$(cd -P "$HOME/.hive" && pwd -P) || die "$HOME/.hive cannot be read"; else hive_real=""; fi
+here_real=$(pwd -P) || die "this session's folder cannot be read"
 set -f; old_ifs="$IFS"; IFS=: read -r -a early_path <<< "$PATH"; IFS="$old_ifs"; set +f
 for entry in ${early_path[@]+"${early_path[@]}"}; do
   case "$entry" in /*) ;; *) die "the PATH holds a relative entry ('$entry'): this launcher runs git and docker only from places named from the root" ;; esac
-  [ -n "$hive_real" ] && [ -d "$entry" ] || continue
+  [ -d "$entry" ] || continue
   resolved=$(cd -P "$entry" 2>/dev/null && pwd -P) || continue
-  if under_ci "$resolved" "$hive_real"; then die "the PATH holds a folder below $HOME/.hive ($entry): nothing kept there is run on this machine"; fi
+  if [ -n "$hive_real" ] && under_ci "$resolved" "$hive_real"; then die "the PATH holds a folder below $HOME/.hive ($entry): nothing kept there is run on this machine"; fi
+  # Nor in the session's folder, where a project's or an agent's files may lie: a program there named curl, gh or git
+  # would be given the token or run in their place. (The rest of the PATH is this machine's, and trusted.)
+  if under_ci "$resolved" "$here_real"; then die "the PATH holds a folder in this session's folder ($entry): nothing there is run by this launcher. Start the assistant in a folder of its own, out of the PATH"; fi
 done
 
 case "$(uname -s 2>/dev/null)" in
@@ -240,19 +250,26 @@ if [ "$OWNER/$NAME" != "$PROJECT" ] || ! [[ $OWNER =~ $LOGIN_RE ]] || ! [[ $NAME
 fi
 NO_ACCOUNT="this machine's git has no GitHub account it can push with: stop, and tell the user. If they have no GitHub account, they create one at github.com themselves; then they connect it as the worker's guide says (nothing to type in a terminal)"
 AGAIN="the owner connects their GitHub account again, as the worker's guide says (nothing to type in a terminal)"
+# What curl and gh run with: none of the caller's proxies, certificate places or debug logs, through which a token
+# could be seen or its answer changed.
+NET_OWN=(env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy
+  -u CURL_CA_BUNDLE -u CURL_HOME -u SSL_CERT_FILE -u SSL_CERT_DIR -u GH_DEBUG -u DEBUG -u GH_HOST -u GH_ENTERPRISE_TOKEN)
+LOGIN_ASK="" LOGIN_ANSWER=""  # found_login's temporaries, removed whatever happens (and by leave, later)
 found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as (LOGIN_VIA git), else gh's (LOGIN_VIA gh)
   # git's own credential for github.com, as the push signs in, asking nothing: no terminal, no askpass, no window of
   # the credential manager's. Its token stays in this function's variables: never printed, written, or in an argument.
   local askdir said token curl answer code login gh why=""
+  { builtin set +x +v; } 2>/dev/null  # (and again here, whatever ran before: a trace would print the token)
   FOUND_LOGIN="" LOGIN_VIA=""
   command -v "$GIT" >/dev/null 2>&1 || die "git is not on this machine's PATH: install git (Git for Windows on Windows)"
   # (In an empty folder of its own, which git does not climb out of: no repository's settings are read, the session's
   # folder's or any above it, which could name another helper.)
   askdir=$(mktemp -d "${TMPDIR:-/tmp}/hive-ask.XXXXXX") || die "no room for a temporary folder"
+  LOGIN_ASK="$askdir"
   printf 'protocol=https\nhost=github.com\n\n' > "$askdir/ask"
   said=$(cd "$askdir" && GIT_MEMORY_KB="" within 30 "$askdir/ask" env GIT_CEILING_DIRECTORIES="$askdir" GIT_TERMINAL_PROMPT=0 \
     GCM_INTERACTIVE=never SSH_ASKPASS= "$GIT" -c core.askPass= -c credential.interactive=never credential fill 2>/dev/null)
-  rm -rf "$askdir"
+  rm -rf "$askdir"; LOGIN_ASK=""
   token=$(printf '%s\n' "$said" | sed -n 's/^password=//p' | tr -d '\r' | head -n 1)
   said=""
   if [ -n "$token" ] && ! [[ $token =~ ^[A-Za-z0-9_]{20,255}$ ]]; then
@@ -262,26 +279,28 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
   fi
   if [ -n "$token" ]; then
     answer=$(mktemp "${TMPDIR:-/tmp}/hive-user.XXXXXX") || { token=""; die "no room for a temporary file"; }
-    # (The header on curl's standard input, never in its arguments; no ~/.curlrc read; https only, no redirect.)
+    LOGIN_ANSWER="$answer"
+    # (The header on curl's standard input, never in its arguments; no ~/.curlrc read; https only, no redirect; no
+    # proxy and no certificates of the caller's environment, which could see the token: NET_OWN.)
     code=$(printf 'header = "Authorization: token %s"\nheader = "User-Agent: bee-hive-local"\nheader = "Accept: application/vnd.github+json"\nurl = "https://api.github.com/user"\n' "$token" \
-      | "$curl" -q -sS --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$(host_path "$answer")" -w '%{http_code}' --config - 2>/dev/null)
+      | "${NET_OWN[@]}" "$curl" -q -sS --noproxy '*' --proto =https --max-redirs 0 --connect-timeout 10 --max-time 20 --max-filesize 65536 -o "$(host_path "$answer")" -w '%{http_code}' --config - 2>/dev/null)
     token=""
     case "$code" in
       200) login=$(head -c 65536 "$answer" | tr -d '\r\n' | grep -o '"login" *: *"[A-Za-z0-9-]*"' | head -n 1 | sed 's/^.*"\([A-Za-z0-9-]*\)"$/\1/')
-           rm -f "$answer"
+           rm -f "$answer"; LOGIN_ANSWER=""
            [[ $login =~ $LOGIN_RE ]] || die "GitHub's answer about this machine's account holds no login this launcher reads: run the command again; if it fails again, tell the user"
            FOUND_LOGIN="$login" LOGIN_VIA=git
            return 0 ;;
       401|403) why="GitHub refuses the credential this machine's git holds (it may have expired): $AGAIN" ;;
       *) why="GitHub could not be asked which account this machine's git pushes as (the network, or GitHub): run the command again" ;;
     esac
-    rm -f "$answer"
+    rm -f "$answer"; LOGIN_ANSWER=""
   fi
   # No credential of git's that GitHub takes: gh's account on github.com, if gh is there and signed in (its token is
   # gh's own, never seen here); the push then signs in through gh, for that push alone (PUSH_SIGN_IN), with no change
   # to git's settings.
   if gh=$(command -v gh 2>/dev/null) && [ "${gh#/}" != "$gh" ] && case "$gh" in *"'"*) false ;; *) true ;; esac \
-      && login=$(GIT_MEMORY_KB="" within 30 /dev/null "$gh" api --hostname github.com user --jq .login 2>/dev/null) && [[ $login =~ $LOGIN_RE ]]; then
+      && login=$(GIT_MEMORY_KB="" within 30 /dev/null "${NET_OWN[@]}" "$gh" api --hostname github.com user --jq .login 2>/dev/null) && [[ $login =~ $LOGIN_RE ]]; then
     FOUND_LOGIN="$login" LOGIN_VIA=gh
     PUSH_SIGN_IN=(-c credential.helper= -c "credential.helper=!'$gh' auth git-credential")
     return 0
@@ -290,6 +309,7 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
 }
 
 PUSH_SIGN_IN=()
+trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
 if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
   # The login, before anything of the project's: read from what this machine's git pushes with, never typed.
   [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
@@ -332,6 +352,7 @@ leave() {
   [ -z "$SAID" ] || rm -f "$SAID"
   [ -z "$LOCKED" ] || rm -rf "$LOCK"
   rm -f ${BUILD_FILE:+"$BUILD_FILE"} ${BUILD_OUT:+"$BUILD_OUT"} ${BUILD_KEPT:+"$BUILD_KEPT"}
+  rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}
 }
 trap leave EXIT
 
