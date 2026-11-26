@@ -2981,8 +2981,10 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual([step["with"].get("persist-credentials") for step in self.jobs["build"]["steps"] if step.get("uses") == self.RUN.CHECKOUT],
                          [False, False], "no checkout keeps the token")
         self.assertNotIn("contents: write", self.uncommented)
-        for word in ("create-github-app-token", "private-key", "extraheader", "TOKEN:", "token:"):
-            self.assertNotIn(word, self.uncommented.replace("GH_TOKEN:", ""), word)
+        for word in ("create-github-app-token", "private-key", "extraheader", "git config", "credential.helper"):
+            self.assertNotIn(word, self.uncommented, word)
+        self.assertEqual([key for job in self.jobs.values() for step in job["steps"] for key in {**step.get("env", {}), **step.get("with", {})}
+                          if "token" in key.lower()], ["GH_TOKEN"], "no step is given a token but the protocol's check")
 
     def test_the_hives_code_runs_at_this_workflows_own_commit_and_reads_the_state_and_two_files_as_data(self):
         """The one program build runs is the hive's page.py, from the tree the protocol's check checked out; the other
@@ -3147,7 +3149,7 @@ class TestThePageWorkflow(unittest.TestCase):
         actions a limited list must allow, and that the deploy needs no branch."""
         hosting = (self.ROOT / "docs/hosting.md").read_text(encoding="utf-8")
         for words in (".github/workflows/page.yml", "examples/page/.github/workflows/hive.yml", "GitHub Actions", "`github-pages`",
-                      "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "no branch"):
+                      "`actions/deploy-pages`", "`pages: write`", "`id-token: write`", "No branch is written"):
             self.assertIn(words, hosting)
         self.assertNotIn("The page (`tools/hive/page.py`) is not part of the run.", hosting)
 
