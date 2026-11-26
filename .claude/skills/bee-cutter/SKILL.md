@@ -283,13 +283,15 @@ Everything above holds, except "Publish", which this section replaces. The proto
   - `<LOGIN>`, your account's GitHub login;
   - `<FORK>`, the name of your fork's repository (the project's own name unless you renamed your fork).
 
-  Take these from the prompt and from nothing else. If the login is missing, stop and say so. Before you write
-  either into any command, read it yourself, character by character:
-  - the login: letters, digits and `-` only, 39 at most;
-  - the fork's name: letters, digits, `.`, `_` and `-` only, not dots alone, not ending in `.git`.
+  Take these from the prompt and from nothing else. If the login is missing, stop and say so. Before you type
+  either anywhere, the first line of the block below included, check it yourself against its pattern, character by
+  character:
+  - the login: `^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$` (letters, digits and inner `-`, 39 at most);
+  - the fork's name: `^[A-Za-z0-9._-]{1,100}$`, and neither dots alone nor ending in `.git`.
 
-  Anything else, a space, a quote, a second line: stop, and write it into nothing. The first line of the block below
-  checks the same again. The account has forked
+  On a mismatch (a space, a quote, a second line, any other character), stop, and type it into nothing. The
+  block's first line checks the same again, but it runs only after the values are written into it: a quote in
+  them would break out of it first. So your own check comes first. The account has forked
   the project already (default branch only), and this machine's git pushes to that fork with the account's own
   credentials: neither is yours to set up.
 - **Two clones:**
@@ -329,21 +331,24 @@ marker below. Push it straight to your fork's branch `hive/cut`:
 git checkout --quiet --detach <commit>
 [ ! -L hive ] && [ ! -L hive/tasks.jsonl ] && [ ! -L hive/backlog.jsonl ] || { echo "a link where the two files go: stop, push nothing" >&2; exit 1; }
 cp /tmp/proposal.jsonl hive/tasks.jsonl
-cp /tmp/backlog.jsonl hive/backlog.jsonl   # only if you changed the backlog
+cp /tmp/backlog.jsonl hive/backlog.jsonl   # delete this line if you did not change the backlog
 git add hive/tasks.jsonl
-git add hive/backlog.jsonl                 # only if you changed the backlog
+git add hive/backlog.jsonl                 # delete this line if you did not change the backlog
 [ -z "$(git diff --cached --name-only -- . ':!hive/tasks.jsonl' ':!hive/backlog.jsonl')" ] || { echo "a file beyond the two: stop, push nothing" >&2; exit 1; }
 git -c user.name=<LOGIN> -c user.email=<LOGIN>@users.noreply.github.com commit --quiet --allow-empty -F /tmp/marker.txt
 [ "$(git rev-list --parents --max-count=1 HEAD | cut -d' ' -f2-)" = "<commit>" ] || { echo "not one commit on <commit>: stop, push nothing" >&2; exit 1; }
 [ "$(git show HEAD:hive/tasks.jsonl | sha256sum | cut -d' ' -f1)" = "<sha256>" ] || { echo "not the tasks file CHECKED named: stop, push nothing" >&2; exit 1; }
-[ "$(git show HEAD:hive/backlog.jsonl | sha256sum | cut -d' ' -f1)" = "<backlog sha256>" ] || { echo "not the backlog CHECKED named: stop" >&2; exit 1; }  # only if you changed the backlog
+[ "$(git show HEAD:hive/backlog.jsonl | sha256sum | cut -d' ' -f1)" = "<backlog sha256>" ] || { echo "not the backlog CHECKED named: stop" >&2; exit 1; }  # delete this line if you did not change the backlog
 rm -rf ~/.hive/cutter-state && git clone --quiet --depth 1 --branch hive-state "https://github.com/<PROJECT>" ~/.hive/cutter-state || { echo "the state could not be taken again: stop, push nothing" >&2; exit 1; }
-hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl > /tmp/second-check.txt || { echo "the gate refuses it now: stop, push nothing" >&2; exit 1; }  # (and --backlog)
+hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl > /tmp/second-check.txt || { echo "the gate refuses it now: stop, push nothing" >&2; exit 1; }  # delete this line if you changed the backlog
+hive cut-check --project <PROJECT> --repo . --state ~/.hive/cutter-state --proposal /tmp/proposal.jsonl --backlog /tmp/backlog.jsonl > /tmp/second-check.txt || { echo "the gate refuses it now: stop, push nothing" >&2; exit 1; }  # delete this line if you did not change the backlog
 grep -Eq '^CHECKED <sha256> against <commit>($|;)' /tmp/second-check.txt || { echo "not the CHECKED line of the first cut-check: stop, push nothing" >&2; exit 1; }
 git push --quiet --force "https://github.com/<LOGIN>/<FORK>" HEAD:refs/heads/hive/cut
 ```
 
-`<sha256>` (and `<backlog sha256>`) are the digests `CHECKED` printed. Run the block as one script, in bash: each
+`<sha256>` (and `<backlog sha256>`) are the digests `CHECKED` printed. Before you run it, delete each line its
+comment tells you to, for the backlog: the guard on `<backlog sha256>` fails if it is left with nothing to compare,
+and the two `cut-check` lines are one or the other. Then run the block as one script, in bash: each
 `… || { …; exit 1; }` stops it there, with nothing pushed. The second `cut-check`, on the state taken again, must
 print the same `CHECKED` line, as in "Publish".
 
@@ -398,9 +403,10 @@ pushes straight to the published branch and opens no pull request. On such a pro
 - do not run it unless the architect's prompt says to;
 - report instead that the trusted cuts wait for the architect, who runs `hive publish-cut` by hand after reading
   the cut that stands;
-- the architect finds that cut in the ledger, as the latest line of type `duty-end` with `"outcome": "cut"`: its
-  `proposal` commit lies on the branch `hive/cut` of the account's fork. Reading it is the architect's, not yours
-  (rule 2);
+- the architect finds that cut in the ledger, whose lines are compact JSON (no spaces):
+  `grep -F '"type":"duty-end"' ~/.hive/cutter-state/ledger.jsonl | grep -F '"outcome":"cut"' | tail -n 1`, the
+  latest cut. Its `proposal` commit lies on the branch `hive/cut` of the fork its `repo_id` names, the account's own.
+  Reading it is the architect's, not yours (rule 2);
 - no schedule runs the publisher on such a project ("How often" below does not apply).
 
 Otherwise, at the start of each of your runs, once the lines of "The run" that take the protocol and the state have

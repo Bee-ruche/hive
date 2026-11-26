@@ -18703,7 +18703,7 @@ class TestTheCuttersGuideProposal(Base):
         (tmp / "proposal.jsonl").write_text(text)
         digest = hashlib.sha256(text.encode()).hexdigest()
         fork = sh("git", "remote", "get-url", "origin", cwd=work).stdout.strip()
-        commands = [line.split("  #")[0].rstrip() for line in block.splitlines() if "only if you changed the backlog" not in line]
+        commands = [line.split("  #")[0].rstrip() for line in block.splitlines() if "delete this line if you did not change the backlog" not in line]
         kept = []
         for line in commands:
             if line.startswith("hive cut-check "):
