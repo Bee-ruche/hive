@@ -17220,25 +17220,41 @@ class TestTheMeasure(Base):
 
     def test_the_kinds_named_as_mounting_are_those_whose_judges_code_mounts(self):
         """JUDGE_MOUNTS names exactly the kinds whose judge's module calls container.mount_point, directly or through a
-        function or class of the judges' code that does (read from their source, test files aside), so that a judge that
-        comes to mount, or stops, is seen here."""
+        function or class of the judges' code that does (read from their source, test files aside; each call taken to
+        the module that defines or imports what it names, since two modules may define the same name), so that a judge
+        that comes to mount, or stops, is seen here."""
         trees = {path.stem: ast.parse(path.read_text(encoding="utf-8")) for path in (REGISTRY / "tools/judge").glob("*.py")
                  if not path.name.startswith("test_")}
+        self.assertTrue(set(hive.JUDGE_MODULES.values()) <= set(trees), sorted(trees))
 
-        def called(node):
-            return {call.func.id if isinstance(call.func, ast.Name) else call.func.attr for call in ast.walk(node)
-                    if isinstance(call, ast.Call) and isinstance(call.func, (ast.Name, ast.Attribute))}
+        def calls(module, node):
+            """(module, name) of each call under `node` that names a top-level function or class of the judges' code."""
+            tree, names, modules = trees[module], {}, {}
+            for statement in tree.body:
+                if isinstance(statement, (ast.FunctionDef, ast.ClassDef)):
+                    names[statement.name] = (module, statement.name)
+                elif isinstance(statement, ast.ImportFrom) and statement.module in trees:
+                    names.update({alias.asname or alias.name: (statement.module, alias.name) for alias in statement.names})
+                elif isinstance(statement, ast.Import):
+                    modules.update({alias.asname or alias.name: alias.name for alias in statement.names if alias.name in trees})
+            found = set()
+            for call in ast.walk(node):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in names:
+                    found.add(names[call.func.id])
+                elif (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                      and call.func.value.id in modules):
+                    found.add((modules[call.func.value.id], call.func.attr))
+            return found
 
-        mounting = {"mount_point"}
+        mounting = {("container", "mount_point")}
         while True:
-            more = {d.name for tree in trees.values() for d in tree.body
-                    if isinstance(d, (ast.FunctionDef, ast.ClassDef)) and d.name not in mounting and called(d) & mounting}
+            more = {(module, d.name) for module, tree in trees.items() for d in tree.body
+                    if isinstance(d, (ast.FunctionDef, ast.ClassDef)) and (module, d.name) not in mounting and calls(module, d) & mounting}
             if not more:
                 break
             mounting |= more
-        self.assertTrue({"Execution", "bounded_folder"} <= mounting, sorted(mounting))
-        self.assertTrue(set(hive.JUDGE_MODULES.values()) <= set(trees), sorted(trees))
-        self.assertEqual({kind for kind, name in hive.JUDGE_MODULES.items() if called(trees[name]) & mounting}, set(hive.JUDGE_MOUNTS),
+        self.assertTrue({("container", "Execution"), ("reference", "bounded_folder")} <= mounting, sorted(mounting))
+        self.assertEqual({kind for kind, module in hive.JUDGE_MODULES.items() if calls(module, trees[module]) & mounting}, set(hive.JUDGE_MOUNTS),
                          sorted(mounting))
 
     def test_the_time_of_a_judgement_holds_with_the_manifests_bounds_as_they_are(self):
