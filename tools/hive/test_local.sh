@@ -360,7 +360,9 @@ check "next: the clone, the protocol read-only, the state read-only, the needs' 
    && grep -qx "type=bind,source=$HOME/.hive/needs/bee-ruche/toy,target=/hive/home/.hive/needs/bee-ruche/toy" "$STUB_DIR/mounts.tool" \
    && [ "$(wc -l < "$STUB_DIR/mounts.tool")" -eq 4 ]'
 check "next: the tool runs as the clone's owner, on the network with no route out, with no credential" \
-  grep -q "^run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=tool --user 1000:1000 .* -e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e https_proxy=http://hive-egress-[0-9]*-[0-9]*:3128 -w /work " "$STUB_DIR/calls"
+  grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network hive-inner --label hive.role=tool --user 1000:1000 .* -e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e https_proxy=http://hive-egress-[0-9]*-[0-9]*:3128 -w /work " "$STUB_DIR/calls"
+check "next: every container the run started runs under an init" eval \
+  '[ "$(grep -c "^run " "$STUB_DIR/calls")" -ge 4 ] && ! grep "^run " "$STUB_DIR/calls" | grep -qv "^run \(--rm\|-d\) --init "'
 check "next: the gate runs under an init, read-only, unprivileged, its processes bounded, on the default bridge" \
   grep -q "^run -d --init --name hive-egress-[0-9]*-[0-9]* --label hive.role=egress --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --cpus 1 --memory 256m --user 65534:65534 --network bridge " "$STUB_DIR/calls"
 STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d
@@ -574,7 +576,7 @@ STUB_OWNER=0:0 STUB_SANDBOX_MAKES=.claude STUB_SANDBOX_CODE=4 launch "${SANDBOX[
 check "sandbox: the command's exit code kept, a guarded name it made set aside" eval \
   '[ "$CODE" -eq 4 ] && [ ! -e "$CLONE/.claude" ] && ls "$CLONE" -a | grep -q "^\.claude\.created-in-sandbox\." && printf "%s\n" "$OUT" | grep -q "^LOCAL set-aside .claude .claude.created-in-sandbox."'
 check "sandbox: no network, never root, the clone, its guarded names read-only, .git reduced" eval \
-  'grep -q "^run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network none --label hive.role=sandbox --user 65534:65534 " "$STUB_DIR/calls" \
+  'grep -q "^run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 2g --network none --label hive.role=sandbox --user 65534:65534 " "$STUB_DIR/calls" \
    && grep -qx "type=bind,source=$CLONE,target=/work" "$STUB_DIR/mounts.sandbox" && grep -qx "type=bind,source=$CLONE/bee,target=/work/bee,readonly" "$STUB_DIR/mounts.sandbox" \
    && grep -qx "type=bind,source=$CLONE/.github,target=/work/.github,readonly" "$STUB_DIR/mounts.sandbox" && grep -qx "type=bind,source=$CLONE/CLAUDE.md,target=/work/CLAUDE.md,readonly" "$STUB_DIR/mounts.sandbox" \
    && grep -qx "type=tmpfs,target=/work/.git" "$STUB_DIR/mounts.sandbox" && grep -qx "type=bind,source=$CLONE/.git/HEAD,target=/work/.git/HEAD,readonly" "$STUB_DIR/mounts.sandbox" \
@@ -818,7 +820,16 @@ while IFS= read -r line; do
   case "$words" in *"<"*) printf '%s (a placeholder this test knows no value for)\n' "$line" >> "$T/doc-unread"; continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
-  if grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|local.sh login takes one word\|runs the command given after --" "$T/doc-err"; then
+  # The one line each must stop on once its words are read: no login recorded, or, for login, no terminal. refresh
+  # takes no login: it must stop on none of the launcher's readings of a command line.
+  case "$words" in
+    login\ *) want="hive: local.sh login is the user's own step" ;;
+    refresh\ *) want="" ;;
+    *) want="hive: no login is recorded on this machine" ;;
+  esac
+  if [ -n "$want" ]; then
+    [ "$(grep -c . "$T/doc-err")" -eq 1 ] && grep -q "^$want" "$T/doc-err" || printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
+  elif grep -q "is not an option of local.sh\|an option was expected\|local.sh hive takes one of\|local.sh takes login\|needs a value\|given twice\|give each option and its value\|^hive: --[a-z]*:\|local.sh login takes one word\|runs the command given after --" "$T/doc-err"; then
     printf '%s: %s\n' "$line" "$(cat "$T/doc-err")" >> "$T/doc-unread"
   fi
 done < "$T/doc-lines"
@@ -826,6 +837,9 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
   for word in check clone refresh sandbox login; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  # No PowerShell command line in the volunteer's docs: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a
+  # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
+  ! grep -n 'local\.ps1"\|& "\$HOME\|Select-String\|\$LASTEXITCODE' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
 check "the docs: every launcher command they give is one the launcher reads, and they give check, clone, refresh, sandbox and login" docs_read
 

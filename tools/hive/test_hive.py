@@ -18472,9 +18472,9 @@ class TestTheCuttersGuideProposal(Base):
         (tmp / "proposal.jsonl").write_text(text)
         digest = hashlib.sha256(text.encode()).hexdigest()
         fork = sh("git", "remote", "get-url", "origin", cwd=work).stdout.strip()
-        commands = [line.split("  #")[0].rstrip() for line in block.splitlines()]
-        kept = [line for line in commands if line and "backlog" not in line and not line.startswith(("hive ", "rm -rf ~/.hive"))]
-        script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published)
+        commands = [line.split("  #")[0].rstrip() for line in block.splitlines() if "only if you changed the backlog" not in line]
+        kept = [line for line in commands if line and not line.startswith(("hive ", "rm -rf ~/.hive"))]
+        script = "\n".join(kept).replace("/tmp/", f"{tmp}/").replace("<commit>", published).replace("<sha256>", digest)
         self.assertEqual(script.count('"https://github.com/<LOGIN>/<FORK>"'), 1, "one push, to the account's own fork")
         script = script.replace('"https://github.com/<LOGIN>/<FORK>"', shlex.quote(fork)).replace("<LOGIN>", "carol")
         marker = "\n".join(line for line in marker.splitlines() if not line.startswith("Hive-Backlog:"))
@@ -18482,9 +18482,11 @@ class TestTheCuttersGuideProposal(Base):
             .replace("<the tasks file's sha256, as CHECKED printed it>", digest)
         self.assertNotIn("<", script + marker, "a placeholder this test knows no value for")
         (tmp / "marker.txt").write_text(marker + "\n")
-        ran = sh("bash", "-e", "-c", script, cwd=work)
-        self.assertIn(digest, ran.stdout, "the guide's own sha256sum line shows the digest the marker names")
-        self.assertIn(f"\n{published}\n", f"\n{ran.stdout}".replace(" ", "\n"), "and its rev-list line the published commit as the one parent")
+        checks = [line for line in kept if line.startswith("[ ") and line.endswith("exit 1; }")]
+        self.assertEqual([("diff --cached" in c, "rev-list --parents" in c, "sha256sum" in c) for c in checks],
+                         [(True, False, False), (False, True, False), (False, False, True)],
+                         "three checks that stop the block: no other file, one commit on the checked one, the tasks file's digest")
+        sh("bash", "-e", "-c", script, cwd=work)
         return sh("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
 
     def test_the_guides_proposal_of_a_cut_ends_the_duty_as_the_cut_that_stands(self):

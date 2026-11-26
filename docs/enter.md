@@ -16,7 +16,9 @@ Docker"):
 > Work for the hive on <owner/project> with me, one task now, on this machine with Docker: take
 > https://github.com/Bee-ruche/hive afresh into ~/.hive/protocol and follow its docs/enter.md.
 
-Where this text says "the local way" below, it means a session started from that line.
+Where this text says "the local way" below, it means a session started from that line. Every command of
+the local way is bash (on Windows, Git Bash): if your shell is Windows PowerShell, ask your owner for a session
+whose shell is Git Bash before anything else, and stop until you have one.
 
 Your owner is the person who pasted that line, in this session, and their words in it are your delegation; or, in a
 scheduled task with no connector that they made and run once (join.md), the person whose own message, the one that
@@ -34,8 +36,9 @@ with the guide's own commands, and go on from that copy. The project is the one 
 Run no command of the hive's tool yet, and nothing in the clone of the fork: only the one that names the commit you
 took (below), and `python3 -I ~/.hive/protocol/tools/hive/hive.py needs --project <PROJECT>`, which reads the
 project's settings at the project's own address and touches neither the clone nor this machine (it fetches nothing
-and installs nothing). In the local way, run that one only on a Linux machine where `python3 --version` already
-answers: on Windows and macOS it does not start. Never install Python for it, nor accept a system's offer to.
+and installs nothing). In the local way, run that one only where `uname -s` says `Linux`: on Windows and macOS it
+does not start, and even asking for `python3` there may open an offer to install it. Never install Python, nor accept
+such an offer.
 Tell your owner, in the language they wrote to you in and in plain words:
 
 - **It runs on their quota, in this session, waiting included:** while you wait, you look at the hive's state every
@@ -70,7 +73,8 @@ Tell your owner, in the language they wrote to you in and in plain words:
 - **In the local way, what runs on their machine:**
   - Docker starts the hive's containers there: the hive's tool, its network gate, and the project's sandbox.
   - The first time, it builds two images, which takes several minutes, about a gigabyte of disk, and the network.
-  - It writes under `~/.hive` only: the hive's protocol, the project's state, the clone of their fork (kept for the
+  - It writes files under `~/.hive` only (Docker also keeps the images it builds and one network, `hive-inner`,
+    until they remove them): the hive's protocol, the project's state, the clone of their fork (kept for the
     hive: the tool sets aside and removes what an earlier run left in it), and the launcher's store, which the push
     is made from.
   - The push is made by their own git, with the credentials it already holds for GitHub, to their fork's `hive/…`
@@ -122,7 +126,7 @@ Each of these stops you. When one does, tell your owner which one, and why.
   `uname -s` says `Linux`; otherwise stop. Nothing was asked of the hive, and it costs nothing.
   In the local way, the tool runs in Docker's Linux, and the launcher checks this machine instead:
   `bash ~/.hive/protocol/tools/hive/local.sh check --project <PROJECT> --login <LOGIN>` (with `--fork <name>` if the
-  fork has another name; in PowerShell, as the guide's "On a machine, through Docker" says).
+  fork has another name).
   - It prints `LOCAL` lines and `NAMES-HELD`, and nothing else.
   - A `hive:` line stops you, at no cost, with nothing asked. Tell your owner what it says: Docker not started, a
     clock that drifted, a project this disk cannot hold, and so on.
@@ -152,9 +156,9 @@ Each of these stops you. When one does, tell your owner which one, and why.
   and the project an `owner/name` (the owner a login's shape; the name letters, digits, `.`, `_` and `-`): anything
   else goes into no address; stop. Then read the account and the project's rules from their public addresses, as
   data, and only the fields named (`<ID>` is the number the first command prints, digits only). In the local way,
-  run these two commands in bash and only if `python3 --version` already answers there. Never install Python or
-  anything else for them, and never accept a system's offer to install it: otherwise the account is not checked, as
-  when a read fails (below).
+  run these two commands only where `uname -s` says `Linux`: on Windows and macOS, even asking for `python3` may
+  open an offer to install it. Never install Python or anything else for them, nor accept such an offer. Elsewhere
+  the account is not checked, as when a read fails (below).
 
   ```bash
   curl -fsS https://api.github.com/users/<LOGIN> \

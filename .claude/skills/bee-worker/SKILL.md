@@ -488,19 +488,14 @@ Everything in this guide holds, with these changes and no others:
 
   Run each one from the session's own folder, never from the clone. The launcher refuses to run from the clone,
   inside it or above it.
-- **In PowerShell** (an assistant whose shell is Windows PowerShell), run the launcher's PowerShell shim instead,
-  with the same words: `& "$HOME\.hive\protocol\tools\hive\local.ps1" hive next …`.
-  - Write the `--` of `sandbox` with its quotes, `'--'`: PowerShell drops a bare `--` before the script sees it.
-  - If PowerShell refuses to run scripts on this machine, tell the user and use bash instead. Never change the
-    machine's settings to run it.
-  - The guide's other commands are bash. Use these PowerShell forms in their place, and no others:
-    - the protocol taken afresh (the user cloned it once):
-      `git -C "$HOME\.hive\protocol" fetch --depth 1 origin main; if ($LASTEXITCODE -eq 0) { git -C "$HOME\.hive\protocol" reset --hard FETCH_HEAD }; if ($LASTEXITCODE -eq 0) { git -C "$HOME\.hive\protocol" clean -ffdx --quiet }`;
-    - the verdict:
-      `Select-String -SimpleMatch -Path "$HOME\.hive\state\<PROJECT>\ledger.jsonl" -Pattern '"sha":"<COMMIT>"' | Where-Object { $_.Line.Contains('"type":"verdict"') } | ForEach-Object { "$($_.LineNumber): $($_.Line)" }`,
-      which prints the line's number before it.
-
-    Anything else in bash (a `[ -d … ]`, a `~` given to git): stop and ask the user for a Git Bash session.
+- **A bash, always.** Every command of this way runs in bash: on Windows, Git Bash. An assistant whose shell is
+  Windows PowerShell stops and asks the user for a session whose shell is Git Bash, before the first command.
+  - Never put a project's command, or any text of the project, into a PowerShell command line. Windows PowerShell
+    also takes the curly quotes `‘ ’ ‚ ‛` as single quotes, so a command holding one could end the quoting, and what
+    follows would run on this machine.
+  - The launcher's PowerShell shim (`local.ps1`) is not used by this guide.
+- **The protocol** is the copy the user cloned once at `~/.hive/protocol` (`docs/join.md`). If it is not there,
+  stop and tell the user. "The run" takes it afresh as written; its clone line is the user's, not yours.
 - **The clone** is `~/.hive/work/<LOGIN>/<the fork's name>`. The launcher makes it once
   (`bash ~/.hive/protocol/tools/hive/local.sh clone --project <PROJECT> --login <LOGIN>`, with `--fork <name>` if
   the fork has another name). This machine's git never checks it out.
@@ -515,15 +510,14 @@ Everything in this guide holds, with these changes and no others:
   `bash ~/.hive/protocol/tools/hive/local.sh sandbox --project <PROJECT> --login <LOGIN> -- sh -c '<command>'`.
   - The command is the project's data. No part of it is ever read by your own shell: a `&&`, a `|` or a `;` outside
     the quotes would run what follows on this machine.
-  - Inside the single quotes, write each `'` of the command as `'\''` (bash), or as `''` (PowerShell, where the
-    whole is `… '--' sh -c '<command>'`).
+  - Inside the single quotes, write each `'` of the command as `'\''`.
   - The same holds for any command of the project you run in the sandbox.
   - The launcher builds the project's sandbox image from the commit `start` proved (the first time takes minutes).
     It runs the command there with no network, as an unprivileged user, with the project's guarded files read-only.
   - Run nothing of the project in any other way.
   - A `LOCAL set-aside <name> <aside>` line says the command made a guarded file or folder, which the launcher moved
     aside: tell the user.
-- **The pushes.** `ready`, `submit`, `release` and `duty` hand their push over to the launcher. The launcher prints
+- **The pushes.** `ready`, `submit` and `release` hand their push over to the launcher. The launcher prints
   `ASKED`, `PUSHED`, `RELEASED` or `WITHDRAWN` once the push has landed on the fork, in the tool's place. A `hive:`
   line from the launcher means nothing reached the fork: stop, as on any failed push. The first push may open the
   user's git sign-in window; signing in is the user's to do.

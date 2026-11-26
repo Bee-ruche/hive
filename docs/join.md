@@ -116,8 +116,7 @@ The local bee is the same one task now, on Windows, macOS or Linux, with the hiv
 
 The hive cannot tell its commits from a cloud session's.
 
-**Where it stands.** The launcher (`tools/hive/local.sh`, and `local.ps1` for an assistant whose shell is
-PowerShell) is tested against a stand-in for Docker. It has not yet run end to end on a real Windows, macOS or Linux
+**Where it stands.** The launcher (`tools/hive/local.sh`) is tested against a stand-in for Docker. It has not yet run end to end on a real Windows, macOS or Linux
 machine. You would be among the first. Two limits today:
 - **A project that names needs can rarely be worked this way yet.** If the project names programs, files or documents a
   worker's machine needs ("What the project needs", below), the tool, in its container, cannot see what the project's
@@ -147,7 +146,8 @@ machine. You would be among the first. Two limits today:
    - It runs only in a real terminal: an assistant cannot run it, and must not.
    - It never replaces a login already recorded. To change it, remove `~/.hive/login` yourself.
 4. **Make an empty folder `hive-desk` in your home folder**, and open your assistant there, with no connector (mail,
-   calendar, documents, chat). Never open it in `~/.hive` or in your home folder itself: your fork's clone is kept
+   calendar, documents, chat). Its shell must be bash: on Windows, Git Bash (an assistant whose
+   shell is PowerShell stops and asks you for one). Never open it in `~/.hive` or in your home folder itself: your fork's clone is kept
    below them, and its agent files would load before your line.
 
 Then paste this line, with the project's repository in place of `<owner/project>`:

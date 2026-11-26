@@ -376,7 +376,9 @@ if ! "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1; then
     | "$DOCKER" build --quiet -t "$IMAGE" - >/dev/null 2>&1 || die "Docker could not build the tool's image: check that Docker has network, then run the command again"
 fi
 
-LIMITS=(--rm --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus "$CPUS" --memory "$MEMORY")
+# Every container runs under an init (--init): what a project's command or the tool leaves behind is reaped as it
+# ends, and never fills the processes' bound (--pids-limit) of a long check.
+LIMITS=(--rm --init --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --cpus "$CPUS" --memory "$MEMORY")
 # The protocol's tools alone (not its .git, whose settings may hold an address with a token), read-only.
 PROTOCOL_MOUNT=(--mount "type=bind,source=$(host_path "$PROTOCOL_TOOLS"),target=/hive/protocol/tools/hive,readonly")
 

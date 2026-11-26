@@ -23,9 +23,9 @@ publishes the cut that passes the gate ([docs/protocol.md](docs/protocol.md), "T
   own token and no secret ([docs/hosting.md](docs/hosting.md)).
 - `tools/hive/`: the hive's tool (`hive.py`: the steps of a run and the volunteer's commands), the project's page
   (`page.py`), how a job of a run takes an earlier job's files (`artifact.py`), and their tests; and the local bee:
-  the volunteer's worker on Windows, macOS or Linux through Docker (`local.sh`, its PowerShell shim `local.ps1`, the
-  image's `Dockerfile` and the network gate `egress.py`; [docs/join.md](docs/join.md), "On a machine of yours, through
-  Docker").
+  the volunteer's worker on Windows, macOS or Linux through Docker (`local.sh`; a PowerShell shim, `local.ps1`, not
+  yet used by the guides; the image's `Dockerfile`; the network gate `egress.py`; [docs/join.md](docs/join.md), "On a
+  machine of yours, through Docker").
 - `tools/judge/`: the judges the hive calls, the common judge and the reference judge, with their containers, their
   toy projects and their tests.
 - `hive/settings.json`: every setting of a project's file, described, with its bounds and recommended values.
