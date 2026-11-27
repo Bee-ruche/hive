@@ -17,8 +17,9 @@ Docker"):
 > https://github.com/Bee-ruche/hive afresh into ~/.hive/protocol and follow its docs/enter.md.
 
 Where this text says "the local way" below, it means a session started from that line. Every command of
-the local way is bash (on Windows, Git Bash): if your shell is Windows PowerShell, ask your owner for a session
-whose shell is Git Bash before anything else, and stop until you have one.
+the local way is bash (on Windows, the bash of Git for Windows). If your shell is Windows PowerShell, run each one
+through that bash yourself, as the worker's guide says ("On a machine, through Docker", « A bash, always »), and ask your owner
+nothing: the launcher's own words alone in a PowerShell line, never a project's text.
 
 Your owner is the person who pasted that line, in this session, and their words in it are your delegation; or, in a
 scheduled task with no connector that they made and run once (join.md), the person whose own message, the one that

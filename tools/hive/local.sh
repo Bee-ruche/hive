@@ -195,7 +195,7 @@ esac
 case "$COMMAND:$SUB" in
   check:|clone:) KNOWN="project login fork" ;;
   refresh:|needs:) KNOWN="project" ;;
-  sandbox:) KNOWN="project login fork" ;;
+  sandbox:) KNOWN="project login fork command-file" ;;
   hive:setup) KNOWN="project login fork" ;;
   hive:next) KNOWN="project login fork needs-accepted despite-needs!" ;;
   hive:start) KNOWN="project login fork task deal needs-accepted despite-needs!" ;;
@@ -205,7 +205,7 @@ case "$COMMAND:$SUB" in
   hive:duty) KNOWN="project login fork role release withdraw!" ;;
 esac
 
-PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED="" SIGNALLED=""
+PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED="" SIGNALLED="" COMMAND_FILE=""
 PASS=()       # the tool's options, as given
 SANDBOXED=()  # the sandbox's command, after --
 while [ $# -gt 0 ]; do
@@ -237,6 +237,7 @@ while [ $# -gt 0 ]; do
     project) [ -z "$PROJECT" ] || die "--project given twice"; PROJECT="$value" ;;
     login) [ -z "$LOGIN" ] || die "--login given twice"; LOGIN="$value" ;;
     fork) [ -z "$FORK" ] || die "--fork given twice"; FORK="$value" ;;
+    command-file) [ -z "$COMMAND_FILE" ] || die "--command-file given twice"; COMMAND_FILE="$value" ;;
     *)
       [ "$name" = task ] && TASK="$value"
       [ "$name" = release ] && DUTY_RELEASE="$value"
@@ -329,7 +330,24 @@ if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
   if ! [[ $FORK =~ $NAME_RE ]] || [ "$FORK" = . ] || [ "$FORK" = .. ]; then die "--fork: the name of your fork's repository"; fi
   [ "$(lower "$LOGIN/$FORK")" != "$(lower "$PROJECT")" ] || die "the fork named is the project's own repository: the worker pushes to their own fork only"
 fi
-if [ "$COMMAND" = sandbox ] && [ ${#SANDBOXED[@]} -eq 0 ]; then die "local.sh sandbox runs the command given after --"; fi
+# The sandbox's command from a file (--command-file): for an assistant whose shell is PowerShell, which writes the CHECK
+# line's command into a file with a single-quoted here-string and never into a command line. The file holds that one
+# line as the CHECK line gives it, « bee/sandbox/sans-docker.sh <command> »: its fixed beginning is no here-string's
+# end, whatever the command holds. This bash reads it and gives the command to the sandbox's sh as one word: no shell
+# of this machine parses it. (A BOM, a line's end and carriage returns, which PowerShell may write, are dropped.)
+if [ "$COMMAND" = sandbox ] && [ -n "$COMMAND_FILE" ]; then
+  [ ${#SANDBOXED[@]} -eq 0 ] || die "local.sh sandbox runs either the command given after -- or the one in --command-file, not both"
+  [ -f "$COMMAND_FILE" ] && [ ! -L "$COMMAND_FILE" ] || die "--command-file: a file of the session's (not a link), which holds the CHECK line's command"
+  [ "$(wc -c < "$COMMAND_FILE" | tr -d ' ')" -le 8192 ] || die "--command-file: more than 8192 bytes, which no CHECK line holds"
+  sandboxed=$(LC_ALL=C tr -d '\r' < "$COMMAND_FILE")
+  sandboxed="${sandboxed#$'\xef\xbb\xbf'}"
+  case "$sandboxed" in *$'\n'*) die "--command-file: more than one line (the CHECK line's command is one line)" ;; esac
+  case "$sandboxed" in
+    "bee/sandbox/sans-docker.sh "?*) SANDBOXED=(sh -c "${sandboxed#bee/sandbox/sans-docker.sh }") ;;
+    *) die "--command-file: its line begins « bee/sandbox/sans-docker.sh », as the CHECK line gives it" ;;
+  esac
+fi
+if [ "$COMMAND" = sandbox ] && [ ${#SANDBOXED[@]} -eq 0 ]; then die "local.sh sandbox runs the command given after -- (or in --command-file)"; fi
 if [ -n "$TASK" ] && ! [[ $TASK =~ $TASK_RE ]]; then die "--task: the task's id, as the hive's lines give it"; fi
 if [ -n "$NEEDS_ACCEPTED" ] && ! [[ $NEEDS_ACCEPTED =~ ^[0-9a-f]{64}$ ]]; then die "--needs-accepted: the digest of the project's needs the user accepted, as local.sh needs printed it"; fi
 
