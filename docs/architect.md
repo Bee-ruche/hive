@@ -44,6 +44,11 @@ It asks, reads, writes and checks; you decide each choice, and you apply what is
 runs nothing of your project outside a container, writes no secret anywhere, invites and writes to no one, and stops
 when something refuses.
 
+Your project already runs in the hive? Give it this line instead (section 10):
+
+> Tell me where <owner/project> stands in the hive: take https://github.com/Bee-ruche/hive afresh into ~/.hive/architect
+> and follow section 10 of its .claude/skills/bee-architect/SKILL.md. The clone is at <path>.
+
 ## 1. Can a machine judge your progress?
 
 Three questions first:
@@ -139,3 +144,87 @@ judge gives a figure they may waive ([guardians.md](guardians.md)), your cutter 
 - Measure again once the project has moved far.
 - Take a newer hive by changing the caller's pin, reviewed ([hosting.md](hosting.md), "Which version of the hive a
   project runs"); stop it by disabling the workflow or with `"paused": true` ("Stopping the hive").
+
+## 10. An existing project
+
+Your project already runs in the hive, and you want to know where it stands. Five readings, none of which pushes or
+runs anything of your project (git only fetches into your clone); your AI runs and reads them with you
+([its guide](../.claude/skills/bee-architect/SKILL.md), section 10, gives the commands for Linux):
+
+- **`hive.py doctor`**: whether the project is well formed now, and its tasks in one line (`left to do`, `open`,
+  `dealable now`, `stuck`, `short of members`). Four CANNOT lines, always there, are your repository's settings, which
+  it cannot see; `OK hive-commit` says your pin is a commit of the hive's main, not how old it is.
+- **`hive.py tally`**: each task's deals, acceptances, refusals, errors and deals given back, and for the project
+  whether it starves, which tasks are stuck, and what the members signalled ([cutter.md](cutter.md), "Signals").
+- **`hive.py cut`**, dry: what the cutter's rules would do now (tasks closed, added, held back and why). It writes
+  one file and pushes nothing. While as many tasks are left as `cutter.open` asks, every backlog line reads
+  `enough_open`, which hides what else holds it.
+- **The pin's age**: the commits of the hive's main after the one your caller pins. A run at an old pin lacks what
+  came after.
+- **The state's own files** on your branch `hive-state`: `feed.json`'s `generated_at` (a time that stops moving is a
+  schedule GitHub disabled), and, for a `reference` project alone, `tip.json`, the judge's answers about the tip for
+  planned tasks ([cutter.md](cutter.md), "The proof at the tip"). No command prints them.
+
+`hive.py health` reads only the projects the hive lists (`hive/projects.json`); for another it says so and stops.
+Listing your project is the founder's decision; the tally gives your project's numbers meanwhile.
+
+Then section 9: what you read decides what you do next.
+
+## On Windows or macOS
+
+The hive's commands run on Linux. On Windows or macOS, the doctor, the tally and a dry cut run in a container of the
+hive's tool image (the image the local bee's launcher builds), with nothing of your machine shown to it: the
+container takes the hive, your project and its state afresh from GitHub, as a fetch would. You need Docker (Docker
+Desktop) and git, and a bash: Git Bash on Windows (not PowerShell, which reads neither `<` nor `<<'EOF'`), Terminal
+on macOS. Tried on Windows 11, in Git Bash with Docker Desktop, on 27 November 2026; not yet tried on macOS, nor on
+a Mac with Apple silicon, where the image may need `--platform linux/amd64` on both `docker` lines.
+
+Write your project's `owner/name` on the first line, then paste the whole block. Docker builds the image the first
+time (a few minutes, its output shown); `MSYS_NO_PATHCONV=1` keeps Git Bash from turning the container's paths into
+Windows ones, and changes nothing elsewhere.
+
+```bash
+PROJECT='<owner/project>'
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+mkdir -p ~/.hive
+if [ -d ~/.hive/architect/.git ]; then
+  git -C ~/.hive/architect fetch --quiet origin main && git -C ~/.hive/architect reset --quiet --hard FETCH_HEAD \
+    && git -C ~/.hive/architect clean -ffdx --quiet
+else
+  git clone --quiet https://github.com/Bee-ruche/hive ~/.hive/architect
+fi
+HIVE_COMMIT=$(git -C ~/.hive/architect rev-parse HEAD)
+IMAGE="hive-tool:$(git -C ~/.hive/architect rev-parse HEAD:tools/hive/Dockerfile)"
+docker image inspect "$IMAGE" > /dev/null 2>&1 \
+  || git -C ~/.hive/architect show HEAD:tools/hive/Dockerfile | docker build --tag "$IMAGE" -
+MSYS_NO_PATHCONV=1 docker run --rm -i --init --pids-limit 4096 --cpus 2 --memory 2g --cap-drop ALL \
+  --security-opt no-new-privileges -e HOME=/tmp -e PROJECT="$PROJECT" -e HIVE_COMMIT="$HIVE_COMMIT" -w /tmp \
+  "$IMAGE" sh -s > ~/.hive/architect-status.txt 2>&1 <<'EOF'
+hive() { python3 -I /tmp/hive/tools/hive/hive.py "$@"; }
+git clone --quiet https://github.com/Bee-ruche/hive /tmp/hive && git -C /tmp/hive checkout --quiet --detach "$HIVE_COMMIT" || exit 2
+git clone --quiet "https://github.com/$PROJECT" /tmp/repo || exit 2
+git clone --quiet --depth 1 --branch hive-state "https://github.com/$PROJECT" /tmp/state || mkdir -p /tmp/state
+echo "== doctor"; hive doctor --project "$PROJECT" --repo /tmp/repo; echo "== exit $?"
+echo "== tally"; hive tally --project "$PROJECT" --repo /tmp/repo --state /tmp/state; echo "== exit $?"
+echo "== cut, dry"; hive cut --project "$PROJECT" --repo /tmp/repo --state /tmp/state --out /tmp/proposal.jsonl; echo "== exit $?"
+pin=$(git -C /tmp/repo grep -h -i -o -E 'bee-ruche/hive/\.github/workflows/run\.yml@[0-9a-f]{40}' origin/HEAD -- .github/workflows | head -n 1 | cut -d@ -f2)
+echo "== the pin: ${pin:-none found}"; [ -z "$pin" ] || git -C /tmp/hive log --first-parent --oneline "$pin..origin/main" || echo "the hive's clone does not hold the pin"
+echo "== generated_at"; python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("generated_at"))' /tmp/state/feed.json 2>/dev/null || echo none
+echo "== tip.json (its first 20000 bytes)"; if [ -f /tmp/state/tip.json ]; then head -c 20000 /tmp/state/tip.json; echo; else echo "none (a reference project alone has one)"; fi
+EOF
+echo "written: ~/.hive/architect-status.txt (the container ended with $?)"
+```
+
+Read `~/.hive/architect-status.txt` (`less ~/.hive/architect-status.txt`), or give it to your AI with section 10 of
+its guide. A line « the container ended with » other than 0, or a file that begins with an error rather than
+`== doctor`, says what failed: Docker, the network, or a project GitHub does not serve. Your project's repository is
+public, so the container needs no account and holds no credential; it runs the hive's tool, never your project's
+code, and is removed as it ends.
+
+**Not yet possible off Linux**, and what is missing:
+- `hive.py measure`: it starts the judge's own containers, so it needs Docker and root or `sudo` without a password
+  on the machine that runs it; the tool's container has neither. Run it on a Linux machine with Docker.
+- The cutter's check and publication (`cut-check`, the commit and the push of the cutter's guide): they need the
+  proposal written on your machine shown to the tool, then your own git's push, and no launcher does both yet (the
+  local bee's launcher, `tools/hive/local.sh`, runs the worker's commands alone). Schedule the cutter where it runs
+  on Linux ([cutter.md](cutter.md), "Where the cutter runs").
