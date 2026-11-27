@@ -13546,8 +13546,12 @@ class TestTheWorkersGuide(unittest.TestCase):
         for keyword in LAUNCHER_LINES:  # (the lines only the local bee's launcher reads: the tool's documentation says them, not the guide's list)
             self.assertIn(f"« {keyword} ", document[document.index("The local bee's side"):])
             self.assertNotIn(keyword, listed)
+        # The models: the guide sends the worker to the feed's list (the project's own, which differs from project to
+        # project), and the example's identifiers are written as the guide says any maker's is (lower case, words joined
+        # by « - »).
+        self.assertIn("the feed's `models` (`feed.json` of the state you took: read it there)", " ".join(guide.split()))
         for model in json.loads((registry / "examples/project" / hive.PROJECT_FILE).read_text())["models"]:
-            self.assertIn(f"`{model}`", guide, "the guide lists the model identifiers the pilot's project keeps statistics for")
+            self.assertRegex(model, r"\A[a-z0-9]+(-[a-z0-9]+)*\Z", "a model's identifier, as the guide writes one")
 
     def test_the_guide_and_the_pages_give_one_rule_for_installing_packages(self):
         """A worker installs packages only under one of two sentences of its owner's prompt: the accepted digest of
