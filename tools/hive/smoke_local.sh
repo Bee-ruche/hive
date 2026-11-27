@@ -13,8 +13,13 @@
 # - The containers are the launcher's own (hive-egress-<pid>-<n>, and throwaway ones), on its network hive-inner.
 #
 # usage: bash tools/hive/smoke_local.sh [owner/name]   (default Bee-ruche/minizBee)
+#   SMOKE_LOGIN=<login>: the stand-in gh names that login, whose public fork of the project check then reads, as a
+#   volunteer's check does, with no credential. SMOKE_EXPECT=<text>: the smoke passes when check ends on a hive: line
+#   that holds it (a fork that copied the project's branch hive, say).
 set -u
 PROJECT="${1:-Bee-ruche/minizBee}"
+LOGIN="${SMOKE_LOGIN:-hive-smoke}"
+[[ $LOGIN =~ ^[A-Za-z0-9-]{1,39}$ ]] || { echo "smoke: SMOKE_LOGIN is a GitHub login"; exit 2; }
 [[ $PROJECT =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "smoke: the project as owner/name"; exit 2; }
 here=$(cd "$(dirname "$0")/../.." && pwd -P) || exit 2
 command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1 || { echo "smoke: Docker is not running here"; exit 2; }
@@ -28,9 +33,9 @@ quiet_git() { env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS GIT_CONFIG_NOSYST
 head=$(quiet_git -C "$here" rev-parse --verify HEAD) || exit 2
 quiet_git clone --quiet --no-checkout "$here" "$home/.hive/protocol" && quiet_git -C "$home/.hive/protocol" checkout --quiet --detach "$head" \
   || { echo "smoke: the protocol could not be copied from $here"; exit 2; }
-cat > "$home/bin/gh" <<'GH'
+cat > "$home/bin/gh" <<GH
 #!/bin/sh
-[ "$*" = "api --hostname github.com user --jq .login" ] && { echo hive-smoke; exit 0; }
+[ "\$*" = "api --hostname github.com user --jq .login" ] && { echo $LOGIN; exit 0; }
 exit 1
 GH
 chmod +x "$home/bin/gh"
@@ -57,7 +62,15 @@ said=$(cd "$home/desk" && HOME="$home" PATH="$home/bin:$PATH" \
   timeout 1800 bash "$home/.hive/protocol/tools/hive/local.sh" check --project "$PROJECT" 2>&1)
 code=$?
 printf '%s\n' "$said"
-if [ "$code" -eq 0 ] && printf '%s\n' "$said" | grep -q '^NAMES-HELD [0-9][0-9]*$' && printf '%s\n' "$said" | grep -qx 'LOCAL login hive-smoke'; then
+if [ -n "${SMOKE_EXPECT:-}" ]; then
+  if [ "$code" -eq 2 ] && printf '%s\n' "$said" | grep -qF -- "$SMOKE_EXPECT" && printf '%s\n' "$said" | grep -qx "LOCAL login $LOGIN"; then
+    echo "smoke: PASSED (check ended on the line expected)"
+    exit 0
+  fi
+  echo "smoke: FAILED (exit $code, not the line expected)"
+  exit 1
+fi
+if [ "$code" -eq 0 ] && printf '%s\n' "$said" | grep -q '^NAMES-HELD [0-9][0-9]*$' && printf '%s\n' "$said" | grep -qx "LOCAL login $LOGIN"; then
   echo "smoke: PASSED"
 else
   [ -f "$home/.hive/build-tool.log" ] && { echo "smoke: the tool's build log:"; cat "$home/.hive/build-tool.log"; }

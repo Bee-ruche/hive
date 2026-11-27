@@ -8651,25 +8651,34 @@ READY_BRANCH = "hive/ready"
 # candidate could be pushed to it (the founder's trial). Its copy of hive-state blocks nothing (the hive reads none of
 # it): it is named beside a branch that blocks, for the user to delete both at once, and alone it is not said (a
 # worker stops on setup's NOTE lines). The tool deletes nothing in a fork: the user does, on GitHub, or forks again.
-# A line the tool prints is cut at 400 characters: each fixed text is under 250, beside names that are the tool's own
-# (hive, hive/submit, hive/release, and « those below » hive/ready/, hive/duty/, hive/cut/), never the fork's.
+# A line the tool prints is cut at 400 characters: each fixed text is about 300, beside names that are the tool's own
+# (hive, hive/submit, hive/release, and « those below » hive/ready/, hive/duty/, hive/cut/ or a task's branch), never
+# the fork's. GitHub makes no second fork of a project under the same name: the ways out are to delete the branches, to
+# delete the fork and fork again, or to fork under another name (--fork), and for a default branch, to set another.
 FORK_COPIES = ("your fork holds {named}, which {leave} no room for the hive's branches under hive/. Nothing was changed. Tell the "
-               "user to delete {them}{state} on GitHub, or to fork again with the main branch alone (gh repo fork "
-               "--default-branch-only): this tool deletes nothing in a fork")
-FORK_DEFAULT_COPIED = ("your fork's default branch, {named}, leaves no room for the hive's branches under hive/, and GitHub keeps a "
-                       "default branch. Nothing was changed. Tell the user to fork again with the main branch alone (gh repo fork "
-                       "--default-branch-only)")
+               "user to delete {them}{state} on GitHub; or to delete the fork and fork again with the main branch alone; or to fork "
+               "under another name and give --fork <name>. This tool deletes nothing in a fork")
+FORK_DEFAULT_COPIED = ("your fork's default branch, {named}, leaves no room for the hive's branches under hive/. Nothing was changed. "
+                       "Tell the user to make main the fork's default branch in its settings, then delete that branch; or to delete the "
+                       "fork and fork again with the main branch alone; or to fork under another name and give --fork <name>")
 
 
 FORK_FOLDERS = ("hive", SUBMIT_BRANCH.split("/{")[0], RELEASE_BRANCH.split("/{")[0])  # names that are folders of the hive's branches
 FORK_WHOLES = (READY_BRANCH, DUTY_BRANCH, CUT_BRANCH)  # the hive's branches that have no folder of their own
+FORK_TASKS = (SUBMIT_BRANCH.split("/{")[0], RELEASE_BRANCH.split("/{")[0])  # the folders of a task's branch (hive/submit/<task>)
+
+
+def below_a_task(name):
+    """True if the name lies below a task's branch (hive/submit/<task>/…), which it would block."""
+    return any(name.startswith(f"{folder}/") and name.count("/") > folder.count("/") + 1 for folder in FORK_TASKS)
 
 
 def blocking_branches(names):
     """The fork's branches beside which the hive's own cannot be made (READY_BRANCH, SUBMIT_BRANCH, RELEASE_BRANCH,
     DUTY_BRANCH, CUT_BRANCH): one at a name that is a folder of theirs (hive, hive/submit, hive/release), or one inside
-    a name of theirs (hive/ready/…, hive/duty/…, hive/cut/…)."""
-    return sorted(name for name in names if name in FORK_FOLDERS or any(name.startswith(f"{whole}/") for whole in FORK_WHOLES))
+    a name of theirs (hive/ready/…, hive/duty/…, hive/cut/…), or below a task's (hive/submit/<task>/…)."""
+    return sorted(name for name in names if name in FORK_FOLDERS or any(name.startswith(f"{whole}/") for whole in FORK_WHOLES)
+                  or below_a_task(name))
 
 
 def fork_copies(repository, address):
@@ -8692,14 +8701,17 @@ def fork_copies(repository, address):
     # Said by the tool's own names: a folder of the hive's branches, or « those below » one of them. The names of the
     # branches below are the fork's, and not repeated (in_the_way says them so too).
     folders = [name for name in blocking if name in FORK_FOLDERS]
-    below = [whole for whole in FORK_WHOLES if any(name.startswith(f"{whole}/") for name in blocking)]
+    below = [f"{whole}/" for whole in FORK_WHOLES if any(name.startswith(f"{whole}/") for name in blocking)] \
+        + [f"{folder}/<task>/" for folder in FORK_TASKS if any(below_a_task(name) and name.startswith(f"{folder}/") for name in blocking)]
     if default in blocking:
-        raise HiveError(FORK_DEFAULT_COPIED.format(named=default if default in FORK_FOLDERS else
-                                                   f"a branch below {next(w for w in FORK_WHOLES if default.startswith(f'{w}/'))}/"))
-    named = folders + [f"those below {whole}/" for whole in below]
+        place = default if default in FORK_FOLDERS else next(
+            f"a branch below {where}" for where in below if default.startswith(where.split("<")[0]))
+        raise HiveError(FORK_DEFAULT_COPIED.format(named=place))
+    named = folders + [f"those below {where}" for where in below]
     one = len(folders) == 1 and not below
     shown = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
-    raise HiveError(FORK_COPIES.format(named=f"the branch{'' if one else 'es'} {shown}", leave="leaves" if one else "leave",
+    shown = f"the branch{'' if one else 'es'} {shown}" if folders else shown.replace("those below", "branches below", 1)
+    raise HiveError(FORK_COPIES.format(named=shown, leave="leaves" if one else "leave",
                                        them="it" if one else "them", state=f" (and {STATE_BRANCH}, a copy)" if STATE_BRANCH in names else ""))
 
 

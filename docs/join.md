@@ -197,8 +197,10 @@ then says the project is larger than it reads.
    says so before anything is asked, and a push would stop on « the fork's branch hive leaves no room for
    hive/ready »; your worker stops and tells you. Delete or rename the branch that line names, on GitHub, and no
    other: your own branches stay. (A copy of `hive-state` blocks nothing: the line names it beside `hive`, for you to
-   delete both.) If the line says it is your fork's default branch, GitHub does not let you delete it, and the
-   worker cannot work from that fork. The worker's tool deletes no branch.
+   delete both.) If the line says it is your fork's default branch, GitHub does not let you delete it: make `main`
+   your fork's default branch in its settings first, then delete it. GitHub makes no second fork of a project under
+   the same name, so the other ways are to delete the fork and fork again with the default branch only, or to fork
+   under another name and give `--fork <name>`. The worker's tool deletes no branch.
 2. **Create a scheduled task in your assistant**, attach three repositories (your fork; and, to read only, the
    hive's protocol `Bee-ruche/hive` and the project itself, for the pilot
    `Bee-ruche/minizBee`), and **remove every connector** (mail, calendar, documents, chat). Your assistant loads your

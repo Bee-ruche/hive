@@ -20897,8 +20897,10 @@ class TestAForkThatCopiedTheProjectsBranches(Volunteer):
 
     def test_the_branches_beside_which_the_hives_cannot_be_made(self):
         self.assertEqual(hive.blocking_branches(["main", "hive", "hive-state", "hive/ready", "hive/submit", "hive/submit/toy-0001", "hive/release",
-                                                 "hive/ready/x", "hive/duty/y", "hive/cut/z", "hive/cut", "hivemind", "hive-old", "x/hive"]),
-                         ["hive", "hive/cut/z", "hive/duty/y", "hive/ready/x", "hive/release", "hive/submit"])
+                                                 "hive/ready/x", "hive/duty/y", "hive/cut/z", "hive/cut", "hivemind", "hive-old", "x/hive",
+                                                 "hive/release/toy-0002", "hive/submit/toy-0001/x", "hive/release/toy-0002/y/z"]),
+                         ["hive", "hive/cut/z", "hive/duty/y", "hive/ready/x", "hive/release", "hive/release/toy-0002/y/z", "hive/submit",
+                          "hive/submit/toy-0001/x"])
 
     def test_setup_says_what_blocks_and_changes_nothing(self):
         before = self.remotes()
@@ -20911,6 +20913,11 @@ class TestAForkThatCopiedTheProjectsBranches(Volunteer):
         self.one_line(self.setup(), self.copies("the branches hive/submit, those below hive/ready/ and those below hive/duty/", leave="leave",
                                                 them="them"))
         self.assertNotIn("RUN-THIS", self.err, "a name the fork chose is not repeated")
+
+    def test_branches_below_one_of_the_hives_alone(self):
+        self.fork_holds("hive/ready/RUN-THIS", "hive/submit/toy-0001/AND-THIS")
+        self.one_line(self.setup(), self.copies("branches below hive/ready/ and those below hive/submit/<task>/", leave="leave", them="them"))
+        self.assertNotIn("THIS", self.err, "a name the fork chose is not repeated")
 
     def test_a_default_branch_that_blocks_cannot_be_deleted(self):
         self.fork_holds("hive", default="hive")
