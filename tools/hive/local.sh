@@ -314,22 +314,6 @@ found_login() {  # FOUND_LOGIN: the GitHub account this machine's git pushes as 
   die "${why:-$NO_ACCOUNT}"
 }
 
-PUSH_SIGN_IN=()
-trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
-if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
-  # The login, before anything of the project's: read from what this machine's git pushes with, never typed. (A stop
-  # meanwhile, TERM or INT, ends bash through its EXIT trap, which removes found_login's temporaries: the tests stop it
-  # while curl and while git's credential helper run.)
-  [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
-  found_login
-  if [ -n "$LOGIN" ] && [ "$(lower "$LOGIN")" != "$(lower "$FOUND_LOGIN")" ]; then
-    die "this machine's git pushes to GitHub as $FOUND_LOGIN, not as --login $LOGIN: the worker works for the account it pushes as"
-  fi
-  LOGIN="$FOUND_LOGIN"
-  FORK="${FORK:-$NAME}"
-  if ! [[ $FORK =~ $NAME_RE ]] || [ "$FORK" = . ] || [ "$FORK" = .. ]; then die "--fork: the name of your fork's repository"; fi
-  [ "$(lower "$LOGIN/$FORK")" != "$(lower "$PROJECT")" ] || die "the fork named is the project's own repository: the worker pushes to their own fork only"
-fi
 # The sandbox's command from a file (--command-file): for an assistant whose shell is PowerShell, which writes the CHECK
 # line's command into a file with a single-quoted here-string and never into a command line. The file holds that one
 # line as the CHECK line gives it, « bee/sandbox/sans-docker.sh <command> »: its fixed beginning is no here-string's
@@ -346,6 +330,22 @@ if [ "$COMMAND" = sandbox ] && [ -n "$COMMAND_FILE" ]; then
     "bee/sandbox/sans-docker.sh "?*) SANDBOXED=(sh -c "${sandboxed#bee/sandbox/sans-docker.sh }") ;;
     *) die "--command-file: its line begins « bee/sandbox/sans-docker.sh », as the CHECK line gives it" ;;
   esac
+fi
+PUSH_SIGN_IN=()
+trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
+if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
+  # The login, before anything of the project's: read from what this machine's git pushes with, never typed. (A stop
+  # meanwhile, TERM or INT, ends bash through its EXIT trap, which removes found_login's temporaries: the tests stop it
+  # while curl and while git's credential helper run.)
+  [ -z "$LOGIN" ] || [[ $LOGIN =~ $LOGIN_RE ]] || die "--login: your GitHub login"
+  found_login
+  if [ -n "$LOGIN" ] && [ "$(lower "$LOGIN")" != "$(lower "$FOUND_LOGIN")" ]; then
+    die "this machine's git pushes to GitHub as $FOUND_LOGIN, not as --login $LOGIN: the worker works for the account it pushes as"
+  fi
+  LOGIN="$FOUND_LOGIN"
+  FORK="${FORK:-$NAME}"
+  if ! [[ $FORK =~ $NAME_RE ]] || [ "$FORK" = . ] || [ "$FORK" = .. ]; then die "--fork: the name of your fork's repository"; fi
+  [ "$(lower "$LOGIN/$FORK")" != "$(lower "$PROJECT")" ] || die "the fork named is the project's own repository: the worker pushes to their own fork only"
 fi
 if [ "$COMMAND" = sandbox ] && [ ${#SANDBOXED[@]} -eq 0 ]; then die "local.sh sandbox runs the command given after -- (or in --command-file)"; fi
 if [ -n "$TASK" ] && ! [[ $TASK =~ $TASK_RE ]]; then die "--task: the task's id, as the hive's lines give it"; fi

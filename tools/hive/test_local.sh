@@ -191,6 +191,7 @@ shift  # the image
 source_of() { sed -n "s|^type=bind,source=\([^,]*\),target=$1\(,readonly\)\{0,1\}\$|\1|p" "$S/mounts" | head -1; }
 cp "$S/mounts" "$S/mounts.$role"
 printf '%s\n' "$*" > "$S/args.$role"
+printf '%s\n' "$@" > "$S/argv.$role"  # (one word a line: what was one word stays one)
 case "$role" in
   probe) [ "${STUB_SWAP_ON:-}" != probe ] || swap; echo "${STUB_OWNER:-1000:1000}"; echo $(( $(date -u +%s) + ${STUB_SKEW:-0} )) ;;
   dns) exit "${STUB_DNS:-2}" ;;
@@ -770,11 +771,11 @@ check "sandbox: no network, never root, the clone, its guarded names read-only, 
 # The sandbox's command from a file (--command-file), as an assistant whose shell is PowerShell writes it with a
 # single-quoted here-string: a BOM and a CRLF dropped, the CHECK line's fixed beginning taken off, and every byte of
 # the command, quotes curly or not, $( ), backquotes, '@, given to the sandbox's sh as one word.
-printf '\357\273\277bee/sandbox/sans-docker.sh make check; echo \342\200\230q\342\200\231 "x" $(id) \047@ `w` | tee o\r\n' > "$T/desk/hive-check.txt"
-printf '%s\n' "sh -c make check; echo $(printf '\342\200\230')q$(printf '\342\200\231') \"x\" \$(id) '@ \`w\` | tee o" > "$T/want-sandbox"
+printf '\357\273\277bee/sandbox/sans-docker.sh make check; echo \342\200\230q\342\200\231 "x" $(id) \047@ `w` a  b * | tee o\r\n' > "$T/desk/hive-check.txt"
+{ printf 'sh\n-c\n'; printf '%s\n' "make check; echo $(printf '\342\200\230')q$(printf '\342\200\231') \"x\" \$(id) '@ \`w\` a  b * | tee o"; } > "$T/want-sandbox"
 launch sandbox --project Bee-ruche/toy --login alice --command-file hive-check.txt
-check "sandbox --command-file: the CHECK line's command given to the sandbox's sh as one word, every byte as written" \
-  eval '[ "$CODE" -eq 0 ] && cmp -s "$STUB_DIR/args.sandbox" "$T/want-sandbox"'
+check "sandbox --command-file: the CHECK line's command given to the sandbox's sh as one word, every byte as written (no split, no glob)" \
+  eval '[ "$CODE" -eq 0 ] && cmp -s "$STUB_DIR/argv.sandbox" "$T/want-sandbox"'
 printf 'bee/sandbox/sans-docker.sh make check' > "$T/desk/hive-check.txt"
 for case in "both" "missing" "link" "two lines" "another beginning" "too long" "the beginning alone"; do
   words=(--command-file hive-check.txt)
@@ -1200,6 +1201,17 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   grep -qx "    \$check = @'" "$ROOT/.claude/skills/bee-worker/SKILL.md" && grep -qx "    '@" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qx "    bee/sandbox/sans-docker.sh <the rest of the CHECK line, as it is>" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Never put a project'"'"'s command, or any text of the project, into a PowerShell line' || return 1
+  # Pasting the line is the owner's consent (the founder's word): the assistant says what it is about to do and goes
+  # on, waiting for no yes; connectors are kept and none is called, with no question; the architect posts a warning
+  # beside the line.
+  ! grep -q "wait for a yes\|No yes, no work\|waits for your yes\|let them choose one of three\|you choose between three" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'The line your owner pasted is their consent to one task of the project it names' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'You wait for no yes.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'If so, keep them, and call none of them for the hive'"'"'s work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'Pasting the line is your go-ahead for one task' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'where they are kept and none of them is called' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '> **Before you paste this line:** it asks your AI assistant to work one task' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Paste it only for a project you trust' || return 1
   # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could
