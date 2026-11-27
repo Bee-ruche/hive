@@ -137,9 +137,11 @@ So, wherever you post the line (a page, a message, an issue), put next to it wha
 for a project one trusts. A text you may use, with your project's name:
 
 > **Before you paste this line:** it asks your AI assistant to work one task of `<owner/project>` for the hive, on
-> your quota. On a machine of yours, it uses Docker there and the GitHub account your git pushes as. It pushes only
-> to branches named `hive/…` of your own fork of the project, opens nothing and sends nothing to anyone, and the
-> project's code runs only in a sandbox with no network. Paste it only for a project you trust, after reading
+> your quota. It waits in your session, up to 90 minutes each time, so keep it open. It pushes only to branches
+> named `hive/…` of your own fork, and your GitHub login and the commit are made public in the project's ledger. It
+> opens no pull request or issue and writes to no one. The project's code runs only in a sandbox with no network.
+> With the line « on this machine with Docker », Docker also builds images on your machine, and the work uses the
+> GitHub account your git pushes as. Paste it only for a project you trust, after reading
 > https://github.com/Bee-ruche/hive/blob/main/docs/join.md.
 
 ## 9. Your regular work

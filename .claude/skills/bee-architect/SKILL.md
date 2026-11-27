@@ -372,8 +372,9 @@ account (the `open` preset). Say so to the architect. Once the word is given:
   one. A member's account is a person's, older than `members.min_account_age_days`.
 - **The warning beside the line**: pasting join.md's one line is the volunteer's consent, and their assistant goes on
   without asking. Tell the architect to put, wherever they post the line, what pasting it does and that it is for a
-  project one trusts: `docs/architect.md`, "8. Inviting", gives a text to use. You write it for them on request,
-  with the project's name; they post it.
+  project one trusts: `docs/architect.md`, "8. Inviting", gives a text to use, and says what the Docker line adds
+  (images built on the volunteer's machine, the GitHub account their git pushes as). You write it for them on
+  request, with the project's name; they post it.
 - **The hive's list** of projects (`hive/projects.json`, which `hive health` reads) is a change of `Bee-ruche/hive`:
   the founder's.
 
