@@ -555,9 +555,10 @@ Everything in this guide holds, with these changes and no others:
     Never a bare `bash`: on Windows it may be WSL's, another machine.
   - Before each line, hold the words it carries to their shapes, and stop on any other: the
     project `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, a login `^[A-Za-z0-9-]+$`, a fork's name `^[A-Za-z0-9._-]+$`, a
-    `--prefer` file `^[A-Za-z0-9._/-]+$`, a digest for `--needs-accepted` `^[0-9a-f]{64}$`. The
-    project, the login and the fork's name come from the user's line, the architect's text before it is the user's,
-    which no person reads again before it reaches PowerShell.
+    `--prefer` file `^[A-Za-z0-9._][A-Za-z0-9._/-]*$` that holds no `..` and no `//` (a first `-` would read as an
+    option), a digest for `--needs-accepted` `^[0-9a-f]{64}$`. The project, the login and the fork's name come from
+    the user's line, the architect's text before it is the user's, which no person reads again before it reaches
+    PowerShell.
     Give `--login` only as `check`'s `LOCAL login` line gives it, or leave it out.
   - Run each launcher command this way, from the session's folder:
     `& $bash -c '$BASH ~/.hive/protocol/tools/hive/local.sh check --project <PROJECT>'`, and so for every command of

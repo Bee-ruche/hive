@@ -1261,6 +1261,9 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '(`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`)' || return 1
   ! grep -q "miniz lists \`claude" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '**The models your bees declare.**' || return 1
+  # A --prefer file begins with no « - » and climbs nowhere; the architect knows a new file is integrated plain.
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '`--prefer` file `^[A-Za-z0-9._][A-Za-z0-9._/-]*$` that holds no `..` and no `//`' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'A file you mean to be executable needs a person'"'"'s `chmod +x`, on your branch.' || return 1
   # A file a worker adds is a plain one, whatever its file system shows (blackboxBee's units, 27 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A file you add goes into the candidate as a plain file, never an executable one' || return 1
   # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).

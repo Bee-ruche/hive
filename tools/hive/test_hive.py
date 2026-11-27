@@ -13321,7 +13321,10 @@ class TestTheSettingsList(unittest.TestCase):
         programs = [{"kind": "program", "name": f"p{number}", "package": "pp"} for number in range(needs + 1)]
         self.assertEqual((needs, [self.loads(self.laid(base, "needs", programs[:entries])) for entries in (needs, needs + 1)]),
                          (hive.NEEDS_MOST, [True, False]))
-        self.assertEqual([key for key, entry in self.settings.items() if "most_entries" in entry], ["trusted.accounts", "judge.history", "needs"])
+        models = self.settings["models"]["most_entries"]
+        self.assertEqual((models, [self.loads(self.laid(base, "models", [f"model-{number}" for number in range(entries)])) for entries in (models, models + 1)]),
+                         (hive.MODELS_MOST, [True, False]))
+        self.assertEqual(sorted(key for key, entry in self.settings.items() if "most_entries" in entry), ["judge.history", "models", "needs", "trusted.accounts"])
         # The bounds are the tool's own: its constants and its table of what each limit may be.
         self.assertEqual({key: entry["most"] for key, entry in self.settings.items() if "most" in entry and entry["section"] != "limits"},
                          {"deal_hours": hive.BACKOFF_MAX_HOURS, "grace_hours": hive.BACKOFF_MAX_HOURS, "backoff_hours": hive.BACKOFF_MAX_HOURS,
@@ -16706,6 +16709,27 @@ class TestTheDoctor(Base):
             code, lines = self.doctor()
         self.assertEqual(self.said(lines, "hive-commit"), [("CANNOT", hive.OWNED_ELSEWHERE.format(
             what="the hive's own tree here", place=str(self.registry)))])
+
+    def test_files_the_hive_made_executable_are_counted(self):
+        """A backstop for the files an older worker's tool took as executable from its machine (blackboxBee's units,
+        27 November 2026): the doctor counts the files the branch the hive writes holds as executable that the
+        published branch holds as plain files or not at all, names none (the names are contributors'), and says how to
+        list them."""
+        self.healthy()
+        self.assertFalse(self.said(self.doctor()[1], "modes"), "none: no line")
+
+        def change(seed):
+            for name in ("units/a.c", "units/b.c"):
+                (seed / name).parent.mkdir(parents=True, exist_ok=True)
+                (seed / name).write_text("int x;\n")
+                os.chmod(seed / name, 0o755)
+        self.tip_change(change)
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "modes")), (0, "NOTE"), lines)
+        text = self.text(lines, "modes")
+        self.assertRegex(text, r"\A2 file\(s\) of \S+ executable that \S+ holds as plain files or not at all ")
+        self.assertIn("| grep 'mode 100755'", text)
+        self.assertNotIn("units/", text, "no name a contributor gave")
 
     def test_a_clone_another_account_owns_is_said_so(self):
         """git reads no repository another account owns (« detected dubious ownership »: a folder Docker Desktop shows

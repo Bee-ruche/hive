@@ -201,6 +201,7 @@ TASK_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{4}\Z")
 LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 REPO_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9._-]{1,100}\Z")
 HEAD_REF = re.compile(r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
+MODELS_MOST = 64  # the most model identifiers a project's file lists (models), which the feed carries to every worker
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}\Z")  # an identifier, never a sentence
 MARKER_LINE = re.compile(r"(Hive-Task|Hive-Action|Hive-Member|Hive-Model|Hive-Tier|Hive-Deal|Hive-Prefer|Hive-Because): (.{1,200})\Z")
 METRIC = re.compile(r"[a-z][a-z0-9_]{0,59}\Z")
@@ -835,8 +836,9 @@ def config_of(raw, path, repository=None):
     if not (isinstance(config["protected"], list) and all(isinstance(p, str) and plain_path(p) for p in config["protected"])):
         raise HiveError(f"{path}: protected: a list of paths or path patterns (dir/** for everything below a folder)")
     config["protected"] = [*ALWAYS_PROTECTED, *config["protected"]]
-    if not (isinstance(config["models"], list) and all(isinstance(m, str) and MODEL.match(m) for m in config["models"])):
-        raise HiveError(f"{path}: models: a list of model identifiers")
+    if not (isinstance(config["models"], list) and len(config["models"]) <= MODELS_MOST
+            and all(isinstance(m, str) and MODEL.match(m) for m in config["models"])):
+        raise HiveError(f"{path}: models: a list of model identifiers, {MODELS_MOST} at most")
     judge = config["judge"] = {"metrics": [], "require": [], **(raw.get("judge") or {})}
     if not (isinstance(judge["metrics"], list) and all(isinstance(m, str) and METRIC.match(m) for m in judge["metrics"])):
         raise HiveError(f"{path}: judge.metrics: the names of the judge's figures the hive keeps")
@@ -7959,10 +7961,10 @@ def owned_elsewhere(place):
 # the architect, the file of the pinned commit that holds it, a text that file holds once it does). A bee works with
 # main's tool whatever the project pins: a pin without these drops what the bees send there, and says nothing.
 PROTOCOL_FEATURES = (
-    ("the bees' signals (Hive-Signal)", "tools/hive/hive.py", "Hive-Signal: "),
+    ("the bees' signals (Hive-Signal)", "tools/hive/hive.py", "def signals_of("),  # (the run's reading of them, f2ab6d4)
     ("duties (hive duty)", "tools/hive/hive.py", "def cmd_duty("),
     ("publish-cut", "tools/hive/hive.py", "def cmd_publish_cut("),
-    ("the page after each run (page.yml)", ".github/workflows/page.yml", "name: "),
+    ("the page after each run (page.yml)", ".github/workflows/page.yml", "name: Hive page"),
 )
 
 
@@ -8276,6 +8278,25 @@ def doctor_branch(out, seen):
                                      f"{HOLDS}, 5")
     else:
         out.say("OK", "branch", f"{seen.config['branch']} at {seen.tip}")
+        made = executable_made(seen.repo, seen.branches.get(seen.published), seen.tip)
+        if made:
+            out.say("NOTE", "modes", f"{made} file(s) of {seen.config['branch']} executable that {seen.published} holds as plain files or not "
+                                     f"at all (a worker's older tool took the bit from its machine; the hive's own makes a new file plain): a "
+                                     f"person makes each plain again, or keeps it so on purpose. To list them: git diff --summary "
+                                     f"origin/{seen.published} origin/{seen.config['branch']} | grep 'mode 100755'")
+
+
+def executable_made(repo, published, tip):
+    """How many files the branch the hive writes holds as executable (100755) that the published branch holds as plain
+    files or not at all: a backstop for those an older worker's tool took from a machine whose file system shows every
+    file executable (candidate_tree now makes them plain). Counted, never named: the names are contributors' text."""
+    if not (is_sha(published) and is_sha(tip)):
+        return 0
+    listed = git_raw(repo, "diff-tree", "-r", "-z", "--no-renames", published, tip)
+    if listed.returncode != 0:
+        return 0
+    fields = listed.stdout.split(b"\0")
+    return sum(1 for head in fields[0::2] if head.startswith(b":") and head[1:].split(b" ")[:2] in ([b"000000", b"100755"], [b"100644", b"100755"]))
 
 
 def doctor_sandbox(out, seen):
