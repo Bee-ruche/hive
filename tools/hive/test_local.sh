@@ -763,7 +763,7 @@ rm "$CLONE/.cursor"
 launch check --project Bee-ruche/toy --login alice
 check "check: its lines, the account git pushes as among them" eval '[ "$CODE" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "NAMES-HELD 3" && printf "%s\n" "$OUT" | grep -qx "LOCAL clone $CLONE" \
   && printf "%s\n" "$OUT" | grep -qx "LOCAL login alice" \
-  && grep -q -- "names --project Bee-ruche/toy --system linux\$" "$STUB_DIR/args.names" \
+  && grep -q -- "names --project Bee-ruche/toy --system linux --login alice --fork toy\$" "$STUB_DIR/args.names" \
   && grep -q "^run .* --label hive.role=names .* -w /tmp .* python3 -I /hive/protocol/tools/hive/hive.py names " "$STUB_DIR/calls"'
 check "every container from a working folder it names, none from the root (the image sets none)" eval \
   '[ "$(grep -c "^run " "$STUB_DIR/calls")" -ge 3 ] && ! grep "^run " "$STUB_DIR/calls" | grep -v " -w /\(tmp\|work\) " && ! grep -q "^run .* -w / " "$STUB_DIR/calls"'
@@ -1144,6 +1144,8 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # The agent shares the owner's shell: it runs nothing that reads a token, and the docs say the guarantee is theirs.
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'and you run no command that reads one (`gh auth token`, `git credential fill`)' || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a command there could read a token (`gh auth token`, `git credential fill`): you never run one.' || return 1
+  # A fork made with every branch: the entry says what check's line then asks of the owner, and how to fork instead.
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a fork that copied the project'"'"'s branch `hive` (made with every branch: they delete that branch on GitHub, or fork again with « Copy the main branch only », or `gh repo fork --default-branch-only`; nothing deletes it for them)' || return 1
   # The session's folder: the launcher refuses the clone, a folder inside it and one above it.
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'a folder inside it, or a folder above it: so not your home folder itself, `~/.hive` or `~/.hive/work`.' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | grep -q "It can reach any https host *the project's needs name, and those hosts then see your machine's address" || return 1

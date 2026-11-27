@@ -793,7 +793,7 @@ case "$COMMAND" in
     WORK=$(below_hive "$HIVE/work" "the clones' folder") || exit 2
     watch_clock_and_owner "$WORK"
     said=$("$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=names --user 65534:65534 --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
-      "${PROTOCOL_MOUNT[@]}" "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py names --project "$PROJECT" --system "$SYSTEM") || exit $?
+      "${PROTOCOL_MOUNT[@]}" "$IMAGE" python3 -I /hive/protocol/tools/hive/hive.py names --project "$PROJECT" --system "$SYSTEM" --login "$LOGIN" --fork "$FORK") || exit $?
     say "$said"
     say "LOCAL clone $CLONE"
     say "LOCAL state $STATE"

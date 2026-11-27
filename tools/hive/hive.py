@@ -8646,6 +8646,54 @@ PROXY_URL = re.compile(r"http://local_proxy@127\.0\.0\.1:[0-9]{1,5}/git/([A-Za-z
 LOCAL_REMOTES = False  # tests only, and no option or variable sets it: a remote may then be a folder of the machine
 SUBMIT_BRANCH = "hive/submit/{task}"
 READY_BRANCH = "hive/ready"
+# A fork made with every branch of the project (gh repo fork, or GitHub's page with « Copy the main branch only »
+# unticked) holds the project's own branch hive, and git keeps no branch hive/… beside a branch named hive: no ask, no
+# candidate could be pushed to it (the founder's trial). Its copy of hive-state blocks nothing (the hive reads none of
+# it): it is named beside a branch that blocks, for the user to delete both at once, and alone it is not said (a
+# worker stops on setup's NOTE lines). The tool deletes nothing in a fork: the user does, on GitHub, or forks again.
+# (A line the tool prints is cut at 400 characters: the fixed text of each is about 300, beside at most three names.)
+FORK_COPIES = ("your fork holds {named}, which {leave} no room for the hive's branches (hive/…): nothing could be pushed there. "
+               "Nothing was changed. Tell the user to delete {them}{state} on GitHub, or to fork the project again with its main branch "
+               "alone (gh repo fork --default-branch-only): this tool deletes nothing in a fork")
+FORK_DEFAULT_COPIED = ("your fork's default branch, {named}, leaves no room for the hive's branches (hive/…), and GitHub does not "
+                       "let a default branch be deleted. Nothing was changed. Tell the user to fork the project again with its main "
+                       "branch alone (gh repo fork --default-branch-only)")
+
+
+def blocking_branches(names):
+    """The fork's branches beside which the hive's own cannot be made (READY_BRANCH, SUBMIT_BRANCH, RELEASE_BRANCH,
+    DUTY_BRANCH, CUT_BRANCH): one at a name that is a folder of theirs (hive, hive/submit, hive/release), or one inside
+    a name of theirs (hive/ready/…, hive/duty/…, hive/cut/…)."""
+    folders = {"hive", SUBMIT_BRANCH.split("/{")[0], RELEASE_BRANCH.split("/{")[0]}
+    return sorted(name for name in names if name in folders or any(name.startswith(f"{whole}/") for whole in (READY_BRANCH, DUTY_BRANCH, CUT_BRANCH)))
+
+
+def fork_copies(repository, address):
+    """What forking copied into the fork at this address, read with ls-remote before anything is pushed there (setup,
+    and names at the launcher's check): FORK_COPIES if a branch blocks the hive's, FORK_DEFAULT_COPIED if that branch is
+    the fork's default one, which GitHub keeps (a copy of hive-state named beside it). A fork that cannot be read is not
+    judged here: the push says so (in_the_way)."""
+    try:
+        listed = repository.git("ls-remote", "--symref", address, "HEAD", "refs/heads/*", to=address, check=False, timeout=120)
+    except HiveError:
+        return
+    if listed.returncode != 0:
+        return
+    lines = [line.partition("\t") for line in listed.stdout.splitlines()]
+    names = [name[len("refs/heads/"):] for _, _, name in lines if name.startswith("refs/heads/")]
+    default = next((value[len("ref: refs/heads/"):] for value, _, name in lines if name == "HEAD" and value.startswith("ref: refs/heads/")), None)
+    blocking = blocking_branches(names)
+    if default in blocking:
+        raise HiveError(FORK_DEFAULT_COPIED.format(named=json.dumps(default)[:120]))
+    if blocking:
+        named = [json.dumps(name)[:40] for name in blocking[:2]] + (["others"] if len(blocking) > 2 else [])
+        shown = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+        one = len(blocking) == 1
+        raise HiveError(FORK_COPIES.format(named=f"the branch{'' if one else 'es'} {shown}", leave="leaves" if one else "leave",
+                                           them="it" if one else "them",
+                                           state=f" (and {STATE_BRANCH}, a copy of the project's state)" if STATE_BRANCH in names else ""))
+
+
 WORK_MARGIN_HOURS = 1  # a worker starts on a deal only if it has this long left
 ASK_PATIENCE_HOURS = 6  # an ask the hive has not answered for this long is the user's to look at
 STATE_BYTES = 16 << 20  # a file of the hive's state larger than this is not read
@@ -11289,18 +11337,33 @@ def names_not_held(paths, system):
     return []
 
 
+def fork_address(args):
+    """names' fork, from --login and the project's name (or --fork), as own_fork derives it: no clone is read. In the
+    tests, a folder of the machine (--fork-url), while LOCAL_REMOTES is set alone."""
+    name = project_repository(args.project).split("/")[1] if args.fork is None else args.fork
+    if not LOGIN.match(args.login):
+        raise HiveError("--login: the user's GitHub login")
+    if not (FORK_NAME.match(name) and name.strip(".")) or name.endswith(".git"):
+        raise HiveError("--fork: the name of your fork's repository on GitHub, and nothing else (letters, digits, dots, dashes)")
+    if args.fork_url is not None and LOCAL_REMOTES:
+        return args.fork_url
+    return f"https://github.com/{args.login}/{name}"
+
+
 def cmd_names(args):
     """The local bee's launcher, at its check, before any ask: whether a disk of the machine's system (--system) can
     hold the project's tip as it is (names_not_held). Read with no clone, in a store of this tool's own: the project's
     settings from its own address (hive_project), its tip (project_tip), and the tip's entries and folders from their
     own bytes (tip_entries). NAMES-HELD <how many>, or one line that names what the disk cannot hold: the project's
-    own paths, which the tip holds."""
+    own paths, which the tip holds. With --login, the fork's branches too, as setup reads them (fork_copies)."""
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as place:
         store = own_store(None, place)
         config, _ = hive_project(store, args.project, args.upstream_url)
         tip = project_tip(store, project_address(config["repo"], args.upstream_url), config["branch"])
         with Objects(store) as objects:
             entries, folders = tip_entries(objects, tip, time.monotonic() + PROOF_SECONDS)
+        if args.login is not None:  # (the launcher's check: what forking copied into the fork, before any ask)
+            fork_copies(store, fork_address(args))
     paths = [*entries, *sorted(folder.rstrip(b"/") for folder in folders)]
     found = names_not_held(paths, args.system)
     if found:
@@ -11333,10 +11396,11 @@ def cmd_setup(args):
     if origin is None:
         raise HiveError("this clone has no origin: run this in a clone of your own fork of the project")
     login = args.login
-    own_fork(clone, args.project, login, args.fork)
+    fork = own_fork(clone, args.project, login, args.fork)
     if clone.git("remote", "get-url", "--push", "origin", to=origin).stdout.strip() != clone.git("remote", "get-url", "origin", to=origin).stdout.strip():
         raise HiveError("a push to origin would not go to the address it is fetched from (a pushInsteadOf rule of your git settings): "
                         "a worker pushes only to the address it checked. Remove the rule, or use a machine without it")
+    fork_copies(clone, fork)
     # The project is read in full, with its tasks, as every later command reads it: settings that this tool refuses, or
     # that are not there, stop the worker here, before it is dealt anything.
     config, _ = hive_project(clone, args.project, args.upstream_url)
@@ -12859,7 +12923,10 @@ def main(argv=None):
     p.set_defaults(volunteer=True)
     p.add_argument("--project", required=True, help="the project's repository on GitHub, owner/name")
     p.add_argument("--system", required=True, choices=sorted(DISK_SYSTEMS), help="the machine's system, as the launcher tells it")
+    p.add_argument("--login", help="the user's GitHub login: the fork's branches are read too (what forking copied)")
+    p.add_argument("--fork", help="the name of the user's fork, if it is not the project's own")
     p.add_argument("--upstream-url", help=argparse.SUPPRESS)
+    p.add_argument("--fork-url", help=argparse.SUPPRESS)
     p.set_defaults(run=cmd_names)
     args = parser.parse_args(argv)
     # A volunteer-side command, and a quiet one (the publisher), whichever function runs git for it, repeats nothing git

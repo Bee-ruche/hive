@@ -20868,6 +20868,65 @@ class TestTheNamesADiskHolds(Volunteer):
             self.assertEqual(self.names("macos")[0], 0, "a name only Windows refuses")
 
 
+class TestAForkThatCopiedTheProjectsBranches(Volunteer):
+    """A fork made with every branch of the project (gh repo fork, or GitHub's page with « Copy the main branch only »
+    unticked) holds the project's branch hive, beside which git keeps none of the hive's branches (hive/…): setup, and
+    names at the launcher's check, say so in one line before anything is asked, and change nothing. A copy of
+    hive-state blocks nothing: it is named beside a branch that blocks, and alone it is not said."""
+
+    def fork_holds(self, *names, default=None):
+        bare = str(self.alice.bare)
+        for name in names:
+            sh("git", "-C", bare, "branch", name, "main", cwd=self.w.root)
+            self.addCleanup(sh, "git", "-C", bare, "update-ref", "-d", f"refs/heads/{name}", cwd=self.w.root)
+        if default:
+            sh("git", "-C", bare, "symbolic-ref", "HEAD", f"refs/heads/{default}", cwd=self.w.root)
+            self.addCleanup(sh, "git", "-C", bare, "symbolic-ref", "HEAD", "refs/heads/main", cwd=self.w.root)
+
+    def names(self, *more):
+        return self.run_cli("names", "--project", "Bee-ruche/toy", "--system", "linux", "--upstream-url", str(self.w.upstream), *more,
+                            cwd=self.w.root)
+
+    def copies(self, named, leave="leaves", them="it", state=""):
+        return hive.FORK_COPIES.format(named=named, leave=leave, them=them, state=state)
+
+    def remotes(self):
+        return sh("git", "config", "--get-regexp", "^remote\.", cwd=self.alice.work, check=False).stdout
+
+    def test_the_branches_beside_which_the_hives_cannot_be_made(self):
+        self.assertEqual(hive.blocking_branches(["main", "hive", "hive-state", "hive/ready", "hive/submit", "hive/submit/toy-0001", "hive/release",
+                                                 "hive/ready/x", "hive/duty/y", "hive/cut/z", "hive/cut", "hivemind", "hive-old", "x/hive"]),
+                         ["hive", "hive/cut/z", "hive/duty/y", "hive/ready/x", "hive/release", "hive/submit"])
+
+    def test_setup_says_what_blocks_and_changes_nothing(self):
+        before = self.remotes()
+        self.fork_holds("hive", "hive-state")
+        self.one_line(self.setup(), self.copies('the branch "hive"', state=" (and hive-state, a copy of the project's state)"))
+        self.assertEqual(self.remotes(), before, "nothing was changed")
+
+    def test_setup_names_the_branches_that_block(self):
+        self.fork_holds("hive/ready/x", "hive/submit", "hive/duty/y")
+        self.one_line(self.setup(), self.copies('the branches "hive/duty/y", "hive/ready/x" and others', leave="leave", them="them"))
+
+    def test_a_default_branch_that_blocks_cannot_be_deleted(self):
+        self.fork_holds("hive", default="hive")
+        self.one_line(self.setup(), hive.FORK_DEFAULT_COPIED.format(named='"hive"'))
+
+    def test_what_blocks_nothing_is_not_said(self):
+        self.fork_holds("hive-state", "hive-old", "hivemind", "hive/ready")
+        code, text = self.setup()
+        self.assertEqual((code, [line for line in text.splitlines() if line.startswith("NOTE")]), (0, []), self.err)
+
+    def test_names_reads_the_fork_when_the_launcher_gives_it(self):
+        self.fork_holds("hive")
+        self.one_line(self.names("--login", "alice", "--fork-url", str(self.alice.bare)), self.copies('the branch "hive"'))
+        code, text = self.names()
+        self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), "no login given: the fork is not read")
+        code, text = self.names("--login", "alice", "--fork-url", str(self.w.root / "no-such-fork.git"))
+        self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), "a fork that cannot be read is the push's to say")
+        self.one_line(self.names("--login", "not-a-login-", "--fork-url", str(self.alice.bare)), "--login: the user's GitHub login")
+
+
 CAFE_NFC, CAFE_NFD = "café.md", "café.md"
 for number, (files, system, paths) in enumerate((
         ({"Notes.md": "a\n", "notes.md": "b\n"}, "macos", ["Notes.md", "notes.md"]),
