@@ -253,7 +253,7 @@ ACTIONS = ("ready", "submit", "release")
 # the deal given back. A signal that does not hold is dropped alone: the candidate or the release stands as it would
 # without it. A SIGNAL CHANGES NOTHING THE HIVE DECIDES: no wait, no deal, no verdict, no day's count, no « stuck », no
 # hint reads one (the release's own code, RELEASES, keeps deciding what a release costs). It is counted for the
-# project's cutter and its page, and read by no worker: the feed lists the codes a run reads, never a count.
+# project's cutter and its page, and shown to no worker: the feed lists the codes a run reads, never a count.
 # code -> (where it may be said: on a candidate, « submit », or on a release, by the release's code; the kind of its
 # value: None (no value), « word » (one of `values`), « number » (a whole number within `values`), « task » (a task of
 # the project's, as its tasks write it), « need » (the name of one of the project's needs); whether the value may be
@@ -1875,7 +1875,7 @@ def held_signals(said, where, task, tasks, config):
     this file's. A pair whose code is not one of SIGNALS is dropped alone, and counts for nothing below. More than
     SIGNALS_MOST of the hive's codes, and none holds; a code said twice, and neither holds. Each other one holds if and
     only if it has its code's form there (signal_form) and its value is the project's where it names one: a task of
-    the project's tasks (not the task itself, for « duplicate »); the name of one of the project's needs. « outlook »
+    the project's tasks (open, and not the task itself); the name of one of the project's needs. « outlook »
     is said of a probe's candidate alone. Whatever does not hold is dropped, and nothing of it is kept."""
     if not isinstance(said, list):
         return []
@@ -1896,7 +1896,7 @@ def held_signals(said, where, task, tasks, config):
             held.append({"code": code, "value": values[values.index(value)]})
         elif kind == "number":
             held.append({"code": code, "value": int(value)})
-        elif kind == "task" and value in tasks and not (code == "duplicate" and value == task["id"]):
+        elif kind == "task" and value in tasks and value != task["id"] and not tasks[value].get("closed"):
             held.append({"code": code, "value": tasks[value]["id"]})
         elif kind == "need":
             name = next((need["name"] for need in config.get("needs", ()) if need.get("name") == value), None)
@@ -5173,12 +5173,16 @@ def tally_line(entry):
 def signals_of(said, where):
     """What the tally reads of a line's signals (docs/protocol.md, "The ledger and the feed"): {code: value or None}
     for those of the hive's own form there (signal_form), SIGNALS_MOST at most, each code once, a value the hive's word,
-    a whole number, or a string of a task id's or a need name's shape (SIGNAL_LINE's); anything else is nothing. The
-    steps that write hold them against the project before they write them: this reads a line again as data."""
+    a whole number, or a string of a task id's or a need name's shape (SIGNAL_LINE's); a code said twice is neither, as
+    held_signals has it; anything else is nothing. The steps that write hold them against the project before they write
+    them: this reads a line again as data."""
     if not isinstance(said, list) or len(said) > SIGNALS_MOST:
         return {}
     read = {}
+    codes = [signal.get("code") for signal in said if isinstance(signal, dict)]
     for signal in said:
+        if isinstance(signal, dict) and codes.count(signal.get("code")) != 1:
+            continue
         if not (isinstance(signal, dict) and set(signal) <= {"code", "value"} and isinstance(signal.get("code"), str)):
             continue
         value = signal.get("value")
@@ -5276,7 +5280,7 @@ def tally(tasks, lines, instant, active=None, taken=None):
             gathered["alarms"].add(line["task"])
         for code in ("felt", "effort"):
             if code in signals:
-                counts = gathered[code].setdefault(row["size"], {})
+                counts = gathered[code].setdefault(row["size"] or NO_WORD, {})
                 counts[signals[code]] = counts.get(signals[code], 0) + 1
         if line["type"] == "verdict" and not line.get("answer"):
             if "more_gain" in signals and line["result"] == "accepted":
@@ -7637,7 +7641,7 @@ def report_rows(template, summaries):
                 ("median hours to accept", plain("median_hours_to_accept")),
                 ("longest hours to accept", lambda s: s["hours_to_accept"][-1] if s["hours_to_accept"] else None),
                 *[(f"refused, {reason}", count("refused", reason)) for reason in reasons],
-                *[(f"effort {bucket}, established members", count("effort", bucket)) for bucket in SIGNALS["effort"][2]],
+                *[(f"effort {bucket}, candidates and releases of established members", count("effort", bucket)) for bucket in SIGNALS["effort"][2]],
                 *[(f"confidence {word}: accepted, refused", lambda s, word=word: [s["confidence_accepted"].get(word, 0), s["confidence_refused"].get(word, 0)])
                   for word in SIGNALS["confidence"][2]]]
     return [("tasks open", lambda s: s["tasks"]["open"]), ("tasks dealt", lambda s: s["tasks"]["dealt"]),
@@ -7648,7 +7652,7 @@ def report_rows(template, summaries):
             ("tasks accepted with more gain in sight", plain("headroom")),
             *[(f"signal {code}, by established accounts", count("signals_established", code))
               for code in ("goal_beyond", "outside_files", "unclear", "needs_first", "too_large", "duplicate", "off_task_request", "splits")],
-            *[(f"felt {word}, established members", count("felt", word)) for word in SIGNALS["felt"][2]]]
+            *[(f"felt {word}, candidates and releases of established members", count("felt", word)) for word in SIGNALS["felt"][2]]]
 
 
 def report_numbers(template, result):
@@ -11855,8 +11859,8 @@ def said_signals(args, where, task, tasks, config, feed):
         if code in [signal["code"] for signal in held]:
             continue
         if codes.count(code) == 1 and signal_form(code, value, where) and SIGNALS[code][1] in ("task", "need"):
-            raise HiveError(f"--signal {code}: names no {'task of the project' if SIGNALS[code][1] == 'task' else 'need the project lists'}"
-                            f"{' other than this one' if code == 'duplicate' else ''}, as its files write it: nothing was pushed")
+            raise HiveError(f"--signal {code}: names no {'open task of the project other than this one' if SIGNALS[code][1] == 'task' else 'need the project lists'}"
+                            ", as its files write it: nothing was pushed")
         raise HiveError(f"--signal {code}: not said this way here (twice, beside another kind of ending, or with a value it does "
                         "not take: the worker's guide says each code's place and values): nothing was pushed")
     return plain_signals(held)

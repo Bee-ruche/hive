@@ -1386,12 +1386,13 @@ def attention_block(attention):
         if attention["reported"]:
             rows = [[task_cell(item), [[el("code", s["code"]), f" ({s['count']:,})", "" if s is item["signals"][-1] else ", "] for s in item["signals"]],
                      item["others"]] for item in attention["reported"]]
-            block.append(table([("Task", False), ("Codes, by members with an accepted contribution", False), ("Said by others", True)], rows))
+            block.append(table([("Task", False), ("Codes, by members with an accepted contribution", False), ("Codes said by others", True)], rows))
         else:
             block.append(el("p", "No member with an accepted contribution reported anything of the tasks left to do.", class_="soft"))
         block.append(el("p", "What members said of a task beside a candidate or a deal given back, as codes of the hive's own (the protocol "
                              "lists them): a code counts each member once, and only those with a contribution accepted on the project "
-                             "before they said it are counted. A code changes nothing the hive decides. No member is named."
+                             "before they said it are counted; the last column counts the codes others said. A code changes nothing "
+                             "the hive decides. No member is named."
                              + left_out(attention["reported_left_out"], "Tasks"), class_="note"))
     block.append(el("p", el("strong", "Runs spent without an answer")))
     if attention["errors"]:

@@ -93,7 +93,9 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   project's judge) or `word` (the architect's, `--failing`).
 - `for_the_cutter`: stuck tasks it closed and could not cut again (`no_rule`: a goal « correct »; `at_the_floor`,
   `under_the_floor`: the goal cannot go lower; `signalled`: most of its failures are releases whose members said the
-  task, not its goal, stood in the way, with `signals`, how many established members said each code). These are yours:
+  task, not its goal, stood in the way, with `signals`: for each of the six codes C1 reads (`duplicate`, `needs_first`,
+  `off_task_request`, `outside_files`, `too_large`, `unclear`), how many established members said it on the task, on
+  any line, not only the releases C1 counted). These are yours:
   cut them again ("Writing tasks"); a `signalled` one as its codes say (below, "What members signalled").
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
   `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
@@ -194,11 +196,13 @@ writes its `goal`, whatever the published lines do.
   acceptance before they said it). Established `too_large` or `splits` (its `values`: the parts) say to cut the task
   smaller, into that many; `unclear`, to rewrite its context in a recut; `needs_first` (its `values`: a task), to cut
   it again with that `needs`; `outside_files`, that its `files` are wrong; `duplicate` (a task), to read both lines and
-  close one if they overlap; `goal_beyond`, a goal too far (a lower one, or a probe). A task in `headroom` may get a
-  **probe** on its files, never a work task with a threshold: that would be a guess. `alarms`: report them to the
-  architect first, and write no task on those files in this run. `calibration`'s `felt` and `effort` by size explain
-  the acceptance shares by size; they never change a size alone. Quote counts in your own words (« two members gave
-  it back as too large »), never a member's, and say in your report which signals moved a cut.
+  close one if they overlap; `goal_beyond`, a goal too far: cut a probe on its figure, or report it to the architect,
+  and never lower a work task's goal on a signal (the stuck rule's halving is the only rule that lowers one). A task
+  in `headroom` may get a **probe** on its files, never a work task with a threshold: that would be a guess.
+  `alarms`: report them to the architect first, and write no task on those files in this run. `calibration`'s `felt`
+  and `effort` by size explain the acceptance shares by size; they count candidates and releases, not members, and
+  never change a size alone. Quote counts in your own words (« two members gave it back as too large »), never a
+  member's, and say in your report which signals moved a cut.
 - **Probes** (`"kind": "probe"`, docs/cutter.md, "Probes"): for an idea whose worth is unknown and cheap to try,
   cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its

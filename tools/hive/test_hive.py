@@ -21203,6 +21203,9 @@ class TestSignals(unittest.TestCase):
         for pair in wrong:
             self.assertEqual(self.held([pair, ("unclear", None)]), [{"code": "unclear"}], pair)
         self.assertEqual(self.held([("needs_first", None)], "out_of_reach"), [{"code": "needs_first"}], "a value it may leave out")
+        for task in ("toy-0001", "toy-0003", "toy-0099"):  # itself, a closed task, none of the project's
+            self.assertEqual(self.held([("needs_first", task)], "out_of_reach"), [], task)
+            self.assertEqual(self.held([("duplicate", task)]), [], task)
         self.assertEqual(self.held([("need_unmet", None)], "cannot_run"), [{"code": "need_unmet"}])
         self.assertEqual(self.held([("need_unmet", "gcc")], "cannot_run"), [], "a need the project does not list")
         self.assertEqual(self.held([("need_unmet", "g++")], "cannot_run", config={}), [], "nor in a project that lists none")
@@ -21402,7 +21405,8 @@ class TestSignalsInTheRun(Base):
             feed = world.feed_file()
             seen = [e.get("signals") for e in ledger.events if e["type"] == "verdict"]
             return (strip, ledger.standing(101, hive.now(), config), ledger.held_in_vain(101), feed["wait"], feed["tasks"],
-                    json.loads((world.state / "stats.json").read_text()), tallied["tasks"]["toy-0001"], tallied["stuck"]), seen
+                    json.loads((world.state / "stats.json").read_text()),
+                    {k: v for k, v in tallied["tasks"]["toy-0001"].items() if k != "signals"}, tallied["stuck"]), seen  # (the counts of signals aside)
         quiet, none = world_with([])
         said, seen = world_with(["Hive-Signal: confidence high", "Hive-Signal: local_check passed", "Hive-Signal: too_large",
                                  "Hive-Signal: splits 2"])
@@ -21496,10 +21500,10 @@ class TestSignallingCommands(Volunteer):
                                                       "with a value it does not take: the worker's guide says each code's place and values): nothing was pushed"),
                  (("--signal", "splits=12"), "--signal splits: not said this way here"),
                  (("--signal", "flaky="), "--signal flaky: not said this way here"),
-                 (("--signal", "duplicate=toy-0001"), "--signal duplicate: names no task of the project other than this one, as its files "
-                                                      "write it: nothing was pushed"),
-                 (("--signal", "duplicate=toy-0099"), "--signal duplicate: names no task of the project other than this one"),
-                 (("--signal", "needs_first=toy-0099"), "--signal needs_first: names no task of the project, as its files write it"),
+                 (("--signal", "duplicate=toy-0001"), "--signal duplicate: names no open task of the project other than this one, as its "
+                                                      "files write it: nothing was pushed"),
+                 (("--signal", "duplicate=toy-0099"), "--signal duplicate: names no open task of the project other than this one"),
+                 (("--signal", "needs_first=toy-0099"), "--signal needs_first: names no open task of the project other than this one"),
                  (("--signal", "unclear", "--signal", "unclear"), "--signal unclear: not said this way here"),
                  (tuple(w for c in ("unclear", "flaky", "too_large", "felt=easier", "effort=lt1h") for w in ("--signal", c)),
                   "--signal: 4 at most, each code once: nothing was pushed")]
@@ -21565,6 +21569,8 @@ class TestTheTallyReadsSignals(unittest.TestCase):
                                     {"code": "needs_first", "value": "toy-0002"}]}
         self.assertEqual(hive.tally_line(odd)["signals"], {"needs_first": "toy-0002"})
         self.assertNotIn("signals", hive.tally_line({**wrong, "signals": wrong["signals"] + [{"code": "unclear"}]}), "more than four: none")
+        twice = {**wrong, "signals": [{"code": "felt", "value": "easier"}, {"code": "felt", "value": "harder"}, {"code": "unclear"}]}
+        self.assertEqual(hive.tally_line(twice)["signals"], {"unclear": None}, "a code said twice is neither, as the writers hold it")
         self.assertNotIn("signals", hive.tally_line({**wrong, "signals": "felt"}), "no signal: the line as it was")
         ran_out = {**self.expired(1, t, "10:00:00", "10:30:00"), "signals": [{"code": "too_large"}]}
         self.assertNotIn("signals", hive.tally_line(ran_out), "a deal that ran out said nothing")
@@ -21577,6 +21583,7 @@ class TestTheTallyReadsSignals(unittest.TestCase):
                  self.deal(1, t, "10:00:00"), self.given_back(1, t, "10:00:00", "10:30:00", ("too_large", None)),
                  self.deal(2, t, "11:00:00"), self.given_back(2, t, "11:00:00", "11:30:00", ("unclear", None), ("effort", "lt3h")),
                  self.deal(3, t, "12:00:00"), self.judged(3, t, "12:00:00", "12:30:00", "goal_not_met")]
+        lines += [self.deal(9, t, "12:40:00"), self.given_back(9, t, "12:40:00", "12:50:00", ("too_large", None))]  # (no acceptance: counts nowhere)
         counted = self.tally(*lines)
         self.assertEqual((counted["stuck"], counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), ([t], 3, 2))
         config = hive.config_of({**CONFIG, "cutter": {"floors": {"gain": 0.01}, "open": 3}}, "hive/project.json")
@@ -21586,8 +21593,14 @@ class TestTheTallyReadsSignals(unittest.TestCase):
         self.assertEqual((said["for_the_cutter"], said["added"]),
                          ([{"id": t, "because": "signalled", "signals": {"too_large": 1, "unclear": 1}}], []),
                          "most failures say the task stood in the way: closed, and left to the AI cutter, never halved by rule")
+        # Two of four is no majority: halved as before.
+        tie = [*self.proven(1, 2, 3, 4), *lines[6:], self.deal(4, t, "13:00:00"), self.judged(4, t, "13:00:00", "13:30:00", "goal_not_met")]
+        counted = self.tally(*tie)
+        self.assertEqual((counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), (4, 2))
+        self.assertEqual([entry["from"] for entry in hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)[1]["added"]],
+                         ["easier"], "a tie is no majority")
         # One of three: halved as before. A goal_beyond says the goal stood in the way, and is no C1 code.
-        lines[-3] = self.given_back(2, t, "11:00:00", "11:30:00", ("goal_beyond", None))
+        lines[-5] = self.given_back(2, t, "11:00:00", "11:30:00", ("goal_beyond", None))
         counted = self.tally(*lines)
         self.assertEqual(counted["tasks"][t]["signalled_failures"], 1)
         proposal, said = hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)
@@ -21605,7 +21618,12 @@ class TestTheTallyReadsSignals(unittest.TestCase):
                  self.signalled(self.judged(2, "toy-0004", "11:00:00", "11:30:00", "judge_refused"), ("local_check", "passed"), ("confidence", "high")),
                  self.deal(9, "toy-0004", "12:00:00"),
                  self.signalled(self.judged(9, "toy-0004", "12:00:00", "12:30:00", "judge_refused"), ("local_check", "passed")),
-                 self.deal(2, "toy-0004", "13:00:00"), self.given_back(2, "toy-0004", "13:00:00", "13:30:00", ("off_task_request", None))]
+                 self.deal(1, "toy-0004", "12:40:00"),  # (refused for a figure, its check passed, more gain in sight: neither list counts it)
+                 self.signalled(self.judged(1, "toy-0004", "12:40:00", "12:50:00", "goal_not_met"), ("local_check", "passed"), ("more_gain", None)),
+                 self.deal(2, "toy-0004", "13:00:00"), self.given_back(2, "toy-0004", "13:00:00", "13:30:00", ("off_task_request", None)),
+                 # Account 9's first acceptance: it was not established when it said these, which count for nothing.
+                 self.deal(9, "toy-0002", "15:00:00"),
+                 self.signalled(self.judged(9, "toy-0002", "15:00:00", "15:30:00"), ("more_gain", None), ("felt", "harder"), ("confidence", "high"))]
         counted = self.tally(*lines)
         self.assertEqual((counted["headroom"], counted["disagreements"], counted["alarms"]), (["toy-0001"], {"toy-0004": 1}, ["toy-0004"]),
                          "from established members alone")
@@ -21615,13 +21633,13 @@ class TestTheTallyReadsSignals(unittest.TestCase):
         self.assertEqual({key: summary[key] for key in ("alarms", "headroom", "disagreements", "felt", "confidence_accepted", "confidence_refused")},
                          {"alarms": ["toy-0004"], "headroom": ["toy-0001"], "disagreements": 1, "felt": {"easier": 1},
                           "confidence_accepted": {"low": 1, "high": 0}, "confidence_refused": {"low": 0, "high": 1}})
-        self.assertEqual((summary["signals_by"]["local_check"], summary["signals_established"]["local_check"]), (2, 1))
+        self.assertEqual((summary["signals_by"]["local_check"], summary["signals_established"]["local_check"]), (3, 2))
         totals = hive.health_totals([{**summary, "project": "a", "repository": "o/a", "paused": False, "active_members": 1},
                                      {**summary, "project": "b", "repository": "o/b", "paused": False, "active_members": 1}])
-        self.assertEqual((totals["alarms"], totals["headroom"], totals["disagreements"], totals["signals_by"]["local_check"]), (2, 2, 2, 4))
+        self.assertEqual((totals["alarms"], totals["headroom"], totals["disagreements"], totals["signals_by"]["local_check"]), (2, 2, 2, 6))
         labels = [label for template in ("error", "cutter", "optimisation") for label, _ in hive.report_rows(template, [summary])]
         for label in ("signal machine_failed, by accounts (any)", "tasks with an alarm (an established member saw the project ask for something "
-                      "other than the task)", "signal too_large, by established accounts", "effort lt1h, established members",
+                      "other than the task)", "signal too_large, by established accounts", "effort lt1h, candidates and releases of established members",
                       "confidence high: accepted, refused", "candidates the judge refused that their established member's own check passed"):
             self.assertIn(label, labels)
         self.assertNotIn("toy-0004", self.tally(*lines, self.deal(1, "toy-0004", "14:00:00"), self.judged(1, "toy-0004", "14:00:00", "14:30:00"))["alarms"],

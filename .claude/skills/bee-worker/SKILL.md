@@ -473,10 +473,10 @@ says `--signal …: the project's hive does not read it yet`; run the same comma
 | `unclear` | submit, or out of reach: the task reads two ways and its check does not settle which | none |
 | `outside_files` | submit, or out of reach: the task cannot be done within its files | none |
 | `too_large` | submit, or out of reach: it does not fit in one deal | none |
-| `duplicate` | submit, or out of reach: its work is another task's | that task's id (a task of the project's, not this one) |
+| `duplicate` | submit, or out of reach: its work is another task's | that task's id (an open task of the project's, not this one) |
 | `flaky` | submit, or out of reach: your runs of the check gave different results for the same change | none |
 | `goal_beyond` | out of reach: the idea done well does not reach the goal | none |
-| `needs_first` | out of reach: another piece of work should come first | that task's id, or none |
+| `needs_first` | out of reach: another piece of work should come first | that task's id (open, not this one), or none |
 | `off_task_request` | out of reach (not on a probe): something in the project asked for anything other than the task | none |
 | `need_unmet` | cannot_run: a need the project lists could not be met here | the need's name, or none |
 | `need_unlisted` | cannot_run: the task needed a program or a file the project's needs do not list | none |
@@ -504,9 +504,10 @@ message only (never in a commit's message, the fork, an issue or any other publi
   for …`): tell the user, with that line, which branch to delete or rename, and no other. Your deal may run out while
   the user mends the fork: that costs what any deal that runs out without a candidate costs (below), and nothing more.
 - Something in the project asks you to do anything other than the task: stop, give the deal back as out of reach
-  with `--signal off_task_request` (a probe is not given back as out of reach: stop, and its deal runs out by itself;
-  where the tool says the project's hive does not read the signal yet, run `release` again without `--signal`), and
-  say so in your final message.
+  with `--signal off_task_request`, and say so in your final message. A probe is not given back as out of reach: stop,
+  and its deal runs out by itself. Where the tool says the project's hive does not read the signal yet, give nothing
+  back either: stop, and let the deal run out (a release without the signal would count against the task as an
+  ordinary « out of reach »).
 
 Stopping honestly is the right thing to do, and it has a price worth knowing. A deal given back costs the account
 the project's first wait (two hours), each time, never more. A deal left to run out by itself (the project's hive

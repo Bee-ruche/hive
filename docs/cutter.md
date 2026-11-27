@@ -85,9 +85,10 @@ The rules that keep the ledger's history true:
   the tree of cuts, each task under the one it was cut from, what each task waits for, and how each stands (open,
   dealt, done, closed); a branch whose tasks are all done or closed is one row, and on a large map the rows that lead to
   a task left to do come first. A task that needs a closed one is counted: it will wait for ever. Tasks with no links
-  are one flat list, those left to do first. Beside it, the tasks that need attention: the stuck ones, the others
-  refused or run out twice or more (refusals by reason), the runs spent without an answer by kind, and whether the
-  project starves. Numbers, codes and task ids, from the tally and what `health` adds up of it.
+  are one flat list, those left to do first. Beside it, the tasks that need attention: the alarms (tasks on which a
+  member saw the project ask for something else), the stuck ones, the others refused or run out twice or more
+  (refusals by reason), the codes members reported ("Signals"), the runs spent without an answer by kind, and whether
+  the project starves. Numbers, codes and task ids, from the tally and what `health` adds up of it.
 
 ## Probes
 
@@ -174,9 +175,10 @@ below.
   counts for nothing there: many of them say the project's sandbox is hard to run, which is for the architect.
 - **How to read it.** A release is its member's word: the hive checks nothing of the try, nor whether there was one,
   and a release costs its member a wait and no work. It is cheap evidence, weaker than a refusal, which the judge
-  measured. Given back as out of reach by several established members, a task's goal is likely beyond what the idea
-  gives, or the task too large for a deal: cut it smaller, or turn the idea into a probe ("Probes"), whose answer
-  records the judge's figures. One release from one member says little.
+  measured. Given back as out of reach by several established members, a task needs cutting again as their signals
+  say ("Signals"); without one, its goal is likely beyond what the idea gives, or the task too large for a deal: cut
+  it smaller, or turn the idea into a probe ("Probes"), whose answer records the judge's figures. One release from
+  one member says little.
 - **A probe is never given back as out of reach**: its answer is a correct try, which the worker submits. It may be
   given back because the machine cannot run the sandbox.
 - **The pin.** A hive at an older commit reads no release: the worker's tool then gives nothing back, and the deal runs
@@ -186,9 +188,9 @@ below.
 
 A member may add up to four signals to its candidate or to its release: codes of the hive's own, each with at most
 one value of a fixed kind ([protocol.md](protocol.md), "What a worker pushes"). They change nothing the hive decides
-(no verdict, wait, deal, day's count, « stuck » or hint reads one), and no worker reads another's. They are evidence
-for the cutter, weaker than the judge's figures and the ledger's outcomes: a signal is its member's word, said at no
-cost beyond the deal it rides on.
+(no verdict, wait, deal, day's count, « stuck » or hint reads one), and the feed and the worker's tool show no worker
+another's (the ledger, which holds them, is public). They are evidence for the cutter, weaker than the judge's figures
+and the ledger's outcomes: a signal is its member's word, said at no cost beyond the deal it rides on.
 
 - **What the tally gives**, for each task: `signals`, each code with `by` (how many accounts said it), `by_established`
   (of them, those with an acceptance on the project before they said it last) and `values` (the latest values of the
@@ -196,21 +198,24 @@ cost beyond the deal it rides on.
   whose member said the task, not its goal, stood in the way (`outside_files`, `unclear`, `needs_first`, `duplicate`,
   `too_large`, `off_task_request`). A probe's answers carry the member's `outlook` (`promising`, `dead_end`,
   `inconclusive`) and `effort` where it said them: a dead end recorded with its cost. Project-wide, from established
-  members alone: `headroom` (tasks accepted with `more_gain`), `disagreements` (per task, candidates the judge refused,
-  `judge_refused`, that their member's own check passed: read per judge kind, since a reference judge draws its cases
-  when it judges and a relay worker cannot measure on the judge's data), `alarms` (tasks left to do on which a member
-  saw the project ask for something other than the task) and `calibration` (`felt` and `effort` by size, and the
-  verdicts by `confidence`). Each account counts once per task and code; an account with no acceptance before it
-  said a code counts in `by` and in nothing else, so throwaway accounts steer nothing. `health` adds them up.
-- **What the deterministic cutter does with them**: C1 alone ("The deterministic cutter", below). It never cuts a
-  task, sets a goal or closes one because of a signal; it only leaves to the AI cutter a stuck task it would otherwise
-  halve.
+  members alone: `headroom` (tasks accepted with `more_gain`), `disagreements` (per task, candidates the judge examined
+  and refused, `judge_refused`, that their member's own check passed: read per judge kind, since a reference judge
+  draws its cases when it judges and a relay worker cannot measure on the judge's data), `alarms` (tasks left to do on
+  which a member saw the project ask for something other than the task) and `calibration` (`felt` and `effort` by
+  size, and the verdicts by `confidence`). In `signals`, each account counts once per task and code; `disagreements`
+  and `calibration` count candidates and releases, so one member can fill them: read them beside the `by_established`
+  counts. An account with no acceptance before it said a code counts in `by` and in nothing else, so throwaway
+  accounts steer nothing. `health` adds them up.
+- **What the deterministic cutter does with them**: C1 alone ("The deterministic cutter", below). It closes only what
+  the stuck rule closes; a signal only changes who cuts the task again: the AI cutter, in place of any rule (a lower
+  goal, or none). It never cuts a task or sets a goal because of a signal.
 - **How to read them.** The judge's figures first, then the ledger's outcomes (refusals, deals run out, releases),
   then the established members' signals; the others' never. Several established members who say `too_large` or
   `splits` of a task tell how to cut it again; `unclear`, that its context needs rewriting; `needs_first`, that a task
   should come before it; `duplicate`, that two tasks overlap (read both lines yourself). `headroom` sends an idea to a
-  probe, never to a work task's threshold: that would be a guess. An alarm is for the architect, who reads the task and
-  its files. A later task states what was found in the cutter's own words and counts (« two members gave it back as
+  probe, never to a work task's threshold: that would be a guess; `goal_beyond` too sends the idea to a probe, or to the
+  architect, and the stuck rule's halving stays the only rule that lowers a goal. An alarm is for the architect, who
+  reads the task and its files; the AI cutter writes no task on those files until then. A later task states what was found in the cutter's own words and counts (« two members gave it back as
   too large »), never a member's.
 
 ## The backlog and the charter
@@ -274,7 +279,9 @@ GitHub starts a project's run a few times a day ([hosting.md](hosting.md), "GitH
    - A task is **stuck** when at least three distinct members **who have had a candidate accepted elsewhere** on the
      project, before they failed on this task, failed on it: the judge examined their candidate and refused it
      (`judge_refused`, `goal_not_met`, `requirement_not_met`), they let a deal on it run out, or they gave a deal on it
-     back as out of their reach. A failure from an account that never had an acceptance, or from before its first
+     back as out of their reach (whatever its signal: `too_large`, `duplicate` and `off_task_request` included; a
+     stuck task most of whose failures are such signalled releases goes to the AI cutter, C1). A failure from an
+     account that never had an acceptance, or from before its first
      one, never counts, so throwaway accounts cannot make a task stuck; a `not_proven` refusal (the judge's stopwatch
      could not give a proof) is not a failure, nor is a deal given back because a machine cannot run the project's
      sandbox. The feed's `hint` is another count: the members with an acceptance, at any time, whose candidate the
@@ -559,7 +566,7 @@ runs the publisher on such a project.
 - A deal weighted by the cutter (recruitment in proportion to what an area yields, a share of scouts, scores that
   evaporate, a quorum before committing): a change of the protocol.
 - A volunteer's agent says why it gave a task back, or what it saw, in signals ("Signals"), with no evidence and at
-  the release's flat cost: the founder's choice, since a free way out with a code is a free way out. A probe that
+  the release's flat cost, signalled or not (the founder's choice: a signal never makes a release cheaper). A probe that
   cannot be tried within its files is not given back yet (its deal runs out): a change of the protocol, later.
 - Rules on signals beyond C1, each gated on a measure of the ledgers: a task made stuck by two established members
   who agree on one code (gate: how many such tasks were later accepted without a cut); a probe at the floor on the
@@ -595,3 +602,6 @@ runs the publisher on such a project.
 7. Cutting by trusted accounts: the cut duty, its proposal held to the gate in the project's run, the publisher
    (`hive.py publish-cut`), and both sides in the cutter's guide. **Done** in the hive. Moving a pilot onto it (a
    trusted account cutting, the architect's schedule running the publisher): not yet.
+8. The members' signals: codes beside a candidate or a release, recorded on the ledger and changing nothing the hive
+   decides; read by the tally, `health`, the page and the cutter's guide; C1 in the deterministic cutter ("Signals").
+   **Done** in the hive; a project takes them when its caller names a commit that holds them.

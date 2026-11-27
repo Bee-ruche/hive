@@ -106,9 +106,9 @@ Hive-Because: out_of_reach
   | Code | Said on | Value |
   | --- | --- | --- |
   | `goal_beyond`, `off_task_request` | a release `out_of_reach` | none |
-  | `needs_first` | a release `out_of_reach` | a task of the project's, or none |
+  | `needs_first` | a release `out_of_reach` | an open task of the project's other than this one, or none |
   | `outside_files`, `unclear`, `too_large`, `flaky` | a candidate, a release `out_of_reach` | none |
-  | `duplicate` | a candidate, a release `out_of_reach` | a task of the project's, not this one |
+  | `duplicate` | a candidate, a release `out_of_reach` | an open task of the project's other than this one |
   | `splits` | a candidate, a release `out_of_reach` | a whole number from 2 to 8 |
   | `felt` | a candidate, a release `out_of_reach` | `easier`, `as_sized`, `harder` |
   | `effort` | a candidate, a release `out_of_reach` | `lt15m`, `lt1h`, `lt3h`, `ge3h` (the agent's wall clock on the deal) |
@@ -128,9 +128,9 @@ Hive-Because: out_of_reach
   unknown code, a code beside the wrong kind of ending, a value of another kind) is dropped, and an unknown code
   counts for nothing else; a code said twice drops both; more than four of the hive's codes drops them all; and the
   candidate or the release stands as it would without them. A task or a need a signal names is held against the
-  project's file and tasks as the run reads them, which may have changed since the worker's command did. The signals that hold go on the
-  ledger's line for that ending ("The ledger and the feed"), for the project's cutter and page; no worker reads
-  another's. A loophole a worker finds in the judge (a way to pass the check without doing the task) is no signal: the
+  project's file and tasks as the run reads them, which may have changed since the worker's command did. The signals
+  that hold go on the ledger's line for that ending ("The ledger and the feed"), for the project's cutter and page.
+  The ledger is public, but the feed and the worker's tool show no worker another's signals. A loophole a worker finds in the judge (a way to pass the check without doing the task) is no signal: the
   worker tells its owner, who reports it privately ([SECURITY.md](../SECURITY.md)).
 
 A key that appears twice, an unknown action or a malformed value means "no marker": the commit is ignored.
