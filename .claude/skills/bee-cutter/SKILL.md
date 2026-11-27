@@ -96,7 +96,10 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   task, not its goal, stood in the way, with `signals`: for each of the six codes C1 reads (`duplicate`, `needs_first`,
   `off_task_request`, `outside_files`, `too_large`, `unclear`), how many established members said it on the task, on
   any line, not only the releases C1 counted). These are yours:
-  cut them again ("Writing tasks"); a `signalled` one as its codes say (below, "What members signalled").
+  cut them again ("Writing tasks"); a `signalled` one as its codes say (below, "What members signalled"). **Cut the
+  `signalled` ones first**, before any task you write because the project is short: no rule will cut them, and the
+  tally keeps listing them (`signalled`: closed by C1, no task cut from them yet) in later cycles until one of yours
+  names them as its `parent`.
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
   `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
   `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's quiet
@@ -110,8 +113,8 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
 
-If `short` is 0 and `for_the_cutter` is empty, write nothing of your own: publish the proposal if it changes
-anything, and report. The same if the charter or the judge leaves nothing you may write (a project whose judge
+If `short` is 0, `for_the_cutter` is empty and the tally's `signalled` is empty, write nothing of your own: publish
+the proposal if it changes anything, and report. The same if the charter or the judge leaves nothing you may write (a project whose judge
 checks no piece left to do): publish nothing that does not change, and say in your report what the architect or the
 judge's author must add.
 
@@ -125,9 +128,9 @@ asks).
 
 ## Writing tasks
 
-Write at most `short` new tasks, plus one cut for each task of `for_the_cutter`, and never more lines than
-`cutter.changes` (in `hive/project.json`, 10 if absent) with what `hive cut` already added and closed. Fewer good
-tasks are worth more than many vague ones.
+Write at most `short` new tasks, plus one cut for each task of `for_the_cutter` and of the tally's `signalled` (those
+first), and never more lines than `cutter.changes` (in `hive/project.json`, 10 if absent) with what `hive cut` already
+added and closed. Fewer good tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
 `files`, `size`, `tier`, `goal`, `options` when it applies, `context`, then, when they apply, `parent` (the stuck

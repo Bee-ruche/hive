@@ -21599,6 +21599,25 @@ class TestTheTallyReadsSignals(unittest.TestCase):
         self.assertEqual((counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), (4, 2))
         self.assertEqual([entry["from"] for entry in hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)[1]["added"]],
                          ["easier"], "a tie is no majority")
+        three = [*tie[:-1], self.given_back(4, t, "13:00:00", "13:30:00", ("duplicate", "toy-0001"))]
+        counted = self.tally(*three)
+        self.assertEqual((counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), (4, 3))
+        self.assertEqual([entry["because"] for entry in hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)[1]["for_the_cutter"]],
+                         ["signalled"], "three of four is")
+        # Once the cut is published (the task closed), the tally lists it for the AI cutter until a task names it as its parent.
+        closed = {**self.TASKS, t: {**self.TASKS[t], "closed": True}}
+        lines_of = [line for line in map(hive.tally_line, three) if line]
+        listed = hive.tally(closed, lines_of, hive.parse_iso(self.at("20:00:00")))
+        self.assertEqual(listed["signalled"], [t])
+        summary = hive.tally_sums(listed)
+        self.assertEqual(summary["signalled"], [t], "health names it, as it names the stuck tasks")
+        totals = hive.health_totals([{**summary, "project": p, "repository": f"o/{p}", "paused": False, "active_members": 1} for p in ("a", "b")])
+        self.assertEqual(totals["signalled"], 2, "the totals count them")
+        tie_lines = [line for line in map(hive.tally_line, tie) if line]
+        self.assertEqual(hive.tally(closed, tie_lines, hive.parse_iso(self.at("20:00:00")))["signalled"], [], "a tie is no majority here either")
+        cut_again = {**closed, "toy-0009": {"id": "toy-0009", "title": "Smaller", "files": ["lib.c"], "parent": t}}
+        self.assertEqual(hive.tally(cut_again, lines_of, hive.parse_iso(self.at("20:00:00")))["signalled"], [])
+        self.assertEqual(self.tally(*three)["signalled"], [], "a task still open is the stuck rule's, not this list's")
         # One of three: halved as before. A goal_beyond says the goal stood in the way, and is no C1 code.
         lines[-5] = self.given_back(2, t, "11:00:00", "11:30:00", ("goal_beyond", None))
         counted = self.tally(*lines)
@@ -21637,6 +21656,17 @@ class TestTheTallyReadsSignals(unittest.TestCase):
         totals = hive.health_totals([{**summary, "project": "a", "repository": "o/a", "paused": False, "active_members": 1},
                                      {**summary, "project": "b", "repository": "o/b", "paused": False, "active_members": 1}])
         self.assertEqual((totals["alarms"], totals["headroom"], totals["disagreements"], totals["signals_by"]["local_check"]), (2, 2, 2, 6))
+        # What the report prints: a project's column names its task ids, as « stuck tasks » does; the totals count them.
+        rows = dict(hive.report_rows("cutter", [summary, totals]))
+        for label in ("tasks with an alarm (an established member saw the project ask for something other than the task)",
+                      "tasks accepted with more gain in sight", "stuck tasks"):
+            self.assertIsInstance(rows[label](summary), list, label)
+        cells = [hive.report_cell(rows[label](totals)) for label in ("tasks with an alarm (an established member saw the project ask for "
+                                                                    "something other than the task)", "tasks accepted with more gain in sight",
+                                                                    "tasks closed for the AI cutter by C1, not cut again yet")]
+        self.assertEqual(cells, ["2", "2", "0"], "the totals count them")
+        self.assertEqual(hive.report_cell(rows["tasks with an alarm (an established member saw the project ask for something other than "
+                                               "the task)"](summary)), "toy-0004")
         labels = [label for template in ("error", "cutter", "optimisation") for label, _ in hive.report_rows(template, [summary])]
         for label in ("signal machine_failed, by accounts (any)", "tasks with an alarm (an established member saw the project ask for something "
                       "other than the task)", "signal too_large, by established accounts", "effort lt1h, candidates and releases of established members",

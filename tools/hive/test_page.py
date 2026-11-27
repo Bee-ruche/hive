@@ -2694,6 +2694,24 @@ class TestAttention(Case):
         self.assertNotIn("login", json.dumps(attention), "no member is named")
         self.assertNotIn("telepathy", seen.said, "a code not the hive's own is nothing")
 
+    def test_a_task_closed_for_the_cutter_by_c1_is_shown_until_it_is_cut_again(self):
+        lines = self.lines()
+        for position in (-1, -3):  # two of the three failures on toy-0001: releases saying the task stood in the way
+            verdict = lines[position]
+            lines[position] = {"type": "expired", "at": verdict["at"], "task": verdict["task"], "deal": verdict["deal"],
+                               "member_id": verdict["member_id"], "fault": False, "released": "out_of_reach", "release": "e" * 40,
+                               "signals": [{"code": "too_large"}]}
+        self.ledger(lines)
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        closed = [{**self.TASKS[0], "closed": True}, *self.TASKS[1:]]
+        files = self.make("--tasks", self.tasks(closed))
+        attention = self.summary(files)["attention"]
+        self.assertEqual(attention["signalled"], [{"task": "toy-0001", "title": "Make f0 faster"}])
+        self.assertIn("Closed, to be cut again by the cutter", self.harmless(files).said)
+        smaller = {"id": "toy-0006", "title": "Smaller", "files": ["lib.c"], "parent": "toy-0001"}
+        files = self.make("--tasks", self.tasks([*closed, smaller]))
+        self.assertEqual(self.summary(files)["attention"]["signalled"], [], "cut again: its child holds the work now")
+
     def test_nothing_left_to_do_is_said_first(self):
         self.ledger(self.lines()[:6])
         self.put("feed.json", {"project": "toy", "tasks": []})

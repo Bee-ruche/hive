@@ -202,7 +202,8 @@ and the ledger's outcomes: a signal is its member's word, said at no cost beyond
   and refused, `judge_refused`, that their member's own check passed: read per judge kind, since a reference judge
   draws its cases when it judges and a relay worker cannot measure on the judge's data), `alarms` (tasks left to do on
   which a member saw the project ask for something other than the task) and `calibration` (`felt` and `effort` by
-  size, and the verdicts by `confidence`). In `signals`, each account counts once per task and code; `disagreements`
+  size, and the verdicts by `confidence`); and `signalled`, the tasks C1 closed for the AI cutter from which no task
+  has been cut yet. In `signals`, each account counts once per task and code; `disagreements`
   and `calibration` count candidates and releases, so one member can fill them: read them beside the `by_established`
   counts. An account with no acceptance before it said a code counts in `by` and in nothing else, so throwaway
   accounts steer nothing. `health` adds them up.
@@ -247,7 +248,9 @@ within `cutter.changes` lines added or closed:
    **C1**: so is a stuck task more than half of whose counted failures are releases whose member said the task, not
    its goal, stood in the way (`signalled_failures`, "Signals"): it is closed and left to the AI cutter as
    `signalled`, with how many established members said each such code, and never cut again with a lower goal by rule,
-   since halving a goal mends no task that is unclear, too large, another's, or that needs something first.
+   since halving a goal mends no task that is unclear, too large, another's, or that needs something first. Such a
+   task has no rule left to cut it: the AI cutter takes it first, in that cycle from `for_the_cutter` and later from
+   the tally's `signalled` (closed by C1, no task cut from it yet), and the page and `health` show it to the architect.
    A judge that measures the whole program is not split by function: a smaller part of a file is not a smaller
    task when the figure is the program's. Asking less of the same part is.
 2. **The backlog's tasks are published** as said above, each once its parent is closed or done, its files are on the

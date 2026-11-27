@@ -463,7 +463,10 @@ def attention(tallied, titles):
                              "others": sum(counts["by"] - counts["by_established"] for counts in row["signals"].values())})
     reported.sort(key=lambda item: -sum(s["count"] for s in item["signals"]))
     alarms = [{"task": task_id, "title": titles.get(task_id, "")} for task_id in tallied.get("alarms", ())]
+    # The tasks the deterministic cutter closed for the AI cutter (C1) and that nobody has cut again yet.
+    signalled = [{"task": task_id, "title": titles.get(task_id, "")} for task_id in tallied.get("signalled", ())]
     return {"alarms": alarms[:ATTENTION_SHOWN], "alarms_left_out": max(0, len(alarms) - ATTENTION_SHOWN),
+            "signalled": signalled[:ATTENTION_SHOWN], "signalled_left_out": max(0, len(signalled) - ATTENTION_SHOWN),
             "reported": reported[:ATTENTION_SHOWN], "reported_left_out": max(0, len(reported) - ATTENTION_SHOWN),
             "stuck": stuck[:ATTENTION_SHOWN], "stuck_left_out": max(0, len(stuck) - ATTENTION_SHOWN), "stuck_members": tallied["stuck_members"],
             "often": often[:ATTENTION_SHOWN], "often_left_out": max(0, len(often) - ATTENTION_SHOWN), "often_least": OFTEN,
@@ -1351,6 +1354,11 @@ def attention_block(attention):
                               ". A member with a contribution accepted on the project gave the task back because something in the "
                               "project (its text, a file) asked for something else. Read the task and its files."
                               + left_out(attention["alarms_left_out"], "Other tasks")]))
+    if attention.get("signalled"):
+        block.append(el("p", [el("strong", "Closed, to be cut again by the cutter: "), codes([s["task"] for s in attention["signalled"]]),
+                              ". These tasks were stuck, and most members who failed on them said the task, not its goal, stood in the "
+                              "way (unclear, too large, another's, needing something first): no rule cuts them again; the project's "
+                              "cutter, or its architect, does." + left_out(attention["signalled_left_out"], "Other tasks")]))
     if attention["starving"]:
         block.append(el("p", el("strong", "Nothing is left to do: every task is done or closed. Volunteers who ask are dealt nothing "
                                           "until the project publishes new tasks.")))

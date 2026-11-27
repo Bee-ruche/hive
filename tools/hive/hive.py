@@ -5412,7 +5412,12 @@ def tally(tasks, lines, instant, active=None, taken=None):
             "starving": not left, "active_members": active, "tip": tip,
             "headroom": sorted(gathered["headroom"]), "disagreements": dict(sorted(gathered["disagreements"].items())),
             "alarms": sorted(task_id for task_id in gathered["alarms"] if task_id in left),
-            "calibration": {"felt": gathered["felt"], "effort": gathered["effort"], "confidence": gathered["confidence"]}}
+            "calibration": {"felt": gathered["felt"], "effort": gathered["effort"], "confidence": gathered["confidence"]},
+            # The tasks C1 left to the AI cutter and that wait for it: closed, stuck by the counts, most of their failures
+            # signalled, and no task of the file cut from them yet (none names them as its parent).
+            "signalled": sorted(task_id for task_id, row in rows.items() if row["status"] == "closed"
+                                and row["established_failures"] >= STUCK_MEMBERS and 2 * row["signalled_failures"] > row["established_failures"]
+                                and task_id not in {task.get("parent") for task in tasks.values()})}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -7446,6 +7451,7 @@ def tally_sums(tallied):
                # established member saw the project ask for something other than the task), those accepted with more gain
                # in sight, and the candidates the judge refused that their established member's own check passed.
                "signals_by": {}, "signals_established": {}, "alarms": list(tallied.get("alarms", ())),
+               "signalled": list(tallied.get("signalled", ())),
                "headroom": list(tallied.get("headroom", ())), "disagreements": sum(tallied.get("disagreements", {}).values()),
                "felt": {}, "effort": {}, "confidence_accepted": {}, "confidence_refused": {}}
     calibration = tallied.get("calibration") or {}
@@ -7485,7 +7491,7 @@ def health_totals(summaries):
     projects'; the stuck tasks counted; the projects that starve, and those paused, named by their repositories; the
     hours to accept of all of them together. The shares are worked out of the sums, never averaged."""
     totals = {"projects": len(summaries), "stuck": 0, "short_of_members": 0, "starving": [], "paused": [], "by_kind": {}, "by_size": {}, "hours_to_accept": [],
-              "alarms": 0, "headroom": 0,
+              "alarms": 0, "headroom": 0, "signalled": 0,
               **dict.fromkeys(HEALTH_SUMS, 0), **{table: {} for table in HEALTH_TABLES}}
     for summary in summaries:
         for key in HEALTH_SUMS:
@@ -7502,6 +7508,7 @@ def health_totals(summaries):
         totals["short_of_members"] += len(summary["short_of_members"])
         totals["alarms"] += len(summary["alarms"])  # (the tasks of each project with an alarm, counted)
         totals["headroom"] += len(summary["headroom"])
+        totals["signalled"] += len(summary["signalled"])
         totals["starving"] += [summary["repository"]] if summary["starving"] else []
         totals["paused"] += [summary["repository"]] if summary["paused"] else []
         totals["hours_to_accept"] += summary["hours_to_accept"]
@@ -7650,6 +7657,7 @@ def report_rows(template, summaries):
             ("starving", plain("starving")), ("stuck tasks", plain("stuck")), ("paused", plain("paused")), *by_size, *by_kind,
             ("tasks with an alarm (an established member saw the project ask for something other than the task)", plain("alarms")),
             ("tasks accepted with more gain in sight", plain("headroom")),
+            ("tasks closed for the AI cutter by C1, not cut again yet", plain("signalled")),
             *[(f"signal {code}, by established accounts", count("signals_established", code))
               for code in ("goal_beyond", "outside_files", "unclear", "needs_first", "too_large", "duplicate", "off_task_request", "splits")],
             *[(f"felt {word}, candidates and releases of established members", count("felt", word)) for word in SIGNALS["felt"][2]]]
