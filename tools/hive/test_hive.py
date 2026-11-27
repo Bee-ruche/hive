@@ -16723,13 +16723,15 @@ class TestTheDoctor(Base):
                 (seed / name).parent.mkdir(parents=True, exist_ok=True)
                 (seed / name).write_text("int x;\n")
                 os.chmod(seed / name, 0o755)
+            os.chmod(seed / "lib.c", 0o755)  # (a file the published branch holds as a plain one)
         self.tip_change(change)
         code, lines = self.doctor()
         self.assertEqual((code, self.word(lines, "modes")), (0, "NOTE"), lines)
         text = self.text(lines, "modes")
-        self.assertRegex(text, r"\A2 file\(s\) of \S+ executable that \S+ holds as plain files or not at all ")
+        self.assertRegex(text, r"\A3 file\(s\) of \S+ executable that \S+ holds as plain files or not at all ")
         self.assertIn("| grep 'mode 100755'", text)
         self.assertNotIn("units/", text, "no name a contributor gave")
+        self.assertNotIn("lib.c", text)
 
     def test_a_clone_another_account_owns_is_said_so(self):
         """git reads no repository another account owns (« detected dubious ownership »: a folder Docker Desktop shows
