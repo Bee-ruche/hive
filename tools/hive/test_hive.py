@@ -16721,8 +16721,8 @@ class TestTheDoctor(Base):
                 self.assertRaises(SystemExit) as ended:
             hive.main(["doctor", "--project", "Bee-ruche/toy", "--repo", str(self.clone()), "--registry", str(self.registry)])
         self.assertEqual(ended.exception.code, 2)
-        self.assertRegex(err.getvalue(), r"\Ahive: --repo \(/[^\n]*\) belongs to another account than the one this command runs as, and git "
-                                         r"reads no repository it does not own[^\n]*\(cp -a\)[^\n]*\n\Z")
+        self.assertRegex(err.getvalue(), r"\Ahive: --repo belongs to another account than this command's, and git reads no repository it "
+                                         r"does not own [^\n]*\(cp -a\)[^\n]*another account's: /[^\n]*\n\Z")
 
     def test_the_state_branch_missing_or_its_ledger_unreadable(self):
         self.healthy()

@@ -7943,10 +7943,10 @@ def caller_of(repo, commit):
 # the commands that then run say something else (« transport 'file' not allowed »: origin is taken for a path). The
 # tool reads no setting of the machine's, so safe.directory cannot be given it: the folder is copied, or the command
 # runs as its owner. (A folder that Docker Desktop shows a container is owned by another account.)
-OWNED_ELSEWHERE = ("{what} ({place}) belongs to another account than the one this command runs as, and git reads no repository it "
-                   "does not own (its safe.directory check, which this tool takes from no setting of the machine's): run the command "
-                   "as the account that owns it, or on a copy of it this account owns (cp -a). A folder Docker Desktop shows a "
-                   "container is owned by another account")
+# (The place comes last: a line the tool prints is cut at 400 characters, and a long place loses its end, not what to do.)
+OWNED_ELSEWHERE = ("{what} belongs to another account than this command's, and git reads no repository it does not own (safe.directory, "
+                   "which this tool takes from no setting): run the command as its owner, or on a copy this account owns (cp -a). A "
+                   "folder Docker Desktop shows a container is another account's: {place}")
 
 
 def owned_elsewhere(place):

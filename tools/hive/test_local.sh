@@ -1261,6 +1261,8 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '(`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`)' || return 1
   ! grep -q "miniz lists \`claude" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '**The models your bees declare.**' || return 1
+  # A file a worker adds is a plain one, whatever its file system shows (blackboxBee's units, 27 November 2026).
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A file you add goes into the candidate as a plain file, never an executable one' || return 1
   # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could

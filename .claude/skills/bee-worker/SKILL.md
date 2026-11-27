@@ -383,6 +383,8 @@ changes only the task's files, and runs the hive's structural checks. Then it pu
   (`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`). The hive counts it for the models the project lists, the
   feed's `models` (`feed.json` of the state you took: read it there), and as undeclared otherwise; a project adds a
   model to that list in its settings. Leave it out only if you do not know your identifier.
+- A file you add goes into the candidate as a plain file, never an executable one, whatever your file system shows; a
+  file the project holds keeps the mode it has there. Run a new script as `sh <file>`, never as `./<file>`.
 - `REFUSED (<reason>)`: nothing was committed or pushed. Fix exactly that in the files and run `submit` again.
   **At most three `submit` attempts for a task in one run**; then stop without pushing and say why. If
   `REFUSED (path_outside_task)` names files you did not mean to change, you cannot put them back without git:
