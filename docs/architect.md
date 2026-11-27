@@ -136,6 +136,20 @@ judge gives a figure they may waive ([guardians.md](guardians.md)), your cutter 
 ([cutter.md](cutter.md), "Where the cutter runs"; its prompt says whether your pinned commit holds probes), and
 [join.md](join.md), which you send to the people you invite.
 
+**A warning beside the line, wherever you post it.** Pasting the one line of join.md ("One task now") is a
+volunteer's consent: their assistant tells them in a few lines what it is about to do, and goes on without asking.
+So, wherever you post the line (a page, a message, an issue), put next to it what pasting it does, and that it is
+for a project one trusts. A text you may use, with your project's name:
+
+> **Before you paste this line:** it asks your AI assistant to work one task of `<owner/project>` for the hive, on
+> your quota. It waits in your session, up to 90 minutes each time, so keep it open. It pushes only to branches
+> named `hive/…` of your own fork, and your GitHub login and the commit are made public in the project's ledger. It
+> opens no pull request or issue and writes to no one. The project's code runs only in a sandbox with no network.
+> With the line « on this machine with Docker », Docker also builds images on your machine, and the work uses the
+> GitHub account your git pushes as. Pasting it is your consent: your assistant says what it is about to do and does
+> not ask again. Paste it only for a project you trust, after reading
+> https://github.com/Bee-ruche/hive/blob/main/docs/join.md.
+
 ## 9. Your regular work
 
 - Read what the judge accepted, on the hive's branch, before you publish it.

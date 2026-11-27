@@ -191,6 +191,7 @@ shift  # the image
 source_of() { sed -n "s|^type=bind,source=\([^,]*\),target=$1\(,readonly\)\{0,1\}\$|\1|p" "$S/mounts" | head -1; }
 cp "$S/mounts" "$S/mounts.$role"
 printf '%s\n' "$*" > "$S/args.$role"
+printf '%s\n' "$@" > "$S/argv.$role"  # (one word a line: what was one word stays one)
 case "$role" in
   probe) [ "${STUB_SWAP_ON:-}" != probe ] || swap; echo "${STUB_OWNER:-1000:1000}"; echo $(( $(date -u +%s) + ${STUB_SKEW:-0} )) ;;
   dns) exit "${STUB_DNS:-2}" ;;
@@ -548,6 +549,30 @@ STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --p
 check "submit with signals: each passed through as given, the state read-only and --state given (the codes the run reads)" eval \
   'grep -q -- "--task toy-0001 --deal d --signal confidence=high --signal unclear --state /hive/state --hand-over /hive/outbox\$" "$STUB_DIR/args.tool" \
    && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state,readonly" "$STUB_DIR/mounts.tool"'
+# submit's message from a file (--message-file), as an assistant whose shell is PowerShell writes it: a BOM and a CRLF
+# dropped, the line given to the tool as one --message word.
+printf '\357\273\277fixed the overflow in rle: two  spaces * and (parens)\r\n' > "$T/desk/hive-message.txt"
+STUB_TOOL_OUT="$(said "REFUSED (x): y")" STUB_TOOL_CODE=1 launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d \
+  --message-file hive-message.txt
+check "submit --message-file: the message given to the tool as one --message word, as written" eval \
+  '[ "$(grep -A1 -x -- --message "$STUB_DIR/argv.tool" | tail -n 1)" = "fixed the overflow in rle: two  spaces * and (parens)" ] && ! grep -q -- "--message-file" "$STUB_DIR/argv.tool"'
+for case in "both" "link" "two lines" "a quote first" "a curly quote" "too long" "too big"; do
+  words=(--message-file hive-message.txt)
+  printf 'fixed it' > "$T/desk/hive-message.txt"
+  case "$case" in
+    both) words+=(--message x); said="local.sh hive submit takes either --message or --message-file" ;;
+    link) ln -sf hive-message.txt "$T/desk/hive-mlink.txt"; words=(--message-file hive-mlink.txt); said="--message-file: a file of the session's (not a link)" ;;
+    "two lines") printf 'fixed\nit' > "$T/desk/hive-message.txt"; said="--message-file: more than one line" ;;
+    "a quote first") printf "'@ fixed it" > "$T/desk/hive-message.txt"; said="--message-file: its line begins with a letter or a digit" ;;
+    "a curly quote") printf 'fixed \342\200\231it' > "$T/desk/hive-message.txt"; said="--message-file: one line of printable ASCII" ;;
+    "too long") head -c 201 /dev/zero | tr '\0' a > "$T/desk/hive-message.txt"; said="--message-file: one line of printable ASCII, 200 characters at most" ;;
+    "too big") head -c 1025 /dev/zero | tr '\0' a > "$T/desk/hive-message.txt"; said="--message-file: more than 1024 bytes" ;;
+  esac
+  launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d "${words[@]}"
+  check "refused: submit --message-file, $case, before any container" eval 'refused 2 "$said" && nothing_ran'
+done
+rm -f "$T/desk/hive-mlink.txt" "$T/desk/hive-message.txt"
+
 STUB_TOOL_OUT="$(said "STARTED hive/work/toy-0001 at $BASE")" launch hive start --project Bee-ruche/toy --login alice --task toy-0001 --deal d
 check "start: STARTED kept for the sandbox" eval '[ "$CODE" -eq 0 ] && grep -qx "STARTED hive/work/toy-0001 at $BASE" "$HOME/.hive/started/Bee-ruche/toy"'
 STUB_TOOL_OUT="$(said "STARTED hive/work/toy-0001 at $BASE")" STUB_TOOL_CODE=3 launch hive start --project Bee-ruche/toy --login alice --task toy-0001 --deal d
@@ -767,6 +792,32 @@ check "sandbox: no network, never root, the clone, its guarded names read-only, 
    && grep -qx "type=bind,source=$CLONE/.github,target=/work/.github,readonly" "$STUB_DIR/mounts.sandbox" && grep -qx "type=bind,source=$CLONE/CLAUDE.md,target=/work/CLAUDE.md,readonly" "$STUB_DIR/mounts.sandbox" \
    && grep -qx "type=tmpfs,target=/work/.git" "$STUB_DIR/mounts.sandbox" && grep -qx "type=bind,source=$CLONE/.git/HEAD,target=/work/.git/HEAD,readonly" "$STUB_DIR/mounts.sandbox" \
    && ! grep -q "/hive/outbox\|/.git/config" "$STUB_DIR/mounts.sandbox" && grep -qx "make check" "$STUB_DIR/args.sandbox" && grep -qx "type=bind,source=$HOME/.hive/needs/bee-ruche/toy,target=/needs,readonly" "$STUB_DIR/mounts.sandbox"'
+# The sandbox's command from a file (--command-file), as an assistant whose shell is PowerShell writes it with a
+# single-quoted here-string: a BOM and a CRLF dropped, the CHECK line's fixed beginning taken off, and every byte of
+# the command, quotes curly or not, $( ), backquotes, '@, given to the sandbox's sh as one word.
+printf '\357\273\277bee/sandbox/sans-docker.sh make check; echo \342\200\230q\342\200\231 "x" $(id) \047@ `w` a  b * | tee o\r\n' > "$T/desk/hive-check.txt"
+{ printf 'sh\n-c\n'; printf '%s\n' "make check; echo $(printf '\342\200\230')q$(printf '\342\200\231') \"x\" \$(id) '@ \`w\` a  b * | tee o"; } > "$T/want-sandbox"
+launch sandbox --project Bee-ruche/toy --login alice --command-file hive-check.txt
+check "sandbox --command-file: the CHECK line's command given to the sandbox's sh as one word, every byte as written (no split, no glob)" \
+  eval '[ "$CODE" -eq 0 ] && cmp -s "$STUB_DIR/argv.sandbox" "$T/want-sandbox"'
+printf 'bee/sandbox/sans-docker.sh make check' > "$T/desk/hive-check.txt"
+for case in "both" "missing" "link" "two lines" "another beginning" "too long" "the beginning alone"; do
+  words=(--command-file hive-check.txt)
+  case "$case" in
+    both) words+=(-- make check); said="local.sh sandbox runs either the command given after -- or the one in --command-file" ;;
+    missing) words=(--command-file no-such-file.txt); said="--command-file: a file of the session's (not a link)" ;;
+    link) ln -sf hive-check.txt "$T/desk/hive-link.txt"; words=(--command-file hive-link.txt); said="--command-file: a file of the session's (not a link)" ;;
+    "two lines") printf 'bee/sandbox/sans-docker.sh make\ncheck' > "$T/desk/hive-check.txt"; said="--command-file: more than one line" ;;
+    "another beginning") printf 'make check' > "$T/desk/hive-check.txt"; said="--command-file: its line begins « bee/sandbox/sans-docker.sh »" ;;
+    "too long") { printf 'bee/sandbox/sans-docker.sh '; head -c 9000 /dev/zero | tr '\0' x; } > "$T/desk/hive-check.txt"; said="--command-file: more than 8192 bytes" ;;
+    "the beginning alone") printf 'bee/sandbox/sans-docker.sh ' > "$T/desk/hive-check.txt"; said="--command-file: its line begins « bee/sandbox/sans-docker.sh »" ;;
+  esac
+  launch sandbox --project Bee-ruche/toy --login alice "${words[@]}"
+  check "refused: sandbox --command-file, $case, before any container" eval 'refused 2 "$said" && nothing_ran'
+  printf 'bee/sandbox/sans-docker.sh make check' > "$T/desk/hive-check.txt"
+done
+rm -f "$T/desk/hive-link.txt"
+
 rm -rf "$CLONE"/.claude.created-in-sandbox.*
 ln -s /etc "$CLONE/.cursor"
 launch "${SANDBOX[@]}"
@@ -1106,12 +1157,14 @@ check "refused: a fork with nothing of the project's history" eval 'refused 2 "t
 # launcher reads stops on the login (or, for refresh, goes on to the stub), never on its words.
 DOCS_HOME="$T/docs-home"
 mkdir -p "$DOCS_HOME"
+printf 'bee/sandbox/sans-docker.sh true' > "$T/desk/hive-check.txt"  # (the file the guide's PowerShell way writes)
 grep -ho 'bash ~/\.hive/protocol/tools/hive/local\.sh [^`]*' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" \
   | grep -v 'hive <command>' | sort -u > "$T/doc-lines"
 : > "$T/doc-unread"
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
     | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<owner/project>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g' -e "s|<DIGEST>|$DIGEST|g; s|<digest>|$DIGEST|g")
+  words="${words%\'}"  # (the guide's PowerShell way gives the line between single quotes: & $bash -c '…')
   case "$words" in *"<"*) printf '%s (a placeholder this test knows no value for)\n' "$line" >> "$T/doc-unread"; continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
@@ -1134,6 +1187,7 @@ mkdir -p "$DOCS_HOME2/.hive" && cp "$T/gitconfig" "$DOCS_HOME2/.gitconfig"  # (a
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
     | sed -e 's|<PROJECT>|Bee-ruche/toy|g; s|<owner/project>|Bee-ruche/toy|g; s|<LOGIN>|alice|g; s|<your-login>|alice|g; s|<command>|true|g' -e "s|<DIGEST>|$DIGEST|g; s|<digest>|$DIGEST|g")
+  words="${words%\'}"  # (the guide's PowerShell way gives the line between single quotes: & $bash -c '…')
   case "$words" in login\ *|*"<"*) continue ;; esac
   # shellcheck disable=SC2086
   (cd "$T/desk" && HOME="$DOCS_HOME2" PATH="$BASE_PATH" timeout 60 bash "$LAUNCHER" $words < /dev/null > /dev/null 2> "$T/doc-err")
@@ -1163,8 +1217,45 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # The session's folder: the launcher refuses the clone, a folder inside it and one above it.
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'a folder inside it, or a folder above it: so not your home folder itself, `~/.hive` or `~/.hive/work`.' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | grep -q "It can reach any https host *the project's needs name, and those hosts then see your machine's address" || return 1
-  # No PowerShell command line in the volunteer's docs: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a
-  # project's text in one could end its quoting (the local way is bash, Git Bash on Windows).
+  # An assistant whose shell is PowerShell drives the launcher itself, through Git's bash, and asks the owner nothing:
+  # the launcher's words alone in its lines, and the sandbox's command, a project's text, through a here-string's file.
+  ! grep -q "stop until you have one\|stops and asks you for" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'If your shell is Windows PowerShell, run each one through that bash yourself' || return 1
+  grep -qF "\$bash = Join-Path (Split-Path (Split-Path (Split-Path (git --exec-path) -Parent) -Parent) -Parent) 'bin\\bash.exe'" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  grep -qx "    \$check = @'" "$ROOT/.claude/skills/bee-worker/SKILL.md" && grep -qx "    '@" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  grep -qx "    bee/sandbox/sans-docker.sh <the rest of the CHECK line, as it is>" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Never put a project'"'"'s command, or any text of the project or of yours, into a PowerShell line' || return 1
+  # Pasting the line is the owner's consent (the founder's word): the assistant says what it is about to do and goes
+  # on, waiting for no yes; connectors are kept and none is called, with no question; the architect posts a warning
+  # beside the line.
+  ! grep -q "wait for a yes\|No yes, no work\|waits for your yes\|let them choose one of three\|you choose between three" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'The line your owner pasted is their consent to one task of the project it names' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'You wait for no yes.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'if so, keep them, and call none of them for the hive'"'"'s work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'Pasting the line is your go-ahead for one task' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'where they are kept and none of them is called' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '> **Before you paste this line:** it asks your AI assistant to work one task' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Paste it only for a project you trust' || return 1
+  # PowerShell, the parent's read: Git's bash checked, the line's words held to their shapes before any PowerShell
+  # line, the same bash inside ($BASH), no quote at all (the message through a file too); a tool that drives the
+  # browser or the computer stops (until the founder says otherwise); the architect's warning says it is the consent.
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If `Test-Path -LiteralPath $bash` answers `False`, stop' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Before the first line, hold the words that come from the user'"'"'s line to their shapes, and stop on any other' || return 1
+  grep -qF "& \$bash -c '\$BASH ~/.hive/protocol/tools/hive/local.sh check --project <PROJECT>'" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  ! grep -q "& \$bash -c 'bash \|--message ''" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  grep -qF -- '--message-file hive-message.txt' "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'hold the project, the login and the fork'"'"'s name to their shapes' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s browser or their computer stops you' || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Pasting it is your consent' || return 1
+  # The founder's answer on connectors (« Oui, s'arrêter »): a tool that drives the browser or the computer stops the
+  # session before any work, in all three texts; the others are kept and none is called.
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their browser or their computer stops you before any work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your browser or your computer stops it, for a session without it' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their browser or their computer is no exception: it stops you there too' || return 1
+  # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
+  # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could
+  # end its quoting.
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
 check "the docs: every launcher command they give is one the launcher reads, they give check, clone, refresh, needs and sandbox, and no login step" docs_read
