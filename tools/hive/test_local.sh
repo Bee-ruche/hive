@@ -1224,14 +1224,14 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   grep -qF "\$bash = Join-Path (Split-Path (Split-Path (Split-Path (git --exec-path) -Parent) -Parent) -Parent) 'bin\\bash.exe'" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qx "    \$check = @'" "$ROOT/.claude/skills/bee-worker/SKILL.md" && grep -qx "    '@" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qx "    bee/sandbox/sans-docker.sh <the rest of the CHECK line, as it is>" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Never put a project'"'"'s command, or any text of the project, into a PowerShell line' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Never put a project'"'"'s command, or any text of the project or of yours, into a PowerShell line' || return 1
   # Pasting the line is the owner's consent (the founder's word): the assistant says what it is about to do and goes
   # on, waiting for no yes; connectors are kept and none is called, with no question; the architect posts a warning
   # beside the line.
   ! grep -q "wait for a yes\|No yes, no work\|waits for your yes\|let them choose one of three\|you choose between three" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'The line your owner pasted is their consent to one task of the project it names' || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'You wait for no yes.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'If so, keep them, and call none of them for the hive'"'"'s work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'if so, keep them, and call none of them for the hive'"'"'s work' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'Pasting the line is your go-ahead for one task' || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'where they are kept and none of them is called' || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '> **Before you paste this line:** it asks your AI assistant to work one task' || return 1
