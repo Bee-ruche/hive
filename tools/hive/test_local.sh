@@ -1247,6 +1247,11 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'hold the project, the login and the fork'"'"'s name to their shapes' || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s browser or their computer stops you' || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Pasting it is your consent' || return 1
+  # The founder's answer on connectors (« Oui, s'arrêter »): a tool that drives the browser or the computer stops the
+  # session before any work, in all three texts; the others are kept and none is called.
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their browser or their computer stops you before any work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your browser or your computer stops it, for a session without it' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their browser or their computer is no exception: it stops you there too' || return 1
   # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could

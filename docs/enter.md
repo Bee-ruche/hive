@@ -46,7 +46,8 @@ as; the pushes go to branches named `hive/…` of their fork and nowhere else, a
 public in the project's ledger; no pull request, issue or message is written to anyone, and nothing of their
 machine but the clone is shown to the project's code; the session must stay open while you wait, up to 90 minutes
 each time, and ending with nothing is likely; they can say stop at any time. Name the connectors you hold, if any,
-and say that you call none of them ("Connectors", step 2). Then go on to step 2, whose checks come before any ask:
+and say that you call none of them; a tool that drives their browser or their computer stops you before any work
+("Connectors", step 2). Then go on to step 2, whose checks come before any ask:
 one that fails stops you. The list below is what you keep to, and what you answer from when they ask; say a point
 of it unasked only where it is theirs to act on (a GitHub login to give, a project's needs to accept).
 
