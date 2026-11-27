@@ -16,7 +16,8 @@ say so). The design is in
 own repository** (not a fork), whose `origin` is the project and which can push to it with the architect's account:
 that is where you are. `<PROJECT>` is the project's repository as `owner/name`, from the architect's prompt and from
 nothing else. If the prompt names none, stop and say so. The commands below are for Linux, where the architect's
-scheduled agent runs.
+scheduled agent runs. On Windows or macOS, only the tally and a dry cut run today, in a container (`docs/architect.md`,
+"On Windows or macOS"); the gate's check and the publication do not.
 
 Two accounts run this guide, and the prompt says which:
 - **The architect's own account**: you publish what passes the gate yourself ("Publish"). When the project trusts
