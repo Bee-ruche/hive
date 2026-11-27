@@ -2,6 +2,7 @@
  "about": "The projects that run the hive, whose public state « hive.py health » reads (docs/cutter.md, \"Feedback from projects to the hive\"): their repositories on GitHub, as owner/name, each once. health reads each one's default branch (its settings and tasks) and its branch hive-state (its ledger), with no account, and sends nothing. A project is added or removed by a change of this file, as any change of this repository.",
  "projects": [
   "Bee-ruche/minizBee",
-  "Bee-ruche/cjsonRustBee"
+  "Bee-ruche/cjsonRustBee",
+  "Bee-ruche/blackboxBee"
  ]
 }

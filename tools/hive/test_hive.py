@@ -15333,7 +15333,7 @@ class TestHealth(unittest.TestCase):
                 hive.read_projects(folder)
         (folder / hive.PROJECTS_FILE).write_text("{not json")
         self.assertRaises(hive.HiveError, hive.read_projects, folder)
-        self.assertEqual(hive.read_projects(REGISTRY), ["Bee-ruche/minizBee", "Bee-ruche/cjsonRustBee"], "the hive's own list: its two test projects")
+        self.assertEqual(hive.read_projects(REGISTRY), ["Bee-ruche/minizBee", "Bee-ruche/cjsonRustBee", "Bee-ruche/blackboxBee"], "the hive's own list: its test projects")
 
     def test_the_hives_issue_templates_each_hold_one_part_for_the_numbers(self):
         for template, name in hive.REPORT_TEMPLATES.items():
