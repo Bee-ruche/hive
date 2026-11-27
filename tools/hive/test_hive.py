@@ -6091,7 +6091,9 @@ class TestVolunteerSide(Volunteer):
         with mock.patch.object(hive.subprocess, "run", side_effect=run):
             self.assertEqual(self.run_cli("setup", "--project", "Bee-ruche/toy", "--login", "alice", local=False),
                              (0, "PROJECT Bee-ruche/toy\nLOGIN alice\nUPSTREAM upstream/main\n"), self.err)
-        (listed, said), = listings
+        (fork_listed, fork_said), (listed, said) = listings  # (the fork's branches first: what forking copied, fork_copies)
+        self.assertEqual((fork_listed, fork_said["GIT_ALLOW_PROTOCOL"]),
+                         (["ls-remote", "--symref", "https://github.com/alice/toy", "HEAD", "refs/heads/*"], "https"))
         self.assertEqual((listed, said["GIT_ALLOW_PROTOCOL"]), (["ls-remote", "--symref", PROJECT_ADDRESS, "HEAD"], "https"))
         (asked, environment), = fetches
         self.assertEqual((asked[-2:], [word for word in asked if "://" in word], environment["GIT_ALLOW_PROTOCOL"]),
@@ -20891,7 +20893,7 @@ class TestAForkThatCopiedTheProjectsBranches(Volunteer):
         return hive.FORK_COPIES.format(named=named, leave=leave, them=them, state=state)
 
     def remotes(self):
-        return sh("git", "config", "--get-regexp", "^remote\.", cwd=self.alice.work, check=False).stdout
+        return sh("git", "config", "--get-regexp", r"^remote\.", cwd=self.alice.work, check=False).stdout
 
     def test_the_branches_beside_which_the_hives_cannot_be_made(self):
         self.assertEqual(hive.blocking_branches(["main", "hive", "hive-state", "hive/ready", "hive/submit", "hive/submit/toy-0001", "hive/release",
