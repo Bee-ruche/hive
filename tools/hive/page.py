@@ -452,7 +452,20 @@ def attention(tallied, titles):
             often.append({"task": task_id, "title": titles.get(task_id, ""), "times": times, "refused": reasons(refused), "expired": row["expired"],
                           "released": released})
     often.sort(key=lambda item: -item["times"])  # (a stable sort: then by id)
-    return {"stuck": stuck[:ATTENTION_SHOWN], "stuck_left_out": max(0, len(stuck) - ATTENTION_SHOWN), "stuck_members": tallied["stuck_members"],
+    # What members reported of the tasks left to do (the tally's « signals »): each code with how many established
+    # members said it, and how many other accounts said any; the most reported first. And the alarms: tasks on which an
+    # established member saw the project ask for something other than the task.
+    reported = []
+    for task_id, row in sorted(rows.items()):
+        heard = {code: counts["by_established"] for code, counts in row.get("signals", {}).items() if counts["by_established"]}
+        if row["status"] in ("open", "dealt") and heard:
+            reported.append({"task": task_id, "title": titles.get(task_id, ""), "signals": [{"code": c, "count": n} for c, n in sorted(heard.items())],
+                             "others": sum(counts["by"] - counts["by_established"] for counts in row["signals"].values())})
+    reported.sort(key=lambda item: -sum(s["count"] for s in item["signals"]))
+    alarms = [{"task": task_id, "title": titles.get(task_id, "")} for task_id in tallied.get("alarms", ())]
+    return {"alarms": alarms[:ATTENTION_SHOWN], "alarms_left_out": max(0, len(alarms) - ATTENTION_SHOWN),
+            "reported": reported[:ATTENTION_SHOWN], "reported_left_out": max(0, len(reported) - ATTENTION_SHOWN),
+            "stuck": stuck[:ATTENTION_SHOWN], "stuck_left_out": max(0, len(stuck) - ATTENTION_SHOWN), "stuck_members": tallied["stuck_members"],
             "often": often[:ATTENTION_SHOWN], "often_left_out": max(0, len(often) - ATTENTION_SHOWN), "often_least": OFTEN,
             "errors": [{"kind": kind, "count": sums["errors"][kind]} for kind in ERROR_WORDS if kind in sums["errors"]],
             "errors_on": sums["errors_on"][:ATTENTION_SHOWN], "errors_on_left_out": max(0, len(sums["errors_on"]) - ATTENTION_SHOWN),
@@ -1333,6 +1346,11 @@ def attention_block(attention):
     the stuck tasks and the rule that makes a task stuck, the other tasks refused or run out often, and the runs spent
     without an answer, by kind."""
     block = []
+    if attention.get("alarms"):
+        block.append(el("p", [el("strong", "Asked for something other than the task: "), codes([a["task"] for a in attention["alarms"]]),
+                              ". A member with a contribution accepted on the project gave the task back because something in the "
+                              "project (its text, a file) asked for something else. Read the task and its files."
+                              + left_out(attention["alarms_left_out"], "Other tasks")]))
     if attention["starving"]:
         block.append(el("p", el("strong", "Nothing is left to do: every task is done or closed. Volunteers who ask are dealt nothing "
                                           "until the project publishes new tasks.")))
@@ -1363,6 +1381,18 @@ def attention_block(attention):
                          f"cost or were given back as out of reach, {least} times or more in all, whoever the members, the most first. "
                          "What the hive or the project ended at no cost to the member is not counted. No member is named."
                          + left_out(attention["often_left_out"], "Tasks"), class_="note"))
+    if attention.get("reported") is not None:
+        block.append(el("p", el("strong", "Reported by members")))
+        if attention["reported"]:
+            rows = [[task_cell(item), [[el("code", s["code"]), f" ({s['count']:,})", "" if s is item["signals"][-1] else ", "] for s in item["signals"]],
+                     item["others"]] for item in attention["reported"]]
+            block.append(table([("Task", False), ("Codes, by members with an accepted contribution", False), ("Said by others", True)], rows))
+        else:
+            block.append(el("p", "No member with an accepted contribution reported anything of the tasks left to do.", class_="soft"))
+        block.append(el("p", "What members said of a task beside a candidate or a deal given back, as codes of the hive's own (the protocol "
+                             "lists them): a code counts each member once, and only those with a contribution accepted on the project "
+                             "before they said it are counted. A code changes nothing the hive decides. No member is named."
+                             + left_out(attention["reported_left_out"], "Tasks"), class_="note"))
     block.append(el("p", el("strong", "Runs spent without an answer")))
     if attention["errors"]:
         last = attention["errors"][-1]

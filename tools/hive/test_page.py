@@ -2669,6 +2669,31 @@ class TestAttention(Case):
         self.assertIn("Members who failed", seen.said)
         self.assertNotIn("login", json.dumps(attention), "no member is named")
 
+    def test_what_members_reported_and_the_alarms(self):
+        lines = self.lines()
+        lines[-1] = {**lines[-1], "signals": [{"code": "local_check", "value": "passed"}, {"code": "unclear"}]}  # (member 3, established)
+        given = "2026-11-12T10:00:00Z"
+        lines += [{"type": "deal", "at": given, "until": given, "task": "toy-0002", "member": "login1", "member_id": 1, "repo_id": 1001, "run": "t1"},
+                  {"type": "expired", "at": "2026-11-12T10:30:00Z", "task": "toy-0002", "deal": given, "member_id": 1, "fault": False,
+                   "released": "out_of_reach", "release": "e" * 40, "signals": [{"code": "off_task_request"}, {"code": "telepathy"}]},
+                  {"type": "deal", "at": "2026-11-12T11:00:00Z", "until": given, "task": "toy-0002", "member": "login9", "member_id": 9,
+                   "repo_id": 1009, "run": "t2"},
+                  {"type": "expired", "at": "2026-11-12T11:30:00Z", "task": "toy-0002", "deal": "2026-11-12T11:00:00Z", "member_id": 9,
+                   "fault": False, "released": "out_of_reach", "release": "f" * 40, "signals": [{"code": "unclear"}]}]
+        self.ledger(lines)
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        files = self.make("--tasks", self.tasks(self.TASKS))
+        seen = self.harmless(files)
+        attention = self.summary(files)["attention"]
+        self.assertEqual(attention["alarms"], [{"task": "toy-0002", "title": "Work in src"}])
+        self.assertEqual(attention["reported"], [
+            {"task": "toy-0001", "title": "Make f0 faster", "signals": [{"code": "local_check", "count": 1}, {"code": "unclear", "count": 1}], "others": 0},
+            {"task": "toy-0002", "title": "Work in src", "signals": [{"code": "off_task_request", "count": 1}], "others": 1}])
+        self.assertIn("Asked for something other than the task", seen.said)
+        self.assertIn("Reported by members", seen.said)
+        self.assertNotIn("login", json.dumps(attention), "no member is named")
+        self.assertNotIn("telepathy", seen.said, "a code not the hive's own is nothing")
+
     def test_nothing_left_to_do_is_said_first(self):
         self.ledger(self.lines()[:6])
         self.put("feed.json", {"project": "toy", "tasks": []})

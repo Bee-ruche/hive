@@ -92,7 +92,9 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   planned task « correct » also says on whose word it was shown to fail at the tip: `shown` `judge` (a run of the
   project's judge) or `word` (the architect's, `--failing`).
 - `for_the_cutter`: stuck tasks it closed and could not cut again (`no_rule`: a goal « correct »; `at_the_floor`,
-  `under_the_floor`: the goal cannot go lower). These are yours: cut them again ("Writing tasks").
+  `under_the_floor`: the goal cannot go lower; `signalled`: most of its failures are releases whose members said the
+  task, not its goal, stood in the way, with `signals`, how many established members said each code). These are yours:
+  cut them again ("Writing tasks"); a `signalled` one as its codes say (below, "What members signalled").
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
   `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
   `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's quiet
@@ -186,6 +188,17 @@ writes its `goal`, whatever the published lines do.
   are refused often, whose deals run out, or that members give back as out of reach (`released_for`), were too
   large or their goal too far; tasks accepted at once may be a little larger. A deal given back because a machine
   cannot run the sandbox (`cannot_run`) says nothing of the task: many of them are for the architect.
+- **What members signalled** (the tally's `signals` for each task, and its `headroom`, `disagreements`, `alarms` and
+  `calibration`; docs/cutter.md, "Signals"): codes members gave beside a candidate or a release, never text. Read the
+  judge's figures first, then the ledger's outcomes, then `by_established`; never `by` alone (accounts with no
+  acceptance before they said it). Established `too_large` or `splits` (its `values`: the parts) say to cut the task
+  smaller, into that many; `unclear`, to rewrite its context in a recut; `needs_first` (its `values`: a task), to cut
+  it again with that `needs`; `outside_files`, that its `files` are wrong; `duplicate` (a task), to read both lines and
+  close one if they overlap; `goal_beyond`, a goal too far (a lower one, or a probe). A task in `headroom` may get a
+  **probe** on its files, never a work task with a threshold: that would be a guess. `alarms`: report them to the
+  architect first, and write no task on those files in this run. `calibration`'s `felt` and `effort` by size explain
+  the acceptance shares by size; they never change a size alone. Quote counts in your own words (« two members gave
+  it back as too large »), never a member's, and say in your report which signals moved a cut.
 - **Probes** (`"kind": "probe"`, docs/cutter.md, "Probes"): for an idea whose worth is unknown and cheap to try,
   cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its

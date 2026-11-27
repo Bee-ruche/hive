@@ -5107,6 +5107,11 @@ def build_stats(ledger):
 # The tally: what the ledger says of each task, for the project's cutter (docs/cutter.md)
 
 STUCK_MEMBERS = 3  # a task is stuck once this many distinct members, each with an acceptance on the project, failed on it
+# C1 (docs/cutter.md, "The deterministic cutter"): the signals that say the task, not its goal, stood in the way. A stuck
+# task more than half of whose counted failures are releases out of reach carrying one of them is closed and left to
+# the AI cutter, never cut again with a lower goal by rule: halving a goal mends no task that is unclear, too large,
+# another's, or that needs something first.
+SIGNALLED_FAILURES = ("duplicate", "needs_first", "off_task_request", "outside_files", "too_large", "unclear")
 FAILING_REASONS = ("judge_refused", "goal_not_met", "requirement_not_met")  # the judge examined the candidate and refused it
 ERROR_KINDS = ("judge", "push", "hive", "none")  # the kinds of an « error » line (a mark): no kind is the judge's
 FIGURE_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
@@ -5147,6 +5152,8 @@ def tally_line(entry):
         # A deal its member gave back: the release's code (RELEASES); None for a deal whose time ran out, and for any
         # other value. A line at the hive's fault is no release, whatever it says.
         line["released"] = entry.get("released") if not line["fault"] and entry.get("released") in RELEASES else None
+        heard = signals_of(entry.get("signals"), line["released"]) if line["released"] else {}
+        line.update({"signals": heard} if heard else {})  # (a line with no signal reads as it did before them)
     elif entry["type"] == "error":
         kind = entry.get("kind", "judge")
         line["kind"] = kind if isinstance(kind, str) and kind in ERROR_KINDS else None
@@ -5158,7 +5165,28 @@ def tally_line(entry):
                     reason=entry.get("reason") if isinstance(entry.get("reason"), str) and entry["reason"] in REASONS else None,
                     report={name: value for name, value in report.items() if isinstance(name, str) and FIGURE_NAME.match(name) and number(value)},
                     answer=probe_answer(entry))  # a probe's answer: how many answers the probe asks; else None
+        heard = {} if is_sha(entry.get("ruling")) else signals_of(entry.get("signals"), "submit")
+        line.update({"signals": heard} if heard else {})
     return line
+
+
+def signals_of(said, where):
+    """What the tally reads of a line's signals (docs/protocol.md, "The ledger and the feed"): {code: value or None}
+    for those of the hive's own form there (signal_form), SIGNALS_MOST at most, each code once, a value the hive's word,
+    a whole number, or a string of a task id's or a need name's shape (SIGNAL_LINE's); anything else is nothing. The
+    steps that write hold them against the project before they write them: this reads a line again as data."""
+    if not isinstance(said, list) or len(said) > SIGNALS_MOST:
+        return {}
+    read = {}
+    for signal in said:
+        if not (isinstance(signal, dict) and set(signal) <= {"code", "value"} and isinstance(signal.get("code"), str)):
+            continue
+        value = signal.get("value")
+        text = None if "value" not in signal else str(value) if type(value) is int else value if isinstance(value, str) else ""
+        if signal["code"] not in read and signal_form(signal["code"], text, where) \
+                and (text is None or SIGNAL_LINE.match(f"Hive-Signal: {signal['code']} {text}")):
+            read[signal["code"]] = int(text) if SIGNALS[signal["code"]][1] == "number" else text
+    return read
 
 
 def taken_accounts(ledger, config):
@@ -5229,6 +5257,36 @@ def tally(tasks, lines, instant, active=None, taken=None):
         if line["type"] == "verdict" and line["result"] == "accepted":
             tip = {"task": line["task"], "at": line["at"], "ruling": line["ruling"], "report": dict(line["report"])}
     rows, failed, holders, latest, answered, asked = {}, {}, {}, {}, {}, {}
+    # The members' signals (signals_of): each account's latest value of each code on each task (`said`), whether each
+    # member's latest failure on a task carried a code of SIGNALLED_FAILURES (`marked`), and what the project-wide lists
+    # gather, from established members alone (`gathered`).
+    marked, said = {}, {}
+    gathered = {"headroom": set(), "disagreements": {}, "alarms": set(), "felt": {}, "effort": {}, "confidence": {}}
+
+    def established_at(member, at):
+        return member in first and first[member] < at
+
+    def heard(line, row):
+        for code, value in line.get("signals", {}).items():
+            said[line["task"]].setdefault(code, {})[line["member_id"]] = (value, line["at"])
+        if not established_at(line["member_id"], line["at"]):
+            return
+        signals = line.get("signals", {})
+        if "off_task_request" in signals:
+            gathered["alarms"].add(line["task"])
+        for code in ("felt", "effort"):
+            if code in signals:
+                counts = gathered[code].setdefault(row["size"], {})
+                counts[signals[code]] = counts.get(signals[code], 0) + 1
+        if line["type"] == "verdict" and not line.get("answer"):
+            if "more_gain" in signals and line["result"] == "accepted":
+                gathered["headroom"].add(line["task"])
+            if signals.get("local_check") == "passed" and line["result"] == "refused" and line["reason"] == "judge_refused" and line["judged"]:
+                gathered["disagreements"][line["task"]] = gathered["disagreements"].get(line["task"], 0) + 1
+            if "confidence" in signals:
+                counts = gathered["confidence"].setdefault(signals["confidence"], {"accepted": 0, "refused": 0})
+                counts["accepted" if line["result"] == "accepted" else "refused"] += 1
+
     for task_id, task in tasks.items():
         goal = task.get("goal") if isinstance(task.get("goal"), dict) else {}
         figure = goal.get("name") if goal.get("kind") == "metric" and isinstance(goal.get("name"), str) else None
@@ -5239,10 +5297,11 @@ def tally(tasks, lines, instant, active=None, taken=None):
                          "deals": 0, "members": 0,
                          "expired": 0, "expired_free": 0, "released": 0, "released_for": {}, "released_established": 0,
                          "accepted": 0, "refused": {}, "errors": {}, "established_failures": 0, "hours_to_accept": None,
-                         "best": {"figure": figure, "value": None, bound: goal[bound]} if figure and bound else None}
+                         "best": {"figure": figure, "value": None, bound: goal[bound]} if figure and bound else None,
+                         "signals": {}, "signalled_failures": 0}
         if rows[task_id]["kind"] == "probe":  # what was found, even nothing: each answer's figures, and by whom, in numbers
             rows[task_id].update(answers_asked=answers_asked(task), answers=[], answered_by=0, answered_by_established=0)
-        failed[task_id], holders[task_id] = {}, set()
+        failed[task_id], holders[task_id], marked[task_id], said[task_id] = {}, set(), {}, {}
     for line in lines:
         row = rows.get(line["task"])
         if row is None:
@@ -5263,16 +5322,20 @@ def tally(tasks, lines, instant, active=None, taken=None):
             row["released"] += 1
             row["released_for"][code] = row["released_for"].get(code, 0) + 1
             row["released_established"] += member in first and first[member] < line["at"]
+            heard(line, row)
             if code == "out_of_reach":
                 failed[line["task"]][member] = line["at"]
+                marked[line["task"]][member] = any(c in SIGNALLED_FAILURES for c in line.get("signals", {}))
         elif line["type"] == "expired":
             row["expired_free" if line["fault"] else "expired"] += 1
             if not line["fault"]:
                 failed[line["task"]][line["member_id"]] = line["at"]
+                marked[line["task"]][line["member_id"]] = False
         elif line["type"] == "error":
             kind = line["kind"] or "unknown"
             row["errors"][kind] = row["errors"].get(kind, 0) + 1
         else:
+            heard(line, row)
             if line["result"] == "accepted":
                 row["accepted"] += 1
                 if row["hours_to_accept"] is None and not line["ruling"] and line["deal"] and line["deal"] <= line["at"]:
@@ -5283,8 +5346,9 @@ def tally(tasks, lines, instant, active=None, taken=None):
                 # is weak evidence: the cutter weighs it).
                 member, at = line["member_id"], line["at"]
                 established = member in first and first[member] < at
-                if "answers" in row:
-                    row["answers"].append({"at": at, "reason": line["reason"], "report": line["report"], "established": established})
+                if "answers" in row:  # (with the member's reading of its try and its effort, where it said them)
+                    row["answers"].append({"at": at, "reason": line["reason"], "report": line["report"], "established": established,
+                                           **{code: line["signals"][code] for code in ("outlook", "effort") if code in line.get("signals", {})}})
                 answered.setdefault(line["task"], {})[member] = established or answered.get(line["task"], {}).get(member, False)
                 asked[line["task"]] = line["answer"]
             else:
@@ -5292,6 +5356,7 @@ def tally(tasks, lines, instant, active=None, taken=None):
                 row["refused"][reason] = row["refused"].get(reason, 0) + 1
                 if line["judged"] and line["reason"] in FAILING_REASONS:
                     failed[line["task"]][line["member_id"]] = line["at"]
+                    marked[line["task"]][line["member_id"]] = False
             best = row["best"]
             if best and number(line["report"].get(best["figure"])):
                 value = line["report"][best["figure"]]
@@ -5305,6 +5370,17 @@ def tally(tasks, lines, instant, active=None, taken=None):
         answered_enough = task_id in asked and sum(answered.get(task_id, {}).values()) >= asked[task_id]
         row["status"] = "done" if row["accepted"] or answered_enough else "closed" if tasks[task_id].get("closed") else "dealt" if live else "open"
         row["members"], row["established_failures"] = len(holders[task_id]), sum(member in first and first[member] < at for member, at in failed[task_id].items())
+        # Of those failures, the releases out of reach whose member said the task, not its goal, stood in the way (C1).
+        row["signalled_failures"] = sum(member in first and first[member] < at and marked[task_id].get(member, False)
+                                        for member, at in failed[task_id].items())
+        # Each code said on the task: by how many accounts, of them how many established when they said it last, and
+        # the latest values of those, counted (a value is the hive's word, a number, or the project's own string).
+        for code, by in sorted(said[task_id].items()):
+            values = {}
+            for member, (value, at) in by.items():
+                if value is not None and established_at(member, at):
+                    values[str(value)] = values.get(str(value), 0) + 1
+            row["signals"][code] = {"by": len(by), "by_established": sum(established_at(m, at) for m, (_, at) in by.items()), "values": values}
         if "answers" in row:
             # Who could still complete it: the established members who have not answered it (a member is never dealt a
             # probe it answered). Fewer than the answers it still needs, and it can no longer be done by the members the
@@ -5329,7 +5405,10 @@ def tally(tasks, lines, instant, active=None, taken=None):
     stuck = sorted(task_id for task_id in left if rows[task_id]["established_failures"] >= STUCK_MEMBERS)
     return {"as_of": until, "stuck_members": STUCK_MEMBERS, "tasks": rows, "stuck": stuck, "short_of_members": short, "left": len(left),
             "open": sum(rows[task_id]["status"] == "open" for task_id in left), "dealable": len(dealable), "areas": areas,
-            "starving": not left, "active_members": active, "tip": tip}
+            "starving": not left, "active_members": active, "tip": tip,
+            "headroom": sorted(gathered["headroom"]), "disagreements": dict(sorted(gathered["disagreements"].items())),
+            "alarms": sorted(task_id for task_id in gathered["alarms"] if task_id in left),
+            "calibration": {"felt": gathered["felt"], "effort": gathered["effort"], "confidence": gathered["confidence"]}}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -6520,6 +6599,13 @@ def cut(config, published, backlog, counted, live, done, paths, failing=(), pass
             continue
         proposal[task_id], used = {**published[task_id], "closed": True}, used + 1
         said["closed"].append({"id": task_id, "because": "stuck", "failures": rows[task_id]["established_failures"]})
+        if 2 * rows[task_id].get("signalled_failures", 0) > rows[task_id]["established_failures"]:
+            # C1: most of its failures are releases whose members said the task stood in the way, not its goal: the AI
+            # cutter's, or the architect's, with the established members' counts of what they said.
+            said["for_the_cutter"].append({"id": task_id, "because": "signalled", "signals": {
+                code: counts["by_established"] for code, counts in rows[task_id].get("signals", {}).items()
+                if code in SIGNALLED_FAILURES and counts["by_established"]}})
+            continue
         child, lowered = easier(config, published[task_id])
         if child is None:
             said["for_the_cutter"].append({"id": task_id, "because": lowered})
@@ -7195,8 +7281,13 @@ ID_CHARS = 64  # the longest project name or task id health prints
 # nothing that makes git write elsewhere (a trace) or run something else.
 ANONYMOUS_KEPT = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "HIVE_NOW", "SSL_CERT_FILE", "SSL_CERT_DIR")
 ANONYMOUS_PROXIES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")  # (in either letter case)
-HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free", "released")  # a project's numbers that add up
-HEALTH_TABLES = ("tasks", "refused", "errors", "released_for")  # a project's counts by status, by reason, by kind and by code, which add up name by name
+HEALTH_SUMS = ("active_members", "left", "dealable", "areas", "deals", "accepted", "expired", "expired_free", "released",
+               "disagreements")  # a project's numbers that add up
+# A project's counts by status, by reason, by kind and by code, which add up name by name; the members' signals: each
+# code by the accounts that said it on a task and by those of them established (summed over the tasks), what the
+# established said of a task against its size and of their effort, and their confidence beside the verdict.
+HEALTH_TABLES = ("tasks", "refused", "errors", "released_for", "signals_by", "signals_established", "felt", "effort",
+                 "confidence_accepted", "confidence_refused")
 GROUP_SUMS = ("tasks", "deals", "accepted", "refused", "expired", "answered", "out_of_reach")  # what is counted of the tasks of one kind, or of one size
 TEMPLATES_FOLDER = ".github/ISSUE_TEMPLATE"
 REPORT_TEMPLATES = {"error": "judge-or-machine-error.md", "optimisation": "hive-optimisation.md", "cutter": "cutter-feedback.md"}
@@ -7346,8 +7437,24 @@ def tally_sums(tallied):
                "short_of_members": list(tallied["short_of_members"]),
                "deals": 0, "accepted": 0, "refused": {}, "expired": 0, "expired_free": 0, "released": 0, "released_for": {}, "errors": {},
                "errors_on": [],
-               "by_kind": {}, "by_size": {}, "hours_to_accept": []}
+               "by_kind": {}, "by_size": {}, "hours_to_accept": [],
+               # The members' signals (tally): the codes, summed over the tasks; the tasks that raise an alarm (an
+               # established member saw the project ask for something other than the task), those accepted with more gain
+               # in sight, and the candidates the judge refused that their established member's own check passed.
+               "signals_by": {}, "signals_established": {}, "alarms": list(tallied.get("alarms", ())),
+               "headroom": list(tallied.get("headroom", ())), "disagreements": sum(tallied.get("disagreements", {}).values()),
+               "felt": {}, "effort": {}, "confidence_accepted": {}, "confidence_refused": {}}
+    calibration = tallied.get("calibration") or {}
+    for code in ("felt", "effort"):
+        for counts in (calibration.get(code) or {}).values():
+            for value, count in counts.items():
+                summary[code][value] = summary[code].get(value, 0) + count
+    for value, counts in (calibration.get("confidence") or {}).items():
+        summary["confidence_accepted"][value], summary["confidence_refused"][value] = counts["accepted"], counts["refused"]
     for task_id, row in sorted(tallied["tasks"].items()):
+        for code, counts in row.get("signals", {}).items():
+            summary["signals_by"][code] = summary["signals_by"].get(code, 0) + counts["by"]
+            summary["signals_established"][code] = summary["signals_established"].get(code, 0) + counts["by_established"]
         summary["tasks"][row["status"]] += 1
         for key in ("deals", "accepted", "expired", "expired_free", "released"):
             summary[key] += row[key]
@@ -7374,6 +7481,7 @@ def health_totals(summaries):
     projects'; the stuck tasks counted; the projects that starve, and those paused, named by their repositories; the
     hours to accept of all of them together. The shares are worked out of the sums, never averaged."""
     totals = {"projects": len(summaries), "stuck": 0, "short_of_members": 0, "starving": [], "paused": [], "by_kind": {}, "by_size": {}, "hours_to_accept": [],
+              "alarms": 0, "headroom": 0,
               **dict.fromkeys(HEALTH_SUMS, 0), **{table: {} for table in HEALTH_TABLES}}
     for summary in summaries:
         for key in HEALTH_SUMS:
@@ -7388,6 +7496,8 @@ def health_totals(summaries):
                     total[key] += group[key]
         totals["stuck"] += len(summary["stuck"])
         totals["short_of_members"] += len(summary["short_of_members"])
+        totals["alarms"] += len(summary["alarms"])  # (the tasks of each project with an alarm, counted)
+        totals["headroom"] += len(summary["headroom"])
         totals["starving"] += [summary["repository"]] if summary["starving"] else []
         totals["paused"] += [summary["repository"]] if summary["paused"] else []
         totals["hours_to_accept"] += summary["hours_to_accept"]
@@ -7512,6 +7622,9 @@ def report_rows(template, summaries):
                 ("refused, not_answered", count("refused", "not_answered")),
                 ("deals run out at nobody's cost", plain("expired_free")),
                 ("deals given back: the member's machine cannot run the project's sandbox", count("released_for", "cannot_run")),
+                *[(f"signal {code}, by accounts (any)", count("signals_by", code))
+                  for code in ("machine_failed", "sandbox_blocked", "need_unmet", "need_unlisted", "flaky")],
+                ("candidates the judge refused that their established member's own check passed", plain("disagreements")),
                 ("deals", plain("deals")),
                 ("published commit read", plain("published")),
                 ("hive-state commit read", plain("state"))]
@@ -7523,11 +7636,19 @@ def report_rows(template, summaries):
                 ("tasks accepted after a deal", lambda s: len(s["hours_to_accept"])),
                 ("median hours to accept", plain("median_hours_to_accept")),
                 ("longest hours to accept", lambda s: s["hours_to_accept"][-1] if s["hours_to_accept"] else None),
-                *[(f"refused, {reason}", count("refused", reason)) for reason in reasons]]
+                *[(f"refused, {reason}", count("refused", reason)) for reason in reasons],
+                *[(f"effort {bucket}, established members", count("effort", bucket)) for bucket in SIGNALS["effort"][2]],
+                *[(f"confidence {word}: accepted, refused", lambda s, word=word: [s["confidence_accepted"].get(word, 0), s["confidence_refused"].get(word, 0)])
+                  for word in SIGNALS["confidence"][2]]]
     return [("tasks open", lambda s: s["tasks"]["open"]), ("tasks dealt", lambda s: s["tasks"]["dealt"]),
             ("tasks done", lambda s: s["tasks"]["done"]), ("tasks closed", lambda s: s["tasks"]["closed"]),
             ("left to do", plain("left")), ("dealable now", plain("dealable")), ("separate areas", plain("areas")),
-            ("starving", plain("starving")), ("stuck tasks", plain("stuck")), ("paused", plain("paused")), *by_size, *by_kind]
+            ("starving", plain("starving")), ("stuck tasks", plain("stuck")), ("paused", plain("paused")), *by_size, *by_kind,
+            ("tasks with an alarm (an established member saw the project ask for something other than the task)", plain("alarms")),
+            ("tasks accepted with more gain in sight", plain("headroom")),
+            *[(f"signal {code}, by established accounts", count("signals_established", code))
+              for code in ("goal_beyond", "outside_files", "unclear", "needs_first", "too_large", "duplicate", "off_task_request", "splits")],
+            *[(f"felt {word}, established members", count("felt", word)) for word in SIGNALS["felt"][2]]]
 
 
 def report_numbers(template, result):
