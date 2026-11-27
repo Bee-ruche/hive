@@ -157,8 +157,9 @@ One limit today:
    asks you nothing.
 
    Connectors are best left out (mail, calendar, documents, chat, your browser, your computer). If your session
-   holds some, your assistant keeps them, calls none of them for the hive's work, and tells you so; open another
-   session without them if you prefer.
+   holds some that reach mail, calendar, documents or chat, your assistant keeps them, calls none of them for the
+   hive's work, and tells you so; one that drives your browser or your computer stops it, for a session without
+   it.
 
 Then paste this line, with the project's repository in place of `<owner/project>`:
 

@@ -200,12 +200,12 @@ case "$COMMAND:$SUB" in
   hive:next) KNOWN="project login fork needs-accepted despite-needs!" ;;
   hive:start) KNOWN="project login fork task deal needs-accepted despite-needs!" ;;
   hive:ready) KNOWN="project login fork tier prefer withdraw! needs-accepted despite-needs!" ;;
-  hive:submit) KNOWN="project login fork task deal message model signal" ;;
+  hive:submit) KNOWN="project login fork task deal message message-file model signal" ;;
   hive:release) KNOWN="project login fork task deal because signal" ;;
   hive:duty) KNOWN="project login fork role release withdraw!" ;;
 esac
 
-PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED="" SIGNALLED="" COMMAND_FILE=""
+PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED="" SIGNALLED="" COMMAND_FILE="" MESSAGE_FILE="" MESSAGE_GIVEN=""
 PASS=()       # the tool's options, as given
 SANDBOXED=()  # the sandbox's command, after --
 while [ $# -gt 0 ]; do
@@ -238,10 +238,12 @@ while [ $# -gt 0 ]; do
     login) [ -z "$LOGIN" ] || die "--login given twice"; LOGIN="$value" ;;
     fork) [ -z "$FORK" ] || die "--fork given twice"; FORK="$value" ;;
     command-file) [ -z "$COMMAND_FILE" ] || die "--command-file given twice"; COMMAND_FILE="$value" ;;
+    message-file) [ -z "$MESSAGE_FILE" ] || die "--message-file given twice"; MESSAGE_FILE="$value" ;;
     *)
       [ "$name" = task ] && TASK="$value"
       [ "$name" = release ] && DUTY_RELEASE="$value"
       [ "$name" = needs-accepted ] && NEEDS_ACCEPTED="$value"
+      [ "$name" = message ] && MESSAGE_GIVEN=1
       [ "$name" = signal ] && SIGNALLED=1  # (a submit that signals reads the state: the codes the run reads)
       PASS+=("$word" "$value") ;;
   esac
@@ -330,6 +332,22 @@ if [ "$COMMAND" = sandbox ] && [ -n "$COMMAND_FILE" ]; then
     "bee/sandbox/sans-docker.sh "?*) SANDBOXED=(sh -c "${sandboxed#bee/sandbox/sans-docker.sh }") ;;
     *) die "--command-file: its line begins « bee/sandbox/sans-docker.sh », as the CHECK line gives it" ;;
   esac
+fi
+# submit's message from a file (--message-file): for an assistant whose shell is PowerShell, which writes its message
+# with a single-quoted here-string, never into a command line, as it writes the sandbox's command. One line of
+# printable ASCII, 200 characters at most, as the tool takes a message, beginning with a letter or a digit: no
+# here-string's end. Given to the tool as its --message.
+if [ -n "$MESSAGE_FILE" ]; then
+  [ -z "$MESSAGE_GIVEN" ] || die "local.sh hive submit takes either --message or --message-file, not both"
+  [ -f "$MESSAGE_FILE" ] && [ ! -L "$MESSAGE_FILE" ] || die "--message-file: a file of the session's (not a link), which holds the message"
+  [ "$(wc -c < "$MESSAGE_FILE" | tr -d ' ')" -le 1024 ] || die "--message-file: more than 1024 bytes, which no message holds"
+  message=$(LC_ALL=C tr -d '\r' < "$MESSAGE_FILE")
+  message="${message#$'\xef\xbb\xbf'}"
+  case "$message" in *$'\n'*) die "--message-file: more than one line (a message is one line)" ;; esac
+  case "$message" in [A-Za-z0-9]*) ;; *) die "--message-file: its line begins with a letter or a digit" ;; esac
+  [ -z "$(printf '%s' "$message" | LC_ALL=C tr -d ' -~')" ] && [ ${#message} -le 200 ] \
+    || die "--message-file: one line of printable ASCII, 200 characters at most"
+  PASS+=(--message "$message")
 fi
 PUSH_SIGN_IN=()
 trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT

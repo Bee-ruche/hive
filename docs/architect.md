@@ -141,7 +141,8 @@ for a project one trusts. A text you may use, with your project's name:
 > named `hive/…` of your own fork, and your GitHub login and the commit are made public in the project's ledger. It
 > opens no pull request or issue and writes to no one. The project's code runs only in a sandbox with no network.
 > With the line « on this machine with Docker », Docker also builds images on your machine, and the work uses the
-> GitHub account your git pushes as. Paste it only for a project you trust, after reading
+> GitHub account your git pushes as. Pasting it is your consent: your assistant says what it is about to do and does
+> not ask again. Paste it only for a project you trust, after reading
 > https://github.com/Bee-ruche/hive/blob/main/docs/join.md.
 
 ## 9. Your regular work
