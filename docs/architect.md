@@ -131,6 +131,11 @@ judge gives a figure they may waive ([guardians.md](guardians.md)), your cutter 
 ([cutter.md](cutter.md), "Where the cutter runs"; its prompt says whether your pinned commit holds probes), and
 [join.md](join.md), which you send to the people you invite.
 
+**The models your bees declare.** Your settings' `models` lists the model identifiers your project keeps statistics
+for; the feed carries the list, and a bee reads it there. A bee declares its own whatever the list holds: one not
+listed is counted as undeclared. Name each as its maker does, in lower case, its words joined by `-`, a version's
+dots too (`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`), and add those of the bees you invite.
+
 **A warning beside the line, wherever you post it.** Pasting the one line of join.md ("One task now") is a
 volunteer's consent: their assistant tells them in a few lines what it is about to do, and goes on without asking.
 So, wherever you post the line (a page, a message, an issue), put next to it what pasting it does, and that it is

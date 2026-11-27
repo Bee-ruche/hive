@@ -1158,8 +1158,11 @@ check "refused: a fork with nothing of the project's history" eval 'refused 2 "t
 DOCS_HOME="$T/docs-home"
 mkdir -p "$DOCS_HOME"
 printf 'bee/sandbox/sans-docker.sh true' > "$T/desk/hive-check.txt"  # (the file the guide's PowerShell way writes)
-grep -ho 'bash ~/\.hive/protocol/tools/hive/local\.sh [^`]*' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" \
-  | grep -v 'hive <command>' | sort -u > "$T/doc-lines"
+# (The guide's PowerShell lines give the launcher as « $BASH ~/.hive/… », between single quotes: read as the bash lines.)
+grep -ho '\(bash\|\$BASH\) ~/\.hive/protocol/tools/hive/local\.sh [^`]*' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" \
+  | sed 's/^\$BASH /bash /' | grep -v 'hive <command>' | sort -u > "$T/doc-lines"
+check "the docs' test reads the guide's PowerShell lines too (\$BASH ~/.hive/…)" \
+  grep -q "^bash ~/\.hive/protocol/tools/hive/local\.sh sandbox --project <PROJECT> --command-file hive-check\.txt'\$" "$T/doc-lines"
 : > "$T/doc-unread"
 while IFS= read -r line; do
   words=$(printf '%s' "${line#bash ~/.hive/protocol/tools/hive/local.sh }" \
@@ -1240,7 +1243,7 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # line, the same bash inside ($BASH), no quote at all (the message through a file too); a tool that drives the
   # browser or the computer stops (until the founder says otherwise); the architect's warning says it is the consent.
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If `Test-Path -LiteralPath $bash` answers `False`, stop' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Before the first line, hold the words that come from the user'"'"'s line to their shapes, and stop on any other' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Before each line, hold the words it carries to their shapes, and stop on any other' || return 1
   grep -qF "& \$bash -c '\$BASH ~/.hive/protocol/tools/hive/local.sh check --project <PROJECT>'" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   ! grep -q "& \$bash -c 'bash \|--message ''" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qF -- '--message-file hive-message.txt' "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
@@ -1252,6 +1255,12 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their browser or their computer stops you before any work' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your browser or your computer stops it, for a session without it' || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their browser or their computer is no exception: it stops you there too' || return 1
+  # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
+  # architect lists the invited bees' (blackboxBee, 27 November 2026).
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'the feed'"'"'s `models` (`feed.json` of the state you took: read it there)' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '(`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`)' || return 1
+  ! grep -q "miniz lists \`claude" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '**The models your bees declare.**' || return 1
   # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could

@@ -5007,7 +5007,10 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
     none (signals_in_feed).
     « duties » holds each live duty (its role and its two instants) under the same hash of its account's login, and
     « duty_wait » until when each account that was dealt a duty is dealt none (Ledger.duty_wait), under the same hash:
-    a run at a commit before duties writes neither key, and a trusted account's tool then asks for none (cmd_duty)."""
+    a run at a commit before duties writes neither key, and a trusted account's tool then asks for none (cmd_duty).
+    « models » lists the model identifiers the project keeps statistics for (its settings' models), from which a worker
+    reads whether its own is counted: it gives its own with --model whatever the list holds, and one not listed is
+    counted as undeclared."""
     instant = now()
     done, refusals, deals, proven = ledger.done(), {}, ledger.deals(), ledger.accepted_members()
     refused_members, answers = {}, {}
@@ -5073,7 +5076,8 @@ def build_feed(config, tasks, ledger, tip, plan_=None):
             "generated_at": iso(instant), "tip": tip, "check": config.get("check", ""),
             "min_account_age_days": config["members"]["min_account_age_days"],
             "deals_per_day": config["members"]["deals_per_day"], "deals": held, "wait": waits, "tasks": listed,
-            "members": base, "releases": list(RELEASES), "signals": sorted(SIGNALS), "duties": duties, "duty_wait": duty_waits}
+            "members": base, "releases": list(RELEASES), "signals": sorted(SIGNALS), "duties": duties, "duty_wait": duty_waits,
+            "models": list(config["models"])}
 
 
 def build_stats(ledger):
@@ -6636,14 +6640,17 @@ def cut(config, published, backlog, counted, live, done, paths, failing=(), pass
         if task_id in published:
             continue  # published already
         parent, goal = task.get("parent"), task.get("goal") or {"kind": "correct"}
-        why = ("enough_open" if left >= cutter["open"] else
-               "changes" if used >= cutter["changes"] else
-               "gate" if new_task_refusals(config, task_id, task, known_options) else
+        # What holds the line back of its own comes first, and then only what the cut has room for: with enough tasks
+        # open, a line the gate refuses, or one that waits on a task not done, says so, not « enough_open » (a line
+        # that would stand only waits for room).
+        why = ("gate" if new_task_refusals(config, task_id, task, known_options) else
                "needs" if any(other not in done for other in task.get("needs") or []) else
                "parent" if parent is not None and parent not in done and (proposal.get(parent) or {}).get("closed") is not True else
                "files" if any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"]) else
                "shown_passing" if goal.get("kind") != "metric" and task_id in passing else
-               "not_shown_failing" if goal.get("kind") != "metric" and task_id not in failing else None)
+               "not_shown_failing" if goal.get("kind") != "metric" and task_id not in failing else
+               "enough_open" if left >= cutter["open"] else
+               "changes" if used >= cutter["changes"] else None)
         if why:
             said["waiting"].append({"id": task_id, "because": why})
             continue
@@ -7932,12 +7939,47 @@ def caller_of(repo, commit):
     return found, unread
 
 
+# A folder another account owns: git reads no repository there (its « dubious ownership » check, safe.directory), and
+# the commands that then run say something else (« transport 'file' not allowed »: origin is taken for a path). The
+# tool reads no setting of the machine's, so safe.directory cannot be given it: the folder is copied, or the command
+# runs as its owner. (A folder that Docker Desktop shows a container is owned by another account.)
+OWNED_ELSEWHERE = ("{what} ({place}) belongs to another account than the one this command runs as, and git reads no repository it "
+                   "does not own (its safe.directory check, which this tool takes from no setting of the machine's): run the command "
+                   "as the account that owns it, or on a copy of it this account owns (cp -a). A folder Docker Desktop shows a "
+                   "container is owned by another account")
+
+
+def owned_elsewhere(place):
+    """True if git refuses the folder as a repository that another account owns (« detected dubious ownership »)."""
+    asked = git_raw(place, "rev-parse", "--git-dir")
+    return asked.returncode != 0 and b"dubious ownership" in asked.stderr
+
+
+# What the worker's tool of the hive's main sends or calls that a run at an older commit does not read: (its name for
+# the architect, the file of the pinned commit that holds it, a text that file holds once it does). A bee works with
+# main's tool whatever the project pins: a pin without these drops what the bees send there, and says nothing.
+PROTOCOL_FEATURES = (
+    ("the bees' signals (Hive-Signal)", "tools/hive/hive.py", "Hive-Signal: "),
+    ("duties (hive duty)", "tools/hive/hive.py", "def cmd_duty("),
+    ("publish-cut", "tools/hive/hive.py", "def cmd_publish_cut("),
+    ("the page after each run (page.yml)", ".github/workflows/page.yml", "name: "),
+)
+
+
+def pinned_text(registry, commit, path):
+    """The text of one file of the hive at a commit, as its clone here holds it, or "" if it holds none there."""
+    shown = git_raw(registry, "show", f"{need_sha(commit)}:{path}")
+    return shown.stdout.decode("utf-8", errors="replace") if shown.returncode == 0 else ""
+
+
 def on_the_hives_main(registry, commit):
     """(word, sentence): whether a commit is on the hive's main, as the hive's own clone here knows it, and the commit
     that clone is at (the doctor's own). OK when its main holds it; CANNOT when this tree is no clone, does not hold the
     commit, or does not show it on main (its main may be older than the commit: the run itself refuses a commit its main
     does not hold)."""
     if git(registry, "rev-parse", "--git-dir", check=False).returncode != 0:
+        if owned_elsewhere(registry):
+            return "CANNOT", OWNED_ELSEWHERE.format(what="the hive's own tree here", place=safe_text(str(registry), 200))
         return "CANNOT", "the hive's own tree here is not a clone of Bee-ruche/hive: the run checks the commit at its start"
     own = git(registry, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False).stdout.strip()
     said = (f"; the doctor runs at {own}, and the run uses the commit the project pins" if is_sha(own) and own != commit else
@@ -7947,7 +7989,13 @@ def on_the_hives_main(registry, commit):
     if git(registry, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode != 0 or main is None:
         return "CANNOT", f"the hive's clone here does not hold {commit} or its main: fetch Bee-ruche/hive's main to tell{said}"
     if git(registry, "merge-base", "--is-ancestor", commit, main, check=False).returncode == 0:
-        return "OK", f"{commit}, a commit of the hive's main{said}"
+        behind = git(registry, "rev-list", "--count", f"{commit}..{main}", check=False).stdout.strip()
+        far = f", {behind} commit(s) behind it" if behind.isdigit() and behind != "0" else ""
+        lacking = [name for name, path, mark in PROTOCOL_FEATURES if mark not in pinned_text(registry, commit, path)]
+        if lacking:
+            return "NOTE", (f"{commit}, a commit of the hive's main{far}, lacks what main's worker tool uses: {', '.join(lacking)}. "
+                            f"What the bees send of it is dropped, unsaid: move the pin to a newer commit of main{said}")
+        return "OK", f"{commit}, a commit of the hive's main{far}{said}"
     return "CANNOT", (f"{commit} is not on the hive's main as its clone here knows it: fetch that main to tell (the run refuses a commit "
                       f"it does not hold){said}")
 
@@ -10678,6 +10726,16 @@ def candidate_tree(clone, base, files):
             new += [path for path in listed.split(b"\0") if path]
         if new:  # (--force: these were chosen above, and no list of git's own passes over one of them)
             clone.git("add", "--force", *given, stdin=b"\0".join(new), raw=True, env=own, attributes=base)
+        # No executable bit is taken from the work tree's file system: the mount a container is shown of a Windows or
+        # macOS machine shows every file executable (blackboxBee's units, 27 November 2026). A file the project's commit
+        # holds as executable may stay so; any other of the task's files is a plain file (100644).
+        listed = clone.git("ls-tree", "-r", "-z", "--full-tree", need_sha(base), raw=True).stdout.split(b"\0")
+        executable = {entry.partition(b"\t")[2] for entry in listed if entry.startswith(b"100755 ")}
+        staged = [entry for entry in clone.git("ls-files", "-s", "-z", env=own, raw=True).stdout.split(b"\0") if entry]
+        plain = [path for mode, path in ((entry.split(b" ", 1)[0], entry.partition(b"\t")[2]) for entry in staged)
+                 if mode == b"100755" and path not in executable]
+        if plain:
+            clone.git("update-index", "--chmod=-x", "-z", "--stdin", stdin=b"\0".join(plain), raw=True, env=own)
         return clone.git("write-tree", env=own, attributes=base).stdout.strip()
 
 
@@ -13334,6 +13392,8 @@ def main(argv=None):
                 raise HiveError("--needs-shown names the folder that --needs-home holds: it goes with --needs-home")
         else:
             whole_paths(args)
+            if isinstance(getattr(args, "repo", None), str) and args.repo and os.path.isdir(args.repo) and owned_elsewhere(args.repo):
+                raise HiveError(OWNED_ELSEWHERE.format(what="--repo", place=safe_text(args.repo, 200)))
         args.run(args)
     except HiveError as error:
         print(f"hive: {safe_text(error, 400)}", file=sys.stderr)

@@ -31,6 +31,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hive  # noqa: E402
 
+REAL_GIT = hive.git  # (git as the tool runs it, for a test that replaces it for one repository alone)
+
 NOW = "2026-11-12T12:00:00Z"
 LATER = "2026-11-12T13:00:00Z"  # an hour on: a deal recorded at NOW is still live
 DEALT = "2026-11-12T11:00:"  # the minute the tests' own deals are written at: an hour before NOW, each a second apart
@@ -7111,6 +7113,30 @@ class TestVolunteerSide(Volunteer):
         self.assertFalse(ran.exists())
         shutil.rmtree(work / "tools")
 
+    def test_a_file_keeps_the_mode_the_projects_commit_gives_it(self):
+        """A worker's file system may show every file executable (the mount a container is shown of a Windows or macOS
+        machine): the candidate takes no executable bit from it. A file the project's commit holds keeps that commit's
+        mode; a new one, or one the commit holds as a plain file, is a plain file (blackboxBee's units, 27 November 2026)."""
+        self.project_holds({"src/run.sh": ("100755", "#!/bin/sh\necho run\n")})
+        dealt = self.w.deal(self.alice, "toy-0002")
+        self.assertEqual(self.begin("toy-0002", dealt)[0], 0, self.err)
+        self.alice.write("src/a.c", "int a2;\n", mode=0o755).write("src/new.c", "int n;\n", mode=0o755)
+        self.alice.write("src/run.sh", "#!/bin/sh\necho ran\n", mode=0o755)
+        self.assertEqual(self.submit("toy-0002", dealt, "--no-push")[0], 0, self.err)
+        listed = sh("git", "ls-tree", "-r", self.head(), "--", "src/", cwd=self.alice.work).stdout
+        modes = {line.split("\t")[1]: line.split(" ")[0] for line in listed.splitlines()}
+        self.assertEqual((modes["src/a.c"], modes["src/new.c"], modes["src/run.sh"]), ("100644", "100644", "100755"))
+
+    def test_the_feed_carries_the_projects_models(self):
+        """The feed carries the project's models, from which a worker reads whether its own is counted: a bee of
+        another maker had no way to know (blackboxBee's Codex bee, recorded undeclared, 27 November 2026)."""
+        self.w.set_config({"models": ["claude-opus-5-5", "gpt-5-codex"]})
+        self.w.run()
+        self.assertEqual(self.w.feed_file()["models"], ["claude-opus-5-5", "gpt-5-codex"])
+        self.w.set_config({"models": []})
+        self.w.run()
+        self.assertEqual(self.w.feed_file()["models"], [])
+
     def test_a_login_is_a_plain_name_and_start_takes_no_tip_from_the_command_line(self):
         """What the command line gives goes into git commands and into the marker of a commit. A login is a GitHub
         login. The project's tip is no word of the command line at all: start asks the project's own address for it,
@@ -14012,6 +14038,18 @@ class TestTheCut(unittest.TestCase):
         self.assertEqual((said["changes"], said["waiting"], said["for_the_cutter"]),
                          (1, [{"id": "toy-0001", "because": "changes"}], [{"id": "toy-0004", "because": "changes"}]), "cutter.changes at most")
 
+    def test_a_line_says_what_holds_it_back_even_with_enough_open(self):
+        """With as many tasks open as the aim (left at cutter.open or above), a line of the backlog that waits on a task
+        not done, names a file the tip does not hold, or was never shown to fail, says so: « enough_open » is for a line
+        that would stand and only waits for room (blackboxBee, 27 November 2026)."""
+        self.config["cutter"]["open"] = 1
+        task = lambda number, **more: {"id": f"toy-00{number}", "title": f"Task {number}", "files": ["lib.c"], "goal": PROVED_GAIN, **more}  # noqa: E731
+        backlog = [task(10, needs=["toy-0002"]), task(11), task(12, goal={"kind": "correct"}), task(13, files=["nowhere.c"])]
+        proposal, said = self.cut(backlog=backlog)
+        self.assertEqual(said["added"], [])
+        self.assertEqual({entry["id"]: entry["because"] for entry in said["waiting"]},
+                         {"toy-0010": "needs", "toy-0011": "enough_open", "toy-0012": "not_shown_failing", "toy-0013": "files"})
+
     def test_the_backlog_is_published_as_what_it_needs_is_done(self):
         self.config["cutter"]["open"] = 6
         task = lambda number, **more: {"id": f"toy-00{number}", "title": f"Task {number}", "files": ["lib.c"], "goal": PROVED_GAIN, **more}  # noqa: E731
@@ -16364,13 +16402,22 @@ class TestTheDoctor(Base):
         self.registry, self.hive_commit, self.off_main = self.hives_clone()
 
     def hives_clone(self):
-        """A clone of the hive as a lead has it: the hive's list of settings and its judges' code, on a main of two
-        commits, and a commit on another branch: (folder, a commit of main, a commit off main)."""
+        """A clone of the hive as a lead has it: the hive's list of settings and its judges' code, on a main of three
+        commits, and a commit on another branch: (folder, a commit of main, a commit off main). The first commit of
+        main is an older hive, without what main's worker tool uses (self.old_pin); the one pinned holds the tool and
+        the page's workflow (PROTOCOL_FEATURES)."""
         folder = Path(self.tmp.name) / "hive-clone"
         (folder / "hive").mkdir(parents=True)
         shutil.copy(REGISTRY / "hive/settings.json", folder / "hive/settings.json")
         shutil.copytree(REGISTRY / "tools/judge", folder / "tools/judge", ignore=shutil.ignore_patterns("*_toy", "toy", "__pycache__"))
         sh("git", "init", "--quiet", "-b", "main", cwd=folder)
+        sh("git", "add", "-A", cwd=folder)
+        sh("git", "commit", "--quiet", "-m", "an older hive", cwd=folder)
+        self.old_pin = sh("git", "rev-parse", "HEAD", cwd=folder).stdout.strip()
+        (folder / "tools/hive").mkdir(parents=True)
+        (folder / ".github/workflows").mkdir(parents=True)
+        shutil.copy(REGISTRY / "tools/hive/hive.py", folder / "tools/hive/hive.py")
+        shutil.copy(REGISTRY / ".github/workflows/page.yml", folder / ".github/workflows/page.yml")
         sh("git", "add", "-A", cwd=folder)
         sh("git", "commit", "--quiet", "-m", "the hive", cwd=folder)
         pinned = sh("git", "rev-parse", "HEAD", cwd=folder).stdout.strip()
@@ -16614,8 +16661,8 @@ class TestTheDoctor(Base):
         self.healthy()
         own = sh("git", "rev-parse", "HEAD", cwd=self.registry).stdout.strip()
         self.assertEqual(self.said(self.doctor()[1], "hive-commit"),
-                         [("OK", f"{self.hive_commit}, a commit of the hive's main; the doctor runs at {own}, and the run uses the commit the "
-                                 "project pins")])
+                         [("OK", f"{self.hive_commit}, a commit of the hive's main, 1 commit(s) behind it; the doctor runs at {own}, and the "
+                                 "run uses the commit the project pins")])
         self.published_file(self.CALLER, self.caller(own))
         self.assertIn("the doctor runs at that same commit", self.text(self.doctor()[1], "hive-commit"))
         self.published_file(self.CALLER, self.caller(self.off_main))
@@ -16629,6 +16676,48 @@ class TestTheDoctor(Base):
         code, lines = self.doctor(registry=copy)
         self.assertEqual((code, self.word(lines, "hive-commit")), (0, "CANNOT"), lines)
         self.assertIn("not a clone", self.text(lines, "hive-commit"))
+
+    def test_a_pin_that_lacks_what_mains_worker_tool_uses_is_a_note(self):
+        """A pin on the hive's main whose run lacks what main's worker tool uses (the bees' signals, duties,
+        publish-cut, the page's workflow): NOTE, which names each and says how far behind main the pin is, for the bees
+        work with main's tool whatever the project pins (blackboxBee's pin, 95 commits behind, 27 November 2026). Each
+        mark it looks for is one this tree holds. And a hive's tree another account owns is said so."""
+        for name, path, mark in hive.PROTOCOL_FEATURES:
+            self.assertIn(mark, (REGISTRY / path).read_text(encoding="utf-8"), name)
+        self.healthy()
+        self.published_file(self.CALLER, self.caller(self.old_pin))
+        code, lines = self.doctor()
+        self.assertEqual((code, self.word(lines, "hive-commit")), (0, "NOTE"), lines)
+        text = self.text(lines, "hive-commit")
+        self.assertIn("2 commit(s) behind it, lacks what main's worker tool uses: ", text)
+        for name, _, _ in hive.PROTOCOL_FEATURES:
+            self.assertIn(name, text)
+        self.assertNotIn("[cut]", text)
+        self.published_file(self.CALLER, self.caller())
+        with mock.patch.object(hive, "owned_elsewhere", side_effect=lambda place: Path(place) == Path(self.registry)), \
+                mock.patch.object(hive, "git", side_effect=lambda repo, *args, **options: (
+                    subprocess.CompletedProcess(args, 128, "", "") if Path(repo) == Path(self.registry) and args[:1] == ("rev-parse",)
+                    else REAL_GIT(repo, *args, **options))):
+            code, lines = self.doctor()
+        self.assertEqual(self.said(lines, "hive-commit"), [("CANNOT", hive.OWNED_ELSEWHERE.format(
+            what="the hive's own tree here", place=str(self.registry)))])
+
+    def test_a_clone_another_account_owns_is_said_so(self):
+        """git reads no repository another account owns (« detected dubious ownership »: a folder Docker Desktop shows
+        a container), and a command of the hive's side then said something else (« transport 'file' not allowed »,
+        « not a clone git can read »). The tool asks git first, and says what stops it, and how to go on."""
+        dubious = b"fatal: detected dubious ownership in repository at '/repo'\nTo add an exception for this directory, call:\n"
+        for code, stderr, owned in ((128, dubious, True), (128, b"fatal: not a git repository\n", False), (0, b"", False)):
+            with self.subTest(stderr=stderr), mock.patch.object(hive, "git_raw", return_value=subprocess.CompletedProcess([], code, b".git\n", stderr)):
+                self.assertIs(hive.owned_elsewhere("/repo"), owned)
+        self.healthy()
+        err = io.StringIO()
+        with mock.patch.object(hive, "owned_elsewhere", return_value=True), mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err), \
+                self.assertRaises(SystemExit) as ended:
+            hive.main(["doctor", "--project", "Bee-ruche/toy", "--repo", str(self.clone()), "--registry", str(self.registry)])
+        self.assertEqual(ended.exception.code, 2)
+        self.assertRegex(err.getvalue(), r"\Ahive: --repo \(/[^\n]*\) belongs to another account than the one this command runs as, and git "
+                                         r"reads no repository it does not own[^\n]*\(cp -a\)[^\n]*\n\Z")
 
     def test_the_state_branch_missing_or_its_ledger_unreadable(self):
         self.healthy()

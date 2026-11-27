@@ -370,6 +370,8 @@ account (the `open` preset). Say so to the architect. Once the word is given:
   commit the caller pins holds probes: the cutter publishes none until it is told so.
 - **The people**: the architect sends them `docs/join.md` and the project's name; you invite no one and write to no
   one. A member's account is a person's, older than `members.min_account_age_days`.
+- **The models**: the settings' `models` lists the model identifiers the project keeps statistics for, and the
+  feed carries it to the bees. Add those of the invited bees, named as `docs/architect.md`, "8. Inviting", says.
 - **The warning beside the line**: pasting join.md's one line is the volunteer's consent, and their assistant goes on
   without asking. Tell the architect to put, wherever they post the line, what pasting it does and that it is for a
   project one trusts: `docs/architect.md`, "8. Inviting", gives a text to use, and says what the Docker line adds
