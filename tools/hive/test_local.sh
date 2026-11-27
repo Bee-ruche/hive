@@ -637,6 +637,8 @@ reset_world
 mv "$HOME/.hive/state/Bee-ruche/toy" "$T/state-aside"
 launch hive next --project Bee-ruche/toy --login alice
 check "refused: next with no state" eval 'refused 2 "there is no state at" && ! ran tool'
+launch hive submit --project Bee-ruche/toy --login alice --task toy-0001 --deal d --signal unclear
+check "refused: a submit that signals, with no state" eval 'refused 2 "there is no state at" && ! ran tool'
 mv "$T/state-aside" "$HOME/.hive/state/Bee-ruche/toy"
 mv "$CLONE" "$T/clone-aside"
 launch hive next --project Bee-ruche/toy --login alice

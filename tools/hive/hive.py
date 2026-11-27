@@ -279,8 +279,11 @@ SIGNALS = {
     "too_large": (("submit", "out_of_reach"), None, None, False),
     "unclear": (("submit", "out_of_reach"), None, None, False),
 }
-SIGNALS_MOST = 4  # the most signals one candidate or one release carries: a message with more carries none
-SIGNAL_LINE = re.compile(r"Hive-Signal: ([a-z][a-z_]{0,23})(?: ([A-Za-z0-9][A-Za-z0-9._+-]{0,63}))?\Z")
+SIGNALS_MOST = 4  # the most signals of the hive's codes one candidate or one release carries: a message with more carries none
+SIGNALS_READ = 64  # the most signal lines read of one message (a line past them is no signal)
+# A value is a word, a number, a task's id or a need's name as the project writes it (TASK_ID, NEED_PROGRAM, NEED_NAME:
+# a need's name takes 100 characters at most and may begin with « _ »).
+SIGNAL_LINE = re.compile(r"Hive-Signal: ([a-z][a-z_]{0,23})(?: ([A-Za-z0-9_][A-Za-z0-9._+-]{0,99}))?\Z")
 # TRUSTED ACCOUNTS AND THEIR DUTIES. A project's file may name accounts it trusts with a role, by their numbers
 # (« trusted », trusted_of): « cut », the project's cutting, is the one role there is. Such an account that is free
 # asks for a duty of its role in its own fork, at one branch (DUTY_BRANCH), as a member asks for a task (read_duty);
@@ -1842,36 +1845,56 @@ def read_signals(message):
         m = SIGNAL_LINE.match(line.rstrip("\r"))
         if m:
             said.append((m.group(1), m.group(2)))
+            if len(said) == SIGNALS_READ:
+                break
     return said
+
+
+def signal_form(code, value, where):
+    """True if a signal has its code's form, as the worker's tool writes it, without the project: a code of SIGNALS
+    said where it may be (« submit », or a release's code), with a value of its kind (none where it takes none, or may
+    leave one out; one of its words; a whole number within its bounds, written as one; a task's id or a need's name,
+    which held_signals then holds against the project's own)."""
+    spec = SIGNALS.get(code) if isinstance(code, str) else None
+    if spec is None or where not in spec[0] or not (value is None or isinstance(value, str)):
+        return False
+    _, kind, values, optional = spec
+    if value is None:
+        return kind is None or optional
+    if kind == "word":
+        return value in values
+    if kind == "number":
+        return bool(re.fullmatch(r"[1-9][0-9]{0,2}", value)) and values[0] <= int(value) <= values[1]
+    return kind in ("task", "need")
 
 
 def held_signals(said, where, task, tasks, config):
     """The signals that hold, of those `said` ((code, value or None) pairs, as read_signals reads them, or as the
     worker's tool takes them), for a candidate (where « submit ») or a release (where: its code) of `task`: a list of
-    {"code": …} or {"code": …, "value": …}, in the codes' order, the values the project's own strings or this file's.
-    More than SIGNALS_MOST, and none holds; a code said twice, and neither holds. Each other one holds if and only if
-    its code is one of SIGNALS, it may be said there, and its value is of its kind: none where it takes none (or may
-    leave it out); one of its words; a whole number within its bounds, written as one; a task of the project's tasks
-    (not the task itself, for « duplicate »); the name of one of the project's needs. « outlook » is said of a probe's
-    candidate alone. Whatever does not hold is dropped, and nothing of it is kept."""
-    if not isinstance(said, list) or len(said) > SIGNALS_MOST:
+    {"code": …} or {"code": …, "value": …}, in the codes' alphabetical order, the values the project's own strings or
+    this file's. A pair whose code is not one of SIGNALS is dropped alone, and counts for nothing below. More than
+    SIGNALS_MOST of the hive's codes, and none holds; a code said twice, and neither holds. Each other one holds if and
+    only if it has its code's form there (signal_form) and its value is the project's where it names one: a task of
+    the project's tasks (not the task itself, for « duplicate »); the name of one of the project's needs. « outlook »
+    is said of a probe's candidate alone. Whatever does not hold is dropped, and nothing of it is kept."""
+    if not isinstance(said, list):
         return []
-    codes = [code for code, _ in said]
+    known = [(code, value) for code, value in said if isinstance(code, str) and code in SIGNALS]
+    if len(known) > SIGNALS_MOST:
+        return []
+    codes = [code for code, _ in known]
     held = []
-    for code, value in said:
-        spec = SIGNALS.get(code) if isinstance(code, str) else None
-        if spec is None or codes.count(code) != 1 or where not in spec[0] or not (value is None or isinstance(value, str)):
+    for code, value in known:
+        if codes.count(code) != 1 or not signal_form(code, value, where):
             continue
-        _, kind, values, optional = spec
+        kind, values = SIGNALS[code][1], SIGNALS[code][2]
         if code == "outlook" and task.get("kind") != "probe":
             continue
         if value is None:
-            if kind is None or optional:
-                held.append({"code": code})
-            continue
-        if kind == "word" and value in values:
+            held.append({"code": code})
+        elif kind == "word":
             held.append({"code": code, "value": values[values.index(value)]})
-        elif kind == "number" and re.fullmatch(r"[1-9][0-9]{0,2}", value) and values[0] <= int(value) <= values[1]:
+        elif kind == "number":
             held.append({"code": code, "value": int(value)})
         elif kind == "task" and value in tasks and not (code == "duplicate" and value == task["id"]):
             held.append({"code": code, "value": tasks[value]["id"]})
@@ -11036,13 +11059,14 @@ def made_here(raw, action, marker=None):
     message = body.decode("utf-8", errors="replace")
     if action == "work":
         title = message[:-1]
-        return message.endswith("\n") and bool(ONE_LINE.match(title)) and not MARKER_LINE.match(title)
+        return message.endswith("\n") and bool(ONE_LINE.match(title)) and not MARKER_LINE.match(title) and not SIGNAL_LINE.match(title)
     title = message.partition("\n")[0]
     at = title[title.rfind(" (") + 2:-1] if title.endswith(")") and " (" in title else None
-    said = [code for code, _ in read_signals(message)]
-    if len(said) > SIGNALS_MOST or len(set(said)) != len(said) or any(code not in SIGNALS for code in said) \
-            or (said and action not in ("submit", "release")):
-        return False  # (signals the tool never writes: more than it writes, a code twice, a code not its own, or beside an ask)
+    signals = read_signals(message)
+    said = [code for code, _ in signals]
+    where = "submit" if action == "submit" else marker.get("because") if action == "release" else None
+    if len(said) > SIGNALS_MOST or len(set(said)) != len(said) or any(not signal_form(code, value, where) for code, value in signals):
+        return False  # (signals the tool never writes: more than it writes, a code twice, or one not of its form there, beside an ask included)
     if action == "submit":
         wanted = submit_message(marker["task"], marker["deal"], marker["member"], marker["model"], read_signals(message))
     elif not stamp(at):
@@ -11702,13 +11726,18 @@ def said_signals(args, where, task, tasks, config, feed):
         if code not in SIGNALS:
             raise HiveError("--signal: one of them is not a code of the hive's own (the worker's guide lists them): nothing was pushed")
         if code not in read:
-            raise HiveError(f"--signal {code}: the project's hive does not read it yet (its run is at an older commit of the hive): "
-                            "nothing was pushed. Leave the signals out")
+            raise HiveError(f"--signal {code}: the project's hive does not read it yet (its run is at an older commit of the hive, or the "
+                            "state given is older than its last run: take it again): nothing was pushed. Leave the signals out")
     held = held_signals(said, where, task, tasks, config)
-    for code, _ in said:
-        if code not in [signal["code"] for signal in held]:
-            raise HiveError(f"--signal {code}: not said this way here (twice, beside another kind of ending, or with a value it does "
-                            "not take: the worker's guide says each code's place and values): nothing was pushed")
+    codes = [code for code, _ in said]
+    for code, value in said:
+        if code in [signal["code"] for signal in held]:
+            continue
+        if codes.count(code) == 1 and signal_form(code, value, where) and SIGNALS[code][1] in ("task", "need"):
+            raise HiveError(f"--signal {code}: names no {'task of the project' if SIGNALS[code][1] == 'task' else 'need the project lists'}"
+                            f"{' other than this one' if code == 'duplicate' else ''}, as its files write it: nothing was pushed")
+        raise HiveError(f"--signal {code}: not said this way here (twice, beside another kind of ending, or with a value it does "
+                        "not take: the worker's guide says each code's place and values): nothing was pushed")
     return plain_signals(held)
 
 

@@ -97,9 +97,11 @@ Hive-Because: out_of_reach
   the deal beside it, as one code of the hive's own (`hive.py`'s `SIGNALS`) and at most one value of the code's
   kind: none, a word of the code's list, a whole number within its bounds, a task of the project's, or the name of
   one of the project's needs. Never text. `hive.py submit` and `hive.py release` write them from `--signal
-  <code>[=<value>]`, in the codes' order, after the marker's other lines, and only the codes the project's feed lists
-  under `signals` (a run at an older commit lists none, and the tool writes none). The codes, where each may be said
-  and what it takes:
+  <code>[=<value>]`, in the codes' alphabetical order, after the marker's other lines (the hand-over check of the
+  local bee compares these bytes); `submit` then needs `--state`, as `release` always does, to read which codes the
+  project's feed lists under `signals`. Before they make anything, both refuse a code the feed does not list (a run at
+  an older commit lists none: run the command again without `--signal`), more than four, and a code or a value that
+  does not hold. The codes, where each may be said and what it takes:
 
   | Code | Said on | Value |
   | --- | --- | --- |
@@ -120,10 +122,13 @@ Hive-Because: out_of_reach
   | `machine_failed` | a release `cannot_run` | `memory`, `disk`, `time`, `crash`, `tool` |
 
   **A signal changes nothing the hive decides**: no verdict, deal, wait, day's count, « stuck » or hint reads one,
-  and what a release costs is its `Hive-Because`'s, whatever it says beside it. The hive compares a code and its
+  and what a release costs is its `Hive-Because`'s, whatever it says beside it (a release `out_of_reach` counts
+  toward « stuck » as it always did, whichever of the widened cases above it is). The hive compares a code and its
   value with its own list and the project's own strings and keeps nothing else: a signal that does not hold (an
-  unknown code, a code said twice, more than four, a code beside the wrong kind of ending, a value of another kind)
-  is dropped alone, and the candidate or the release stands as it would without it. The signals that hold go on the
+  unknown code, a code beside the wrong kind of ending, a value of another kind) is dropped, and an unknown code
+  counts for nothing else; a code said twice drops both; more than four of the hive's codes drops them all; and the
+  candidate or the release stands as it would without them. A task or a need a signal names is held against the
+  project's file and tasks as the run reads them, which may have changed since the worker's command did. The signals that hold go on the
   ledger's line for that ending ("The ledger and the feed"), for the project's cutter and page; no worker reads
   another's. A loophole a worker finds in the judge (a way to pass the check without doing the task) is no signal: the
   worker tells its owner, who reports it privately ([SECURITY.md](../SECURITY.md)).
@@ -292,8 +297,11 @@ set the wait to nothing while it is tried, and then only the day's count is left
 wait, or, for a candidate that lacks a proof alone, its place in the day's limit. When the judge examined the
 candidate, the wait is two hours; there is none when the candidate is correct, reaches the task's own figure and
 lacks only a proof (`not_proven`): the hive cannot tell a gain the noise hid from no gain, so it neither accepts
-nor charges. **A deal given back costs two hours, each time**, as a judged refusal, never doubled. A worker that finds
-its task out of reach and says so at once frees it for others hours earlier, spends no judgement, and is free itself
+nor charges. **A deal given back costs two hours, each time**, as a judged refusal, never doubled, whatever signals the
+release carries. A worker that finds its task out of reach (or too large for one deal, another task's work, or that
+something in the project asked it for anything other than the task: the signals `too_large`, `duplicate` and
+`off_task_request`, whose releases count toward « stuck » as any `out_of_reach` from an established member does) and
+says so at once frees it for others hours earlier, spends no judgement, and is free itself
 as much sooner than after a deal it lets run out. When the task was held for nothing (no candidate, or one
 refused before the judge), it is two hours doubled at each such deal since the member's last accepted candidate,
 seven days at most; an acceptance clears both, and nothing else does. A project also limits the deals an account
@@ -996,8 +1004,8 @@ The hive's files there:
 
   **Signals.** A member's candidate's `verdict` (accepted, refused, or a probe's answer) and a deal given back's
   `expired` line add `signals` when the member said any that hold ("What a worker pushes"): a list of at most four
-  objects, `{"code": "too_large"}` or `{"code": "splits", "value": 3}`, in the codes' order, each value the hive's
-  word, a whole number or the project's own string. The steps that write hold each one again against the project's
+  objects, `{"code": "too_large"}` or `{"code": "splits", "value": 3}`, in the codes' alphabetical order, each value
+  the hive's word, a whole number or the project's own string. The steps that write hold each one again against the project's
   file and tasks before they write it, drop what does not hold (their log counts it), and never stop for a signal. A
   commit a guardian admitted carries none on its acceptance (its signals stay on its refusal). A line without
   `signals` (written before this rule, or for a member who said none) means the same.
@@ -1027,7 +1035,7 @@ The hive's files there:
   codes of a release the run reads (a run at an older commit lists none, and a worker's tool then gives nothing
   back). How often a task was given back is not in the feed: a worker reads the judge's word on a task, never
   another member's that it could not do it. `signals` lists, in the same way, the codes of a signal the run reads (a
-  run at an older commit lists none, and a worker's tool then writes none): never a count of them, for the same
+  run at an older commit lists none, and a worker's tool then refuses `--signal`): never a count of them, for the same
   reason. `duties` holds, under the same hash, the live duty of each account that
   holds one (its role, since when and until when), and `duty_wait` until when an account that was dealt a duty is
   dealt none: a run at an older commit writes neither, and the tool's `duty` command then asks for none.

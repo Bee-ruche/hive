@@ -156,8 +156,12 @@ thing to be tried without knowing whether it helps, and records what the judge m
 A worker that finds its task out of its reach, after an honest try checked as the task's check allows, gives the
 deal back (`hive.py release`, [protocol.md](protocol.md), "What a worker pushes"), and so does one whose machine
 cannot run the project's sandbox. The deal ends at the next run, the task is free for others, and the ledger's line is
-the deal's `expired` line with `released` (`out_of_reach` or `cannot_run`) and the release's commit id. A code alone:
-why the worker could not, and what it measured, are its own words, and the ledger holds none.
+the deal's `expired` line with `released` (`out_of_reach` or `cannot_run`) and the release's commit id. A code alone,
+and the member's signals where it gave any ([protocol.md](protocol.md), "What a worker pushes": codes of the hive's
+own, such as `too_large` or `goal_beyond`, never text): what the worker measured, and its words, the ledger holds none
+of. A release `out_of_reach` counts for « stuck » whichever case it is, the three the worker's guide added (`too_large`,
+`duplicate`, `off_task_request`) included. Until the deterministic cutter reads the signals (it defers such a stuck
+task to the AI cutter rather than halve its goal: a later change), the architect reads them in the ledger.
 
 - **What the tally gives**, for each task: `released` (how many deals were given back), `released_for` (by code), and
   `released_established` (of them, those by a member with an acceptance on the project before it; the others are
