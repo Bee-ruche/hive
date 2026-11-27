@@ -1200,6 +1200,8 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   grep -qx "    \$check = @'" "$ROOT/.claude/skills/bee-worker/SKILL.md" && grep -qx "    '@" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qx "    bee/sandbox/sans-docker.sh <the rest of the CHECK line, as it is>" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Never put a project'"'"'s command, or any text of the project, into a PowerShell line' || return 1
+  # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could
   # end its quoting.
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
