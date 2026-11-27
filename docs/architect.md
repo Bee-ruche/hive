@@ -177,33 +177,42 @@ hive's tool image (the image the local bee's launcher builds), with nothing of y
 container takes the hive, your project and its state afresh from GitHub, as a fetch would. You need Docker (Docker
 Desktop) and git, and a bash: Git Bash on Windows (not PowerShell, which reads neither `<` nor `<<'EOF'`), Terminal
 on macOS. Tried on Windows 11, in Git Bash with Docker Desktop, on 27 November 2026; not yet tried on macOS, nor on
-a Mac with Apple silicon, where the image may need `--platform linux/amd64` on both `docker` lines.
+a Mac with Apple silicon, where the image may need `--platform linux/amd64` on the `docker build` and `docker run`
+lines.
 
-Write your project's `owner/name` on the first line, then paste the whole block. Docker builds the image the first
-time (a few minutes, its output shown); `MSYS_NO_PATHCONV=1` keeps Git Bash from turning the container's paths into
+Write your project's `owner/name` on the first line, then paste the whole block; it stops at the first step that
+fails, and says which. Docker builds the image the first time (a few minutes, its output shown), and `docker run`
+never pulls one (`--pull=never`); `MSYS_NO_PATHCONV=1` keeps Git Bash from turning the container's paths into
 Windows ones, and changes nothing elsewhere.
 
 ```bash
 PROJECT='<owner/project>'
+(
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+[[ "$PROJECT" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "PROJECT is not owner/name: stop" >&2; exit 1; }
 mkdir -p ~/.hive
 if [ -d ~/.hive/architect/.git ]; then
   git -C ~/.hive/architect fetch --quiet origin main && git -C ~/.hive/architect reset --quiet --hard FETCH_HEAD \
     && git -C ~/.hive/architect clean -ffdx --quiet
 else
   git clone --quiet https://github.com/Bee-ruche/hive ~/.hive/architect
-fi
+fi || { echo "the hive could not be taken: stop" >&2; exit 1; }
 HIVE_COMMIT=$(git -C ~/.hive/architect rev-parse HEAD)
 IMAGE="hive-tool:$(git -C ~/.hive/architect rev-parse HEAD:tools/hive/Dockerfile)"
 docker image inspect "$IMAGE" > /dev/null 2>&1 \
-  || git -C ~/.hive/architect show HEAD:tools/hive/Dockerfile | docker build --tag "$IMAGE" -
-MSYS_NO_PATHCONV=1 docker run --rm -i --init --pids-limit 4096 --cpus 2 --memory 2g --cap-drop ALL \
-  --security-opt no-new-privileges -e HOME=/tmp -e PROJECT="$PROJECT" -e HIVE_COMMIT="$HIVE_COMMIT" -w /tmp \
-  "$IMAGE" sh -s > ~/.hive/architect-status.txt 2>&1 <<'EOF'
+  || git -C ~/.hive/architect show HEAD:tools/hive/Dockerfile | docker build --tag "$IMAGE" - \
+  || { echo "the image could not be built (its output is above): stop" >&2; exit 1; }
+MSYS_NO_PATHCONV=1 docker run --pull=never --rm -i --init --read-only --tmpfs /tmp:rw,exec,size=1g --pids-limit 4096 \
+  --cpus 2 --memory 2g --cap-drop ALL --security-opt no-new-privileges -e HOME=/tmp -e PROJECT="$PROJECT" \
+  -e HIVE_COMMIT="$HIVE_COMMIT" -w /tmp "$IMAGE" sh -s > ~/.hive/architect-status.txt 2>&1 <<'EOF'
 hive() { python3 -I /tmp/hive/tools/hive/hive.py "$@"; }
 git clone --quiet https://github.com/Bee-ruche/hive /tmp/hive && git -C /tmp/hive checkout --quiet --detach "$HIVE_COMMIT" || exit 2
 git clone --quiet "https://github.com/$PROJECT" /tmp/repo || exit 2
-git clone --quiet --depth 1 --branch hive-state "https://github.com/$PROJECT" /tmp/state || mkdir -p /tmp/state
+if git -C /tmp/repo ls-remote --exit-code --heads origin hive-state > /dev/null; then
+  git clone --quiet --depth 1 --branch hive-state "https://github.com/$PROJECT" /tmp/state || exit 2
+else
+  echo "== no branch hive-state on GitHub"; mkdir /tmp/state
+fi
 echo "== doctor"; hive doctor --project "$PROJECT" --repo /tmp/repo; echo "== exit $?"
 echo "== tally"; hive tally --project "$PROJECT" --repo /tmp/repo --state /tmp/state; echo "== exit $?"
 echo "== cut, dry"; hive cut --project "$PROJECT" --repo /tmp/repo --state /tmp/state --out /tmp/proposal.jsonl; echo "== exit $?"
@@ -213,13 +222,15 @@ echo "== generated_at"; python3 -I -c 'import json, sys; print(json.load(open(sy
 echo "== tip.json (its first 20000 bytes)"; if [ -f /tmp/state/tip.json ]; then head -c 20000 /tmp/state/tip.json; echo; else echo "none (a reference project alone has one)"; fi
 EOF
 echo "written: ~/.hive/architect-status.txt (the container ended with $?)"
+)
 ```
 
 Read `~/.hive/architect-status.txt` (`less ~/.hive/architect-status.txt`), or give it to your AI with section 10 of
-its guide. A line « the container ended with » other than 0, or a file that begins with an error rather than
-`== doctor`, says what failed: Docker, the network, or a project GitHub does not serve. Your project's repository is
-public, so the container needs no account and holds no credential; it runs the hive's tool, never your project's
-code, and is removed as it ends.
+its guide. A line « the container ended with » other than 0, or a file that begins with an error rather than a
+line `==`, says what failed: Docker, the network, or a project GitHub does not serve. Your project's repository is
+public, so the container needs no account and holds no credential (on your machine, git takes the hive with your own
+git's settings); it runs the hive's tool, never your project's code, with its files read-only but for a `/tmp` in
+memory, and is removed as it ends.
 
 **Not yet possible off Linux**, and what is missing:
 - `hive.py measure`: it starts the judge's own containers, so it needs Docker and root or `sudo` without a password

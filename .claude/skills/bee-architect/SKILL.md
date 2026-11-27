@@ -30,6 +30,7 @@ Take the hive afresh, a full clone (the doctor checks that the commit the projec
 this clone knows it):
 
 ```bash
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
 mkdir -p ~/.hive
 if [ -d ~/.hive/architect/.git ]; then
   git -C ~/.hive/architect fetch --quiet origin main && git -C ~/.hive/architect reset --quiet --hard FETCH_HEAD \
@@ -397,12 +398,12 @@ account (the `open` preset). Say so to the architect. Once the word is given:
 
 When the project already runs in the hive (its caller pins a commit, its branch `hive-state` holds a ledger), the
 architect's first question is « where does it stand? », and sections 1 to 8 are behind it: begin here, then go on
-with section 9. None of the commands below pushes or runs anything of the project. They write under `~/.hive` and
-`/tmp`, and git fetches into the clone (objects and the branches under `refs/remotes/origin`, never its work tree or
-its own branches): the first line does, and `hive tally` and `hive cut` fetch a tip the clone lacks. Off Linux, the
-doctor, the tally and a dry cut run in a container of the hive's tool image, on fresh clones of what GitHub holds
-now rather than on `<CLONE>`: `docs/architect.md`, "On Windows or macOS", prints that block whole, and the architect
-runs it.
+with section 9. None of the commands below pushes or runs anything of the project. They write under `~/.hive` and in
+a folder of their own (`mktemp -d`), and git fetches into the clone (objects and the branches under
+`refs/remotes/origin`, never its work tree or its own branches): the first line does, and `hive tally` and `hive cut`
+fetch a tip the clone lacks. Off Linux, the doctor, the tally and a dry cut run in a container of the hive's tool
+image, on fresh clones of what GitHub holds now rather than on `<CLONE>`: `docs/architect.md`, "On Windows or
+macOS", prints that block whole, and the architect runs it.
 
 **The commands, in order**, each time, once the hive is taken afresh (the top of this guide):
 
@@ -410,8 +411,9 @@ runs it.
 git -C <CLONE> fetch --quiet origin
 rm -rf ~/.hive/architect-state && git clone --quiet --depth 1 --branch hive-state https://github.com/<PROJECT> ~/.hive/architect-state
 hive doctor --project <PROJECT> --repo <CLONE>
-hive tally --project <PROJECT> --repo <CLONE> --state ~/.hive/architect-state > /tmp/tally.json
-hive cut --project <PROJECT> --repo <CLONE> --state ~/.hive/architect-state --out /tmp/proposal.jsonl > /tmp/cut.json
+out=$(mktemp -d) && echo "the tally and the cut go to $out"
+hive tally --project <PROJECT> --repo <CLONE> --state ~/.hive/architect-state > "$out/tally.json"
+hive cut --project <PROJECT> --repo <CLONE> --state ~/.hive/architect-state --out "$out/proposal.jsonl" > "$out/cut.json"
 pin=$(git -C <CLONE> grep -h -i -o -E 'bee-ruche/hive/\.github/workflows/run\.yml@[0-9a-f]{40}' origin/HEAD -- .github/workflows | head -n 1 | cut -d@ -f2)
 echo "the pin: ${pin:-none found}"; [ -z "$pin" ] || git -C ~/.hive/architect log --first-parent --oneline "$pin..origin/main" || echo "the hive's clone does not hold the pin"
 ```
