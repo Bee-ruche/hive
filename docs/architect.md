@@ -172,12 +172,13 @@ runs anything of your project (git only fetches into your clone); your AI runs a
 
 - **`hive.py doctor`**: whether the project is well formed now, and its tasks in one line (`left to do`, `open`,
   `dealable now`, `stuck`, `short of members`). Four CANNOT lines, always there, are your repository's settings, which
-  it cannot see; `OK hive-commit` says your pin is a commit of the hive's main, not how old it is.
+  it cannot see; `hive-commit` says how many commits behind the hive's main your pin is, and is a NOTE when the run
+  it pins lacks what main's worker tool uses (the bees' signals, duties, publish-cut, the page), naming each.
 - **`hive.py tally`**: each task's deals, acceptances, refusals, errors and deals given back, and for the project
   whether it starves, which tasks are stuck, and what the members signalled ([cutter.md](cutter.md), "Signals").
 - **`hive.py cut`**, dry: what the cutter's rules would do now (tasks closed, added, held back and why). It writes
-  one file and pushes nothing. While as many tasks are left as `cutter.open` asks, every backlog line reads
-  `enough_open`, which hides what else holds it.
+  one file and pushes nothing. A backlog line held back gives what holds it back of its own first (`gate`, `needs`,
+  `parent`, `files`, `shown_passing`, `not_shown_failing`), and `enough_open` or `changes` only when nothing else does.
 - **The pin's age**: the commits of the hive's main after the one your caller pins. A run at an old pin lacks what
   came after.
 - **The state's own files** on your branch `hive-state`: `feed.json`'s `generated_at` (a time that stops moving is a

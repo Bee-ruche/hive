@@ -16689,9 +16689,10 @@ class TestTheDoctor(Base):
         code, lines = self.doctor()
         self.assertEqual((code, self.word(lines, "hive-commit")), (0, "NOTE"), lines)
         text = self.text(lines, "hive-commit")
-        self.assertIn("2 commit(s) behind it, lacks what main's worker tool uses: ", text)
-        for name, _, _ in hive.PROTOCOL_FEATURES:
-            self.assertIn(name, text)
+        self.assertIn("2 commit(s) behind it, lacks what main's worker tool uses: the bees' signals (Hive-Signal), duties (hive duty), "
+                      "publish-cut, the page after each run (page.yml). ", text)
+        self.assertEqual([name for name, _, _ in hive.PROTOCOL_FEATURES],
+                         ["the bees' signals (Hive-Signal)", "duties (hive duty)", "publish-cut", "the page after each run (page.yml)"])
         self.assertNotIn("[cut]", text)
         self.published_file(self.CALLER, self.caller())
         with mock.patch.object(hive, "owned_elsewhere", side_effect=lambda place: Path(place) == Path(self.registry)), \
