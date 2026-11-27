@@ -222,10 +222,13 @@ MSYS_NO_PATHCONV=1 docker run --pull=never --rm -i --init --read-only --tmpfs /t
 hive() { python3 -I /tmp/hive/tools/hive/hive.py "$@"; }
 git clone --quiet https://github.com/Bee-ruche/hive /tmp/hive && git -C /tmp/hive checkout --quiet --detach "$HIVE_COMMIT" || exit 2
 git clone --quiet "https://github.com/$PROJECT" /tmp/repo || exit 2
-if git -C /tmp/repo ls-remote --exit-code --heads origin hive-state > /dev/null; then
+git -C /tmp/repo ls-remote --exit-code --heads origin hive-state > /dev/null; listed=$?
+if [ "$listed" -eq 0 ]; then
   git clone --quiet --depth 1 --branch hive-state "https://github.com/$PROJECT" /tmp/state || exit 2
-else
+elif [ "$listed" -eq 2 ]; then
   echo "== no branch hive-state on GitHub"; mkdir /tmp/state
+else
+  echo "== GitHub could not be asked for the branch hive-state"; exit 2
 fi
 echo "== doctor"; hive doctor --project "$PROJECT" --repo /tmp/repo; echo "== exit $?"
 echo "== tally"; hive tally --project "$PROJECT" --repo /tmp/repo --state /tmp/state; echo "== exit $?"
