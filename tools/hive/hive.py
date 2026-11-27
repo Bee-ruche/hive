@@ -8651,21 +8651,25 @@ READY_BRANCH = "hive/ready"
 # candidate could be pushed to it (the founder's trial). Its copy of hive-state blocks nothing (the hive reads none of
 # it): it is named beside a branch that blocks, for the user to delete both at once, and alone it is not said (a
 # worker stops on setup's NOTE lines). The tool deletes nothing in a fork: the user does, on GitHub, or forks again.
-# (A line the tool prints is cut at 400 characters: the fixed text of each is about 300, beside at most three names.)
-FORK_COPIES = ("your fork holds {named}, which {leave} no room for the hive's branches (hive/…): nothing could be pushed there. "
-               "Nothing was changed. Tell the user to delete {them}{state} on GitHub, or to fork the project again with its main branch "
-               "alone (gh repo fork --default-branch-only): this tool deletes nothing in a fork")
-FORK_DEFAULT_COPIED = ("your fork's default branch, {named}, leaves no room for the hive's branches (hive/…), and GitHub does not "
-                       "let a default branch be deleted. Nothing was changed. Tell the user to fork the project again with its main "
-                       "branch alone (gh repo fork --default-branch-only)")
+# A line the tool prints is cut at 400 characters: each fixed text is under 250, beside names that are the tool's own
+# (hive, hive/submit, hive/release, and « those below » hive/ready/, hive/duty/, hive/cut/), never the fork's.
+FORK_COPIES = ("your fork holds {named}, which {leave} no room for the hive's branches under hive/. Nothing was changed. Tell the "
+               "user to delete {them}{state} on GitHub, or to fork again with the main branch alone (gh repo fork "
+               "--default-branch-only): this tool deletes nothing in a fork")
+FORK_DEFAULT_COPIED = ("your fork's default branch, {named}, leaves no room for the hive's branches under hive/, and GitHub keeps a "
+                       "default branch. Nothing was changed. Tell the user to fork again with the main branch alone (gh repo fork "
+                       "--default-branch-only)")
+
+
+FORK_FOLDERS = ("hive", SUBMIT_BRANCH.split("/{")[0], RELEASE_BRANCH.split("/{")[0])  # names that are folders of the hive's branches
+FORK_WHOLES = (READY_BRANCH, DUTY_BRANCH, CUT_BRANCH)  # the hive's branches that have no folder of their own
 
 
 def blocking_branches(names):
     """The fork's branches beside which the hive's own cannot be made (READY_BRANCH, SUBMIT_BRANCH, RELEASE_BRANCH,
     DUTY_BRANCH, CUT_BRANCH): one at a name that is a folder of theirs (hive, hive/submit, hive/release), or one inside
     a name of theirs (hive/ready/…, hive/duty/…, hive/cut/…)."""
-    folders = {"hive", SUBMIT_BRANCH.split("/{")[0], RELEASE_BRANCH.split("/{")[0]}
-    return sorted(name for name in names if name in folders or any(name.startswith(f"{whole}/") for whole in (READY_BRANCH, DUTY_BRANCH, CUT_BRANCH)))
+    return sorted(name for name in names if name in FORK_FOLDERS or any(name.startswith(f"{whole}/") for whole in FORK_WHOLES))
 
 
 def fork_copies(repository, address):
@@ -8683,15 +8687,20 @@ def fork_copies(repository, address):
     names = [name[len("refs/heads/"):] for _, _, name in lines if name.startswith("refs/heads/")]
     default = next((value[len("ref: refs/heads/"):] for value, _, name in lines if name == "HEAD" and value.startswith("ref: refs/heads/")), None)
     blocking = blocking_branches(names)
+    if not blocking:
+        return
+    # Said by the tool's own names: a folder of the hive's branches, or « those below » one of them. The names of the
+    # branches below are the fork's, and not repeated (in_the_way says them so too).
+    folders = [name for name in blocking if name in FORK_FOLDERS]
+    below = [whole for whole in FORK_WHOLES if any(name.startswith(f"{whole}/") for name in blocking)]
     if default in blocking:
-        raise HiveError(FORK_DEFAULT_COPIED.format(named=json.dumps(default)[:120]))
-    if blocking:
-        named = [json.dumps(name)[:40] for name in blocking[:2]] + (["others"] if len(blocking) > 2 else [])
-        shown = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
-        one = len(blocking) == 1
-        raise HiveError(FORK_COPIES.format(named=f"the branch{'' if one else 'es'} {shown}", leave="leaves" if one else "leave",
-                                           them="it" if one else "them",
-                                           state=f" (and {STATE_BRANCH}, a copy of the project's state)" if STATE_BRANCH in names else ""))
+        raise HiveError(FORK_DEFAULT_COPIED.format(named=default if default in FORK_FOLDERS else
+                                                   f"a branch below {next(w for w in FORK_WHOLES if default.startswith(f'{w}/'))}/"))
+    named = folders + [f"those below {whole}/" for whole in below]
+    one = len(folders) == 1 and not below
+    shown = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+    raise HiveError(FORK_COPIES.format(named=f"the branch{'' if one else 'es'} {shown}", leave="leaves" if one else "leave",
+                                       them="it" if one else "them", state=f" (and {STATE_BRANCH}, a copy)" if STATE_BRANCH in names else ""))
 
 
 WORK_MARGIN_HOURS = 1  # a worker starts on a deal only if it has this long left
@@ -11345,6 +11354,9 @@ def fork_address(args):
         raise HiveError("--login: the user's GitHub login")
     if not (FORK_NAME.match(name) and name.strip(".")) or name.endswith(".git"):
         raise HiveError("--fork: the name of your fork's repository on GitHub, and nothing else (letters, digits, dots, dashes)")
+    if f"{args.login}/{name}".lower() == project_repository(args.project).lower():
+        raise HiveError(f"the fork named is the project itself ({project_repository(args.project)}), not a fork of it: a worker pushes only "
+                        "to its user's own fork")
     if args.fork_url is not None and LOCAL_REMOTES:
         return args.fork_url
     return f"https://github.com/{args.login}/{name}"

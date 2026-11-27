@@ -193,10 +193,11 @@ then says the project is larger than it reads.
    --default-branch-only`. Your worker needs no other branch of the project in your fork, and the branches it writes
    there are named under `hive/`. git keeps a branch's name as a path, so a branch named `hive` in your fork
    leaves no room for them, and the project's own branch the hive writes is often named `hive`. A fork made with
-   every branch holds it. Then the worker's first command (`setup`, or the launcher's `check`) says so before
-   anything is asked, and a push would stop on « the fork's branch hive leaves no room for hive/ready »; your worker
-   stops and tells you. Delete or rename the branch that line names, on GitHub, and no other: your own branches
-   stay. (A copy of `hive-state` blocks nothing: the line names it beside `hive`, for you to delete both.) If the line says it is your fork's default branch, GitHub does not let you delete it, and the
+   every branch holds it. Then the worker's first command (`setup`, or the launcher's `check` for a public fork)
+   says so before anything is asked, and a push would stop on « the fork's branch hive leaves no room for
+   hive/ready »; your worker stops and tells you. Delete or rename the branch that line names, on GitHub, and no
+   other: your own branches stay. (A copy of `hive-state` blocks nothing: the line names it beside `hive`, for you to
+   delete both.) If the line says it is your fork's default branch, GitHub does not let you delete it, and the
    worker cannot work from that fork. The worker's tool deletes no branch.
 2. **Create a scheduled task in your assistant**, attach three repositories (your fork; and, to read only, the
    hive's protocol `Bee-ruche/hive` and the project itself, for the pilot

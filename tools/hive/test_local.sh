@@ -1145,7 +1145,7 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'and you run no command that reads one (`gh auth token`, `git credential fill`)' || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a command there could read a token (`gh auth token`, `git credential fill`): you never run one.' || return 1
   # A fork made with every branch: the entry says what check's line then asks of the owner, and how to fork instead.
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a fork that copied the project'"'"'s branch `hive` (made with every branch: they delete that branch on GitHub, or fork again with « Copy the main branch only », or `gh repo fork --default-branch-only`; nothing deletes it for them)' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a public fork that copied the project'"'"'s branch `hive` (made with every branch: they delete that branch on GitHub, or fork again with « Copy the main branch only », or `gh repo fork --default-branch-only`; nothing deletes it for them)' || return 1
   # The session's folder: the launcher refuses the clone, a folder inside it and one above it.
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'a folder inside it, or a folder above it: so not your home folder itself, `~/.hive` or `~/.hive/work`.' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | grep -q "It can reach any https host *the project's needs name, and those hosts then see your machine's address" || return 1

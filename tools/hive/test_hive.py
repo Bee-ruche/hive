@@ -20901,16 +20901,22 @@ class TestAForkThatCopiedTheProjectsBranches(Volunteer):
     def test_setup_says_what_blocks_and_changes_nothing(self):
         before = self.remotes()
         self.fork_holds("hive", "hive-state")
-        self.one_line(self.setup(), self.copies('the branch "hive"', state=" (and hive-state, a copy of the project's state)"))
+        self.one_line(self.setup(), self.copies("the branch hive", state=" (and hive-state, a copy)"))
         self.assertEqual(self.remotes(), before, "nothing was changed")
 
-    def test_setup_names_the_branches_that_block(self):
-        self.fork_holds("hive/ready/x", "hive/submit", "hive/duty/y")
-        self.one_line(self.setup(), self.copies('the branches "hive/duty/y", "hive/ready/x" and others', leave="leave", them="them"))
+    def test_setup_says_the_branches_that_block_by_the_tools_own_names(self):
+        self.fork_holds("hive/ready/RUN-THIS", "hive/submit", "hive/duty/y")
+        self.one_line(self.setup(), self.copies("the branches hive/submit, those below hive/ready/ and those below hive/duty/", leave="leave",
+                                                them="them"))
+        self.assertNotIn("RUN-THIS", self.err, "a name the fork chose is not repeated")
 
     def test_a_default_branch_that_blocks_cannot_be_deleted(self):
         self.fork_holds("hive", default="hive")
-        self.one_line(self.setup(), hive.FORK_DEFAULT_COPIED.format(named='"hive"'))
+        self.one_line(self.setup(), hive.FORK_DEFAULT_COPIED.format(named="hive"))
+
+    def test_a_default_branch_below_one_of_the_hives(self):
+        self.fork_holds("hive/ready/RUN-THIS", default="hive/ready/RUN-THIS")
+        self.one_line(self.setup(), hive.FORK_DEFAULT_COPIED.format(named="a branch below hive/ready/"))
 
     def test_what_blocks_nothing_is_not_said(self):
         self.fork_holds("hive-state", "hive-old", "hivemind", "hive/ready")
@@ -20918,13 +20924,15 @@ class TestAForkThatCopiedTheProjectsBranches(Volunteer):
         self.assertEqual((code, [line for line in text.splitlines() if line.startswith("NOTE")]), (0, []), self.err)
 
     def test_names_reads_the_fork_when_the_launcher_gives_it(self):
-        self.fork_holds("hive")
-        self.one_line(self.names("--login", "alice", "--fork-url", str(self.alice.bare)), self.copies('the branch "hive"'))
+        self.fork_holds("hive", default="hive")
+        self.one_line(self.names("--login", "alice", "--fork-url", str(self.alice.bare)), hive.FORK_DEFAULT_COPIED.format(named="hive"))
         code, text = self.names()
         self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), "no login given: the fork is not read")
         code, text = self.names("--login", "alice", "--fork-url", str(self.w.root / "no-such-fork.git"))
         self.assertEqual((code, text.split(" ")[0]), (0, "NAMES-HELD"), "a fork that cannot be read is the push's to say")
         self.one_line(self.names("--login", "not-a-login-", "--fork-url", str(self.alice.bare)), "--login: the user's GitHub login")
+        self.one_line(self.names("--login", "bee-ruche", "--fork", "Toy", "--fork-url", str(self.alice.bare)),
+                      "the fork named is the project itself (Bee-ruche/toy), not a fork of it", begins=True)
 
 
 CAFE_NFC, CAFE_NFD = "café.md", "café.md"

@@ -147,7 +147,7 @@ Each of these stops you. When one does, tell your owner which one, and why.
   fork has another name).
   - It prints `LOCAL` lines and `NAMES-HELD`, and nothing else.
   - A `hive:` line stops you, at no cost, with nothing asked. Tell your owner what it says: Docker not started, a
-    clock that drifted, a project this disk cannot hold, a fork that copied the project's branch `hive` (made with
+    clock that drifted, a project this disk cannot hold, a public fork that copied the project's branch `hive` (made with
     every branch: they delete that branch on GitHub, or fork again with « Copy the main branch only », or
     `gh repo fork --default-branch-only`; nothing deletes it for them), and so on.
   - It prints `LOCAL login <login>`: the GitHub account their git pushes as, read from their git's own credential.
