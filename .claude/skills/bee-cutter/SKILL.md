@@ -92,7 +92,14 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   planned task « correct » also says on whose word it was shown to fail at the tip: `shown` `judge` (a run of the
   project's judge) or `word` (the architect's, `--failing`).
 - `for_the_cutter`: stuck tasks it closed and could not cut again (`no_rule`: a goal « correct »; `at_the_floor`,
-  `under_the_floor`: the goal cannot go lower). These are yours: cut them again ("Writing tasks").
+  `under_the_floor`: the goal cannot go lower; `signalled`: most of its failures are releases whose members said the
+  task, not its goal, stood in the way, with `signals`: for each of the six codes C1 reads (`duplicate`, `needs_first`,
+  `off_task_request`, `outside_files`, `too_large`, `unclear`), how many established members said it on the task, on
+  any line, not only the releases C1 counted). These are yours:
+  cut them again ("Writing tasks"); a `signalled` one as its codes say (below, "What members signalled"). **Cut the
+  `signalled` ones first**, before any task you write because the project is short: no rule will cut them, and the
+  tally keeps listing them (`signalled`: closed by C1, no task cut from them yet) in later cycles until one of yours
+  names them as its `parent`.
 - `waiting`: tasks it left for later, with the reason (`dealt`, `needs`, `parent`, `files`, `not_shown_failing`,
   `shown_passing`, `gate`, `enough_open`, `changes`). Nothing to do for them in this run, but `files`,
   `not_shown_failing` (a task « correct » no run of the judge has shown to fail at the tip yet: the project's quiet
@@ -106,8 +113,8 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
 
-If `short` is 0 and `for_the_cutter` is empty, write nothing of your own: publish the proposal if it changes
-anything, and report. The same if the charter or the judge leaves nothing you may write (a project whose judge
+If `short` is 0, `for_the_cutter` is empty and the tally's `signalled` is empty, write nothing of your own: publish
+the proposal if it changes anything, and report. The same if the charter or the judge leaves nothing you may write (a project whose judge
 checks no piece left to do): publish nothing that does not change, and say in your report what the architect or the
 judge's author must add.
 
@@ -121,9 +128,9 @@ asks).
 
 ## Writing tasks
 
-Write at most `short` new tasks, plus one cut for each task of `for_the_cutter`, and never more lines than
-`cutter.changes` (in `hive/project.json`, 10 if absent) with what `hive cut` already added and closed. Fewer good
-tasks are worth more than many vague ones.
+Write at most `short` new tasks, plus one cut for each task of `for_the_cutter` and of the tally's `signalled` (those
+first), and never more lines than `cutter.changes` (in `hive/project.json`, 10 if absent) with what `hive cut` already
+added and closed. Fewer good tasks are worth more than many vague ones.
 
 **What a task is.** One line of JSON, written as the published lines are (their keys in their order): `id`, `title`,
 `files`, `size`, `tier`, `goal`, `options` when it applies, `context`, then, when they apply, `parent` (the stuck
@@ -186,6 +193,19 @@ writes its `goal`, whatever the published lines do.
   are refused often, whose deals run out, or that members give back as out of reach (`released_for`), were too
   large or their goal too far; tasks accepted at once may be a little larger. A deal given back because a machine
   cannot run the sandbox (`cannot_run`) says nothing of the task: many of them are for the architect.
+- **What members signalled** (the tally's `signals` for each task, and its `headroom`, `disagreements`, `alarms` and
+  `calibration`; docs/cutter.md, "Signals"): codes members gave beside a candidate or a release, never text. Read the
+  judge's figures first, then the ledger's outcomes, then `by_established`; never `by` alone (accounts with no
+  acceptance before they said it). Established `too_large` or `splits` (its `values`: the parts) say to cut the task
+  smaller, into that many; `unclear`, to rewrite its context in a recut; `needs_first` (its `values`: a task), to cut
+  it again with that `needs`; `outside_files`, that its `files` are wrong; `duplicate` (a task), to read both lines and
+  close one if they overlap; `goal_beyond`, a goal too far: cut a probe on its figure, or report it to the architect,
+  and never lower a work task's goal on a signal (the stuck rule's halving is the only rule that lowers one). A task
+  in `headroom` may get a **probe** on its files, never a work task with a threshold: that would be a guess.
+  `alarms`: report them to the architect first, and write no task on those files in this run. `calibration`'s `felt`
+  and `effort` by size explain the acceptance shares by size; they count candidates and releases, not members, and
+  never change a size alone. Quote counts in your own words (« two members gave it back as too large »), never a
+  member's, and say in your report which signals moved a cut.
 - **Probes** (`"kind": "probe"`, docs/cutter.md, "Probes"): for an idea whose worth is unknown and cheap to try,
   cut a probe instead of betting a threshold. Its title and context name the one thing to try, in your words; its
   goal is a goal on a figure, written as any other (floors included). A correct candidate short of the goal is its

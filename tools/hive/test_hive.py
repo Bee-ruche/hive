@@ -20628,6 +20628,14 @@ class TestTheHandOverCheck(HandingOver):
                            ("a marker with a line of more", lambda: self.handed_candidate(dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Prefer: x\n")),
                            ("a marker whose model is of no form", lambda: self.handed_candidate(dealt, {"src/n.c": "int n;\n"},
                                                                                                marker_more="Hive-Model: a model\n")),
+                           ("signals out of the codes' order", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Signal: unclear\nHive-Signal: effort lt1h\n")),
+                           ("a signal twice", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Signal: unclear\nHive-Signal: unclear\n")),
+                           ("a signal not the tool's own", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Signal: telepathy\n")),
+                           ("a signal line of another shape", lambda: self.handed_candidate(
+                               dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Signal: felt easy going\n")),
                            ("a marker on two commits of work", lambda: self.handed_candidate(  # (its tree, theirs: only the commits differ)
                                dealt, {"src/n.c": "int n;\n"}, parents=[self.planted_commit([work], {"src/o.c": "int o;\n"}, message="more")],
                                marker_files={"src/o.c": "int o;\n"})),
@@ -20651,6 +20659,11 @@ class TestTheHandOverCheck(HandingOver):
         self.handed_candidate(dealt, {"lib.c": LIB + "int moved;\n", "src/n.c": "int n;\n"}, base=base)
         code, text = self.check()
         self.assertEqual((code, text.split(":")[0]), (1, "REFUSED (path_outside_task)"), self.err)
+
+    def test_a_candidate_with_signals_as_the_tool_writes_them_is_checked(self):
+        dealt = self.w.deal(self.alice, "toy-0002")
+        marker = self.handed_candidate(dealt, {"src/n.c": "int n;\n"}, marker_more="Hive-Signal: effort lt1h\nHive-Signal: unclear\n")
+        self.assertEqual(self.check(), (0, self.checked(marker)), self.err)
 
     def test_a_hand_over_that_is_not_one_this_tool_writes_is_refused(self):
         dealt = self.w.deal(self.alice, "toy-0002")
@@ -21223,6 +21236,530 @@ class TestTheNeedsInTheLocalBee(NeedsVolunteer):
         code, text = self.run_cli("needs", "--project", "Bee-ruche/toy", "--upstream-url", str(self.w.upstream), "--by-fetch",
                                   cwd=Path(self.tmp.name))
         self.assertEqual((code, self.spoken(text)[-2]), (0, f"NEEDS-DIGEST {digest}"), self.err)
+
+
+SIGNAL_TASKS = {t["id"]: t for t in [*TASKS, PROBE]}
+SIGNAL_CONFIG = {"needs": [{"kind": "program", "name": "g++", "package": "g++"}, {"kind": "resources", "processors": 2}]}
+
+
+def a_commit(message, parents=()):
+    """A commit's bytes as the hand-over check reads them: its tree, its parents, its author and its committer, then its message."""
+    head = [f"tree {hive.EMPTY_TREE}", *(f"parent {p}" for p in parents),
+            "author alice <1+alice@users.noreply.github.com> 1700000000 +0000",
+            "committer alice <1+alice@users.noreply.github.com> 1700000000 +0000"]
+    return ("\n".join(head) + "\n\n" + message).encode()
+
+
+class TestSignals(unittest.TestCase):
+    """What a member may say of a deal beside its candidate or its release (hive.SIGNALS): codes of the hive's own, each
+    with at most one value of a fixed kind, never text; read from the marker's own message, kept when they hold,
+    dropped alone otherwise."""
+
+    def held(self, said, where="submit", task="toy-0001", config=SIGNAL_CONFIG):
+        return hive.held_signals(said, where, SIGNAL_TASKS[task], SIGNAL_TASKS, config)
+
+    def test_each_code_holds_where_it_may_be_said_with_a_value_of_its_kind(self):
+        good = {"confidence": "high", "duplicate": "toy-0002", "effort": "lt1h", "felt": "harder", "flaky": None, "goal_beyond": None,
+                "local_check": "passed", "machine_failed": "disk", "more_gain": None, "need_unlisted": None, "need_unmet": "g++",
+                "needs_first": "toy-0004", "off_task_request": None, "outlook": "dead_end", "outside_files": None,
+                "sandbox_blocked": "network", "splits": "3", "too_large": None, "unclear": None}
+        self.assertEqual(set(good), set(hive.SIGNALS), "every code is tried here")
+        for code, value in good.items():
+            places, kind, _, _ = hive.SIGNALS[code]
+            for where in ("submit", "out_of_reach", "cannot_run"):
+                task = "toy-0006" if code == "outlook" else "toy-0001"
+                got = self.held([(code, value)], where, task)
+                wanted = [{"code": code, **({"value": int(value) if kind == "number" else value} if value is not None else {})}]
+                self.assertEqual(got, wanted if where in places else [], (code, where))
+
+    def test_a_value_out_of_its_kind_is_dropped_alone(self):
+        wrong = [("confidence", "certain"), ("confidence", None), ("splits", "1"), ("splits", "9"), ("splits", "03"), ("splits", "three"),
+                 ("duplicate", "toy-0001"), ("duplicate", "toy-0099"), ("duplicate", None), ("flaky", "yes"), ("too_large", "much"),
+                 ("effort", "LT1H"), ("felt", "")]
+        for pair in wrong:
+            self.assertEqual(self.held([pair, ("unclear", None)]), [{"code": "unclear"}], pair)
+        self.assertEqual(self.held([("needs_first", None)], "out_of_reach"), [{"code": "needs_first"}], "a value it may leave out")
+        for task in ("toy-0001", "toy-0003", "toy-0099"):  # itself, a closed task, none of the project's
+            self.assertEqual(self.held([("needs_first", task)], "out_of_reach"), [], task)
+            self.assertEqual(self.held([("duplicate", task)]), [], task)
+        self.assertEqual(self.held([("need_unmet", None)], "cannot_run"), [{"code": "need_unmet"}])
+        self.assertEqual(self.held([("need_unmet", "gcc")], "cannot_run"), [], "a need the project does not list")
+        self.assertEqual(self.held([("need_unmet", "g++")], "cannot_run", config={}), [], "nor in a project that lists none")
+        self.assertEqual(self.held([("outlook", "promising")]), [], "outlook on a probe's candidate alone")
+        self.assertEqual(self.held([("telepathy", None), ("judge_lenient", None), ("unclear", None)]), [{"code": "unclear"}],
+                         "a code not the hive's own: judge_lenient is none (a loophole is told to the owner, never signalled)")
+
+    def test_a_code_twice_neither_holds_and_beyond_the_most_none_does(self):
+        self.assertEqual(self.held([("felt", "easier"), ("felt", "harder"), ("unclear", None)]), [{"code": "unclear"}])
+        five = [("unclear", None), ("too_large", None), ("flaky", None), ("felt", "easier"), ("effort", "lt1h")]
+        self.assertEqual(self.held(five), [])
+        self.assertEqual(len(self.held(five[:hive.SIGNALS_MOST])), hive.SIGNALS_MOST)
+        self.assertEqual(self.held(five[:3] + [("telepathy", None), ("telepathy", None), ("judge_lenient", None)]),
+                         [{"code": "flaky"}, {"code": "too_large"}, {"code": "unclear"}],
+                         "a code not the hive's own counts for nothing: neither toward the most nor as a code twice")
+        self.assertEqual(self.held("unclear"), [], "only a list of pairs is read")
+
+    def test_what_holds_comes_in_the_codes_order_with_the_projects_own_strings(self):
+        got = self.held([("unclear", None), ("effort", "lt3h"), ("duplicate", "toy-0002"), ("splits", "8")])
+        self.assertEqual(got, [{"code": "duplicate", "value": "toy-0002"}, {"code": "effort", "value": "lt3h"}, {"code": "splits", "value": 8},
+                               {"code": "unclear"}])
+        self.assertIs(got[0]["value"], SIGNAL_TASKS["toy-0002"]["id"], "the project's string, not the fork's")
+        self.assertEqual(hive.plain_signals(got), [("duplicate", "toy-0002"), ("effort", "lt3h"), ("splits", "8"), ("unclear", None)])
+
+    def test_read_signals_takes_whole_lines_of_its_shape_alone(self):
+        message = ("Hive submit\n\nHive-Task: toy-0001\nHive-Signal: unclear\nHive-Signal: effort lt1h\r\n Hive-Signal: flaky\n"
+                   "Hive-Signal: felt easier \nHive-Signal: Felt easier\nHive-Signal: felt easy going\nHive-Signal:flaky\n"
+                   "Hive-Signal: splits 3 4\nHive-Signal: duplicate toy-0002\nhive-signal: flaky\nHive-Signal: " + "a" * 25 + "\n")
+        self.assertEqual(hive.read_signals(message), [("unclear", None), ("effort", "lt1h"), ("duplicate", "toy-0002")])
+        name = "_" + "n" * 99  # (a need's name as the project's file may write one: a « _ » first, 100 characters)
+        self.assertEqual(hive.read_signals(f"Hive-Signal: need_unmet {name}\nHive-Signal: need_unmet {name}n\n"), [("need_unmet", name)])
+        self.assertEqual(len(hive.read_signals("Hive-Signal: flaky\n" * 1000)), hive.SIGNALS_READ, "lines past the bound are none")
+        config = {"needs": [{"kind": "file", "name": name}]}
+        self.assertEqual(self.held([("need_unmet", name)], "cannot_run", config=config), [{"code": "need_unmet", "value": name}])
+
+    def test_signal_lines_leave_the_marker_as_it_is(self):
+        who, deal = "Hive-Member: alice\n", "Hive-Deal: 2026-11-12T11:00:00Z\n"
+        submit = "Hive-Task: toy-0001\nHive-Action: submit\n" + deal + who
+        bare = hive.read_marker(submit)
+        self.assertEqual(hive.read_marker(submit + "Hive-Signal: unclear\nHive-Signal: unclear\nHive-Signal: nonsense here\n"), bare,
+                         "a signal line is no key of the marker: twice, or malformed, it changes nothing of it")
+
+    def test_the_tools_messages_and_the_hand_over_check(self):
+        said = [("unclear", None), ("effort", "lt1h")]
+        submit = hive.submit_message("toy-0001", NOW, "alice", None, said)
+        self.assertEqual(submit, f"Hive submit: toy-0001\n\nHive-Task: toy-0001\nHive-Action: submit\nHive-Deal: {NOW}\nHive-Member: alice\n"
+                                 "Hive-Signal: effort lt1h\nHive-Signal: unclear\n", "in the codes' order, after the marker")
+        self.assertEqual(hive.submit_message("toy-0001", NOW, "alice", None), hive.submit_message("toy-0001", NOW, "alice", None, ()),
+                         "no signal, the message of before")
+        release = hive.release_message("toy-0001", NOW, NOW, "alice", "out_of_reach", [("too_large", None)])
+        self.assertTrue(release.endswith("Hive-Because: out_of_reach\nHive-Signal: too_large\n"))
+        for message, action in ((submit, "submit"), (release, "release")):
+            self.assertTrue(hive.made_here(a_commit(message, ["a" * 40] if action == "submit" else []), action, hive.read_marker(message)))
+        base = hive.submit_message("toy-0001", NOW, "alice", None)
+        never = [base + "Hive-Signal: unclear\nHive-Signal: effort lt1h\n",  # out of the codes' order
+                 base + "Hive-Signal: unclear\nHive-Signal: unclear\n",  # a code twice
+                 base + "Hive-Signal: telepathy\n",  # not a code of the tool's own
+                 base + "".join(f"Hive-Signal: {c}\n" for c in ("flaky", "too_large", "unclear", "outside_files", "more_gain")),  # beyond the most
+                 base + "Hive-Signal: felt easy going\n",  # a line of another shape
+                 base + "Hive-Signal: confidence banana\n",  # a word not the code's
+                 base + "Hive-Signal: goal_beyond\n",  # a code said on a release alone
+                 base + "Hive-Signal: splits 99\n",  # a number out of its bounds
+                 base + "Hive-Signal: flaky bogus\n",  # a value where the code takes none
+                 base + "Hive-Signal: confidence\n",  # no value where the code takes one
+                 base.replace("Hive-Member: alice\n", "Hive-Signal: unclear\nHive-Member: alice\n")]  # elsewhere than at the end
+        for message in never:
+            self.assertFalse(hive.made_here(a_commit(message, ["a" * 40]), "submit", hive.read_marker(message)), message)
+        given = hive.release_message("toy-0001", NOW, NOW, "alice", "out_of_reach", [("machine_failed", "disk")])
+        self.assertFalse(hive.made_here(a_commit(given), "release", hive.read_marker(given)), "a machine's code beside out_of_reach")
+        given = hive.release_message("toy-0001", NOW, NOW, "alice", "cannot_run", [("machine_failed", "disk"), ("need_unmet", "g++")])
+        self.assertTrue(hive.made_here(a_commit(given), "release", hive.read_marker(given)), "the project's need is the hive's to hold, later")
+        self.assertFalse(hive.made_here(b"tree x\nparent y\nauthor a\ncommitter c\n\nHive-Signal: flaky\n", "work"),
+                         "a work commit's title is no signal line")
+        self.assertTrue(hive.made_here(b"tree x\nparent y\nauthor a\ncommitter c\n\nthe work\n", "work"))
+        ready = hive.ready_message(NOW, "alice", 3, None) + "Hive-Signal: unclear\n"
+        self.assertFalse(hive.made_here(a_commit(ready), "ready", hive.read_marker(ready)), "beside an ask")
+
+    def test_a_guardians_acceptance_carries_none_and_a_members_verdict_carries_them(self):
+        outcome = {"task": "toy-0001", "deal": NOW, "member_id": 101, "repo_id": 1101, "sha": "a" * 40, "result": "refused", "judged": True,
+                   "model": None, "reason": "judge_refused", "detail": {}, "signals": [{"code": "confidence", "value": "high"}]}
+        self.assertEqual(hive.verdict_event(outcome, hive.now())["signals"], [{"code": "confidence", "value": "high"}])
+        admitted = {**outcome, "result": "accepted", "login": "alice", "commit": "b" * 40, "figures": {}, "report": {},
+                    "admit": {"ruling": "c" * 40, "guardian_id": 201, "guardian": "gina", "waive": {"suspects": 2}}}
+        self.assertNotIn("signals", hive.verdict_event(admitted, hive.now()))
+        self.assertNotIn("signals", hive.verdict_event({**outcome, "signals": []}, hive.now()))
+        expiry = {"task": "toy-0001", "member_id": 101, "deal": NOW, "fault": False, "released": "out_of_reach", "release": "d" * 40,
+                  "signals": [{"code": "too_large"}]}
+        self.assertEqual(hive.expired_line(expiry, NOW, "k" * 32)["signals"], [{"code": "too_large"}])
+        self.assertNotIn("signals", hive.expired_line({k: v for k, v in expiry.items() if k not in ("released", "release")}, NOW, "k" * 32),
+                         "a deal that ran out says nothing of a member's")
+
+    def test_a_promise_kept_carries_its_signals_into_the_verdict(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = hive.Ledger(folder)
+            intent = {"type": "intent", "at": NOW, "run": "k" * 32, "task": "toy-0001", "deal": NOW, "member_id": 101, "repo_id": 1101,
+                      "sha": "a" * 40, "commit": "b" * 40, "result": "accepted", "judged": True, "model": None, "member": "alice",
+                      "figures": {}, "report": {}, "signals": [{"code": "more_gain"}]}
+            ledger.append([intent])
+            verdict, = hive.settle(ledger, hive.now(), {"b" * 40: True})
+            self.assertEqual((verdict["type"], verdict["signals"]), ("verdict", [{"code": "more_gain"}]))
+
+    def test_both_documents_list_the_codes_as_the_tool_holds_them(self):
+        here = Path(__file__).resolve().parents[2]
+        places = {"a candidate": "submit", "a probe's candidate": "submit", "a release `out_of_reach`": "out_of_reach",
+                  "a release `cannot_run`": "cannot_run"}
+        protocol, guide = {}, {}
+        pushes = (here / "docs/protocol.md").read_text().split("\n## What a worker pushes\n")[1].split("\n## ")[0]
+        for line in pushes.splitlines():
+            m = re.fullmatch(r"  \| ((?:`[a-z_]+`(?:, )?)+) \| ([^|]+) \| [^|]+ \|", line)
+            if m:
+                for code in re.findall(r"`([a-z_]+)`", m.group(1)):
+                    protocol[code] = tuple(sorted(places[p.strip()] for p in m.group(2).split(", ")))
+        words = {"submit": "submit", "out of reach": "out_of_reach", "cannot_run": "cannot_run"}
+        section = (here / ".claude/skills/bee-worker/SKILL.md").read_text().split("\n## Signals\n")[1].split("\n## ")[0]
+        for line in section.splitlines():
+            m = re.fullmatch(r"\| `([a-z_]+)` \| ([^:|]+): [^|]+ \| [^|]+ \|", line)
+            if m:
+                guide[m.group(1)] = tuple(sorted(w for said, w in words.items() if said in m.group(2)))
+        wanted = {code: tuple(sorted(spec[0])) for code, spec in hive.SIGNALS.items()}
+        self.assertEqual(protocol, wanted, "docs/protocol.md, What a worker pushes")
+        self.assertEqual(guide, wanted, "the worker's guide, Signals")
+
+    def test_the_steps_that_write_hold_the_plans_signals_again_and_stop_on_none(self):
+        plan_ = {"queue": [{"task": "toy-0001", "signals": [{"code": "unclear"}, {"code": "splits", "value": 3}, {"code": "telepathy"}]},
+                           {"task": "toy-0001", "signals": "unclear"},
+                           {"task": "toy-0001", "signals": [{"code": "unclear", "note": "read me"}]},
+                           {"task": "toy-0099", "signals": [{"code": "unclear"}]},
+                           {"task": "toy-0001", "signals": [{"code": "unclear"}], "admit": {"ruling": "c" * 40}},
+                           {"task": "toy-0001"}],
+                 "expiries": [{"task": "toy-0001", "released": "cannot_run", "signals": [{"code": "too_large"}, {"code": "machine_failed", "value": "disk"}]},
+                              {"task": "toy-0001", "fault": True, "signals": [{"code": "unclear"}]}],
+                 "other": 1}
+        with mock.patch.object(hive, "log") as logged:
+            held = hive.signals_held_again(plan_, SIGNAL_CONFIG, SIGNAL_TASKS)
+        self.assertEqual([c.get("signals") for c in held["queue"]],
+                         [[{"code": "splits", "value": 3}, {"code": "unclear"}], None, None, None, None, None])
+        self.assertEqual([e.get("signals") for e in held["expiries"]], [[{"code": "machine_failed", "value": "disk"}], None])
+        self.assertEqual(held["other"], 1)
+        self.assertEqual(plan_["queue"][1]["signals"], "unclear", "the plan itself is left as it was")
+        self.assertEqual(logged.call_args_list, [mock.call("signals dropped: 7 (not borne out by the project's file and tasks)")])
+
+
+class TestSignalsInTheRun(Base):
+    """A candidate's and a release's signals reach the ledger line the run writes for that ending anyway, and change
+    nothing else: not the verdict, the wait, the deal, the day's count, « stuck » or the hint; the feed lists the codes
+    a run reads, and never a count."""
+
+    def signalled(self, fork, task, lines, content=None):
+        """A candidate for the deal `fork` holds on `task` (one written first, as an earlier run would have), whose
+        marker says `lines` after its own."""
+        deal = self.w.deal(fork, task)
+        fork.write("lib.c", content if content is not None else LIB.replace("return 0;", "return 0; /* tuned */")).commit()
+        marker = ["Hive submit", "", f"Hive-Task: {task}", "Hive-Action: submit", f"Hive-Deal: {deal}", f"Hive-Member: {fork.login}", *lines]
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "\n".join(marker), cwd=fork.work)
+        return fork.push()
+
+    def lines(self, kind):
+        return [e for e in self.w.load()[2].events if e["type"] == kind]
+
+    def test_a_candidates_signals_that_hold_are_on_its_verdict_and_change_nothing_else(self):
+        self.signalled(self.alice, "toy-0001", ["Hive-Signal: confidence high", "Hive-Signal: telepathy", "Hive-Signal: effort lt1h",
+                                                "Hive-Signal: outlook promising"])
+        self.assertEqual(self.one(self.w.run())["result"], "accepted")
+        line, = self.lines("verdict")
+        self.assertEqual(line["signals"], [{"code": "confidence", "value": "high"}, {"code": "effort", "value": "lt1h"}],
+                         "what holds; a code not the hive's, and outlook on a work task, are dropped alone")
+        self.assertEqual([c.get("signals") for c in self.w.made["queue"]], [line["signals"]], "the plan itself carries what holds")
+        feed = self.w.feed_file()
+        self.assertEqual(feed["signals"], sorted(hive.SIGNALS), "the codes the run reads")
+        self.assertNotIn("signal", json.dumps(feed["tasks"]), "and no count of them anywhere")
+        self.assertNotIn("signal", json.dumps(feed["deals"]))
+        refused = self.signalled(self.alice.fresh("hive/submit/toy-0002"), "toy-0002", ["Hive-Signal: local_check passed"])
+        self.w.run()
+        verdicts = self.lines("verdict")
+        self.assertEqual(verdicts[-1]["sha"], refused)
+        self.assertEqual((verdicts[-1]["result"], verdicts[-1]["signals"]), ("refused", [{"code": "local_check", "value": "passed"}]))
+        self.assertNotIn("member", verdicts[-1], "a refusal's line names no login, signals or not")
+
+    def test_signals_change_no_verdict_wait_or_count(self):
+        for word in ("REFUSE", "FAST"):  # a refusal and an acceptance
+            with self.subTest(word=word):
+                self.same_without_signals(word)
+
+    def same_without_signals(self, word):
+        def world_with(lines):
+            world = World(tempfile.mkdtemp(dir=self.tmp.name), self.config)
+            alice = world.fork("alice", 101)
+            deal = world.deal(alice, "toy-0001")
+            alice.write("lib.c", LIB.replace("return 0;", f"return 0; /* {word} */")).commit()
+            marker = ["Hive submit", "", "Hive-Task: toy-0001", "Hive-Action: submit", f"Hive-Deal: {deal}", "Hive-Member: alice", *lines]
+            sh("git", "commit", "--quiet", "--allow-empty", "-m", "\n".join(marker), cwd=alice.work)
+            alice.push()
+            world.run()
+            config, tasks, ledger = world.load()
+            strip = [{k: v for k, v in e.items() if k not in ("signals", "sha", "commit", "at", "run", "repo_id")} for e in ledger.events]  # (the integrated commit names the candidate's)
+            tallied = hive.tally(tasks, [l for l in map(hive.tally_line, ledger.events) if l], hive.now())
+            feed = world.feed_file()
+            seen = [e.get("signals") for e in ledger.events if e["type"] == "verdict"]
+            return (strip, ledger.standing(101, hive.now(), config), ledger.held_in_vain(101), feed["wait"], feed["tasks"],
+                    json.loads((world.state / "stats.json").read_text()),
+                    {k: v for k, v in tallied["tasks"]["toy-0001"].items() if k != "signals"}, tallied["stuck"]), seen  # (the counts of signals aside)
+        quiet, none = world_with([])
+        said, seen = world_with(["Hive-Signal: confidence high", "Hive-Signal: local_check passed", "Hive-Signal: too_large",
+                                 "Hive-Signal: splits 2"])
+        self.assertEqual((none, len(seen), len(seen[0])), ([None], 1, 4), "the one world's verdict carries them, the other's none")
+        self.assertEqual(quiet, said, "the verdict, the wait, the deals held in vain, the feed (its hints), the statistics and the tally")
+
+    def test_a_releases_signals_are_on_its_line_and_its_cost_is_the_releases(self):
+        self.w.tasks_file.write_text("".join(json.dumps(t) + "\n" for t in TASKS))
+        self.w.publish()
+        dealt = self.w.deal(self.alice, "toy-0001")
+        given = release(self.alice, "toy-0001", dealt, "out_of_reach", more=["Hive-Signal: too_large", "Hive-Signal: duplicate toy-0002",
+                                                                             "Hive-Signal: machine_failed disk", "Hive-Signal: duplicate toy-0001"])
+        self.w.run()
+        line, = self.lines("expired")
+        self.assertEqual((line["released"], line["release"], line["signals"]), ("out_of_reach", given, [{"code": "too_large"}]),
+                         "a code said twice holds neither; a machine's code is not said beside out_of_reach")
+        self.assertEqual([e.get("signals") for e in self.w.made["expiries"]], [[{"code": "too_large"}]],
+                         "the plan itself carries what holds, and nothing else")
+        config, _, ledger = self.w.load()
+        self.assertEqual(ledger.standing(101, hive.now(), config), (2, "2026-11-12T14:00:00Z", 1), "the first wait, as any release")
+        bob = self.w.fork("bob", 102)
+        dealt = self.w.deal(bob, "toy-0002")
+        release(bob, "toy-0002", dealt, "cannot_run", more=["Hive-Signal: need_unlisted"] + [f"Hive-Signal: {c}" for c in
+                                                                                             ("flaky", "unclear", "felt easier", "effort lt1h")])
+        self.w.run()
+        self.assertNotIn("signals", self.lines("expired")[-1], "more than the most: none")
+
+
+class TestSignalsHeldByTheSteps(Base):
+    """The steps that write take no signal on the plan's word: a plan that says more than holds has its signals held
+    again by record (a release's) and by apply (a candidate's), and the run goes on."""
+
+    def test_a_plan_that_says_more_than_holds_writes_what_holds(self):
+        real, planning = hive.held_signals, []
+
+        def loose(said, where, task, tasks, config):  # what a plan step gone wrong would carry: every code said, as said
+            return [{"code": code, **({"value": value} if value is not None else {})} for code, value in said] if planning else real(said, where, task, tasks, config)
+
+        def planned(*args, **kwargs):
+            planning.append(1)
+            try:
+                return real_plan(*args, **kwargs)
+            finally:
+                planning.clear()
+
+        real_plan = hive.plan
+        dealt = self.w.deal(self.alice, "toy-0001")
+        release(self.alice, "toy-0001", dealt, "out_of_reach", more=["Hive-Signal: telepathy", "Hive-Signal: too_large"])
+        bob = self.w.fork("bob", 102)
+        deal = self.w.deal(bob, "toy-0002")
+        bob.fresh("hive/submit/toy-0002").write("src/n.c", "int n;\n").commit()
+        marker = ["Hive submit", "", "Hive-Task: toy-0002", "Hive-Action: submit", f"Hive-Deal: {deal}", "Hive-Member: bob",
+                  "Hive-Signal: confidence certain", "Hive-Signal: unclear"]
+        sh("git", "commit", "--quiet", "--allow-empty", "-m", "\n".join(marker), cwd=bob.work)
+        bob.push()
+        with mock.patch.object(hive, "held_signals", side_effect=loose), mock.patch.object(hive, "plan", side_effect=planned):
+            self.w.run()
+        events = self.w.load()[2].events
+        expired, = [e for e in events if e["type"] == "expired"]
+        verdict, = [e for e in events if e["type"] == "verdict"]
+        self.assertEqual(expired["signals"], [{"code": "too_large"}], "record held the release's again")
+        self.assertEqual(verdict["signals"], [{"code": "unclear"}], "apply held the candidate's again")
+
+
+class TestSignallingCommands(Volunteer):
+    """« hive submit » and « hive release » with --signal: the tool writes the lines, from its own list, once the
+    project's run reads them, and refuses before it makes anything otherwise."""
+
+    def release(self, task, deal, because="out_of_reach", *more, **options):
+        return self.run_cli("release", "--project", "Bee-ruche/toy", "--state", self.state_root, "--login", "alice", "--task", task,
+                            "--deal", deal, "--because", because, *more, **options)
+
+    def test_release_writes_its_signals_and_the_hive_records_them(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        code, text = self.release("toy-0001", dealt, "out_of_reach", "--signal", "too_large", "--signal", "splits=3")
+        self.assertEqual(code, 0, self.err)
+        given = self.fork_branch("hive/release/toy-0001")
+        message = sh("git", "cat-file", "commit", given, cwd=self.alice.bare).stdout.partition("\n\n")[2]
+        self.assertTrue(message.endswith("Hive-Because: out_of_reach\nHive-Signal: splits 3\nHive-Signal: too_large\n"), message)
+        self.w.run()
+        line, = [e for e in self.w.load()[2].events if e["type"] == "expired"]
+        self.assertEqual(line["signals"], [{"code": "splits", "value": 3}, {"code": "too_large"}])
+
+    def test_the_tool_refuses_a_signal_before_it_makes_anything(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        feed = self.w.feed_file()
+        cases = [(("--signal", "telepathy"), "--signal: one of them is not a code of the hive's own (the worker's guide lists them): nothing was pushed"),
+                 (("--signal", "local_check=passed"), "--signal local_check: not said this way here (twice, beside another kind of ending, or "
+                                                      "with a value it does not take: the worker's guide says each code's place and values): nothing was pushed"),
+                 (("--signal", "splits=12"), "--signal splits: not said this way here"),
+                 (("--signal", "flaky="), "--signal flaky: not said this way here"),
+                 (("--signal", "duplicate=toy-0001"), "--signal duplicate: names no open task of the project other than this one, as its "
+                                                      "files write it: nothing was pushed"),
+                 (("--signal", "duplicate=toy-0099"), "--signal duplicate: names no open task of the project other than this one"),
+                 (("--signal", "needs_first=toy-0099"), "--signal needs_first: names no open task of the project other than this one"),
+                 (("--signal", "unclear", "--signal", "unclear"), "--signal unclear: not said this way here"),
+                 (tuple(w for c in ("unclear", "flaky", "too_large", "felt=easier", "effort=lt1h") for w in ("--signal", c)),
+                  "--signal: 4 at most, each code once: nothing was pushed")]
+        for words, said in cases:
+            self.one_line(self.release("toy-0001", dealt, "out_of_reach", *words), said, begins=True)
+        (self.w.state / "feed.json").write_text(json.dumps({k: v for k, v in feed.items() if k != "signals"}))
+        self.one_line(self.release("toy-0001", dealt, "out_of_reach", "--signal", "unclear"),
+                      "--signal unclear: the project's hive does not read it yet (its run is at an older commit of the hive, or the state given "
+                      "is older than its last run: take it again): nothing was pushed. Leave the signals out")
+        self.assertIsNone(self.fork_branch("hive/release/toy-0001"), "nothing was pushed")
+        code, _ = self.release("toy-0001", dealt, "out_of_reach")
+        self.assertEqual(code, 0, "without signals, as before")
+
+    def test_submit_with_signals_needs_the_state(self):
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        self.alice.write("lib.c", LIB.replace("return 0;", "return 0; /* tuned */"))
+        self.one_line(self.submit("toy-0001", dealt, "--signal", "confidence=high"),
+                      "--signal needs --state, a clone of the project's branch hive-state: nothing was pushed")
+        self.one_line(self.submit("toy-0001", dealt, "--message", "Hive-Signal: unclear"),
+                      "--message: one plain line (200 characters at most) that says what you changed")
+        code, _ = self.submit("toy-0001", dealt, "--signal", "confidence=high", "--signal", "more_gain", "--state", self.state_root)
+        self.assertEqual(code, 0, self.err)
+        message = sh("git", "cat-file", "commit", self.fork_branch("hive/submit/toy-0001"), cwd=self.alice.bare).stdout.partition("\n\n")[2]
+        self.assertTrue(message.endswith("Hive-Member: alice\nHive-Signal: confidence high\nHive-Signal: more_gain\n"), message)
+        self.w.run()
+        verdict, = [e for e in self.w.load()[2].events if e["type"] == "verdict"]
+        self.assertEqual(verdict["signals"], [{"code": "confidence", "value": "high"}, {"code": "more_gain"}])
+
+
+class TestTheTallyReadsSignals(unittest.TestCase):
+    """What the tally reads of the members' signals (docs/cutter.md, "Signals"): each code by distinct accounts and by
+    those established when they said it, the C1 count, and the project-wide lists; and the deterministic cutter's C1."""
+    setUp, deal, end, expired, at = TestLedger.setUp, TestLedger.deal, TestLedger.end, TestLedger.expired, staticmethod(TestLedger.at)
+    judged, tally, proven, TASKS = TestTally.judged, TestTally.tally, TestTally.proven, TestTally.TASKS
+
+    def given_back(self, member, task, dealt, clock, *signals, because="out_of_reach"):
+        return {**self.expired(member, task, dealt, clock), "released": because, "release": "r" * 40,
+                "signals": [{"code": c, **({"value": v} if v is not None else {})} for c, v in signals]}
+
+    def signalled(self, line, *signals):
+        return {**line, "signals": [{"code": c, **({"value": v} if v is not None else {})} for c, v in signals]}
+
+    def test_each_code_by_accounts_and_by_the_established(self):
+        t, proven = "toy-0001", self.proven(1, 2)
+        lines = [*proven,
+                 self.deal(1, t, "10:00:00"), self.given_back(1, t, "10:00:00", "10:30:00", ("too_large", None), ("effort", "lt3h")),
+                 self.deal(2, t, "11:00:00"), self.given_back(2, t, "11:00:00", "11:30:00", ("too_large", None), ("effort", "lt1h")),
+                 self.deal(9, t, "12:00:00"), self.given_back(9, t, "12:00:00", "12:30:00", ("too_large", None), ("effort", "lt1h")),
+                 self.deal(1, t, "13:00:00"), self.given_back(1, t, "13:00:00", "13:30:00", ("effort", "lt1h"))]
+        row = self.tally(*lines)["tasks"][t]
+        self.assertEqual(row["signals"], {"effort": {"by": 3, "by_established": 2, "values": {"lt1h": 2}},
+                                          "too_large": {"by": 3, "by_established": 2, "values": {}}},
+                         "each account once, its latest value; account 9 has no acceptance and its value is not counted")
+
+    def test_a_line_s_signals_are_read_again_as_data(self):
+        t = "toy-0001"
+        wrong = {**self.expired(1, t, "10:00:00", "10:30:00"), "released": "out_of_reach", "release": "r" * 40,
+                 "signals": [{"code": "too_large", "note": "x"}, {"code": "machine_failed", "value": "disk"},
+                             {"code": "splits", "value": 99}, {"code": "felt", "value": "harder"}]}
+        self.assertEqual(hive.tally_line(wrong)["signals"], {"felt": "harder"})
+        odd = {**wrong, "signals": [{"code": "telepathy"}, {"code": "duplicate", "value": "a b"}, {"code": "splits", "value": True},
+                                    {"code": "needs_first", "value": "toy-0002"}]}
+        self.assertEqual(hive.tally_line(odd)["signals"], {"needs_first": "toy-0002"})
+        self.assertNotIn("signals", hive.tally_line({**wrong, "signals": wrong["signals"] + [{"code": "unclear"}]}), "more than four: none")
+        twice = {**wrong, "signals": [{"code": "felt", "value": "easier"}, {"code": "felt", "value": "harder"}, {"code": "unclear"}]}
+        self.assertEqual(hive.tally_line(twice)["signals"], {"unclear": None}, "a code said twice is neither, as the writers hold it")
+        self.assertNotIn("signals", hive.tally_line({**wrong, "signals": "felt"}), "no signal: the line as it was")
+        ran_out = {**self.expired(1, t, "10:00:00", "10:30:00"), "signals": [{"code": "too_large"}]}
+        self.assertNotIn("signals", hive.tally_line(ran_out), "a deal that ran out said nothing")
+        admitted = {**self.end(1, t, "10:00:00", "10:30:00"), "ruling": "d" * 40, "signals": [{"code": "more_gain"}]}
+        self.assertNotIn("signals", hive.tally_line(admitted), "a guardian's acceptance carries none")
+
+    def test_the_c1_count_and_the_cut(self):
+        t, proven = "toy-0004", self.proven(1, 2, 3)
+        lines = [*proven,
+                 self.deal(1, t, "10:00:00"), self.given_back(1, t, "10:00:00", "10:30:00", ("too_large", None)),
+                 self.deal(2, t, "11:00:00"), self.given_back(2, t, "11:00:00", "11:30:00", ("unclear", None), ("effort", "lt3h")),
+                 self.deal(3, t, "12:00:00"), self.judged(3, t, "12:00:00", "12:30:00", "goal_not_met")]
+        lines += [self.deal(9, t, "12:40:00"), self.given_back(9, t, "12:40:00", "12:50:00", ("too_large", None))]  # (no acceptance: counts nowhere)
+        counted = self.tally(*lines)
+        self.assertEqual((counted["stuck"], counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), ([t], 3, 2))
+        config = hive.config_of({**CONFIG, "cutter": {"floors": {"gain": 0.01}, "open": 3}}, "hive/project.json")
+        published = {task["id"]: dict(task) for task in TASKS}
+        proposal, said = hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)
+        self.assertIs(proposal[t]["closed"], True)
+        self.assertEqual((said["for_the_cutter"], said["added"]),
+                         ([{"id": t, "because": "signalled", "signals": {"too_large": 1, "unclear": 1}}], []),
+                         "most failures say the task stood in the way: closed, and left to the AI cutter, never halved by rule")
+        # Two of four is no majority: halved as before.
+        tie = [*self.proven(1, 2, 3, 4), *lines[6:], self.deal(4, t, "13:00:00"), self.judged(4, t, "13:00:00", "13:30:00", "goal_not_met")]
+        counted = self.tally(*tie)
+        self.assertEqual((counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), (4, 2))
+        self.assertEqual([entry["from"] for entry in hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)[1]["added"]],
+                         ["easier"], "a tie is no majority")
+        three = [*tie[:-1], self.given_back(4, t, "13:00:00", "13:30:00", ("duplicate", "toy-0001"))]
+        counted = self.tally(*three)
+        self.assertEqual((counted["tasks"][t]["established_failures"], counted["tasks"][t]["signalled_failures"]), (4, 3))
+        self.assertEqual([entry["because"] for entry in hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)[1]["for_the_cutter"]],
+                         ["signalled"], "three of four is")
+        # Once the cut is published (the task closed), the tally lists it for the AI cutter until a task names it as its parent.
+        closed = {**self.TASKS, t: {**self.TASKS[t], "closed": True}}
+        lines_of = [line for line in map(hive.tally_line, three) if line]
+        listed = hive.tally(closed, lines_of, hive.parse_iso(self.at("20:00:00")))
+        self.assertEqual(listed["signalled"], [t])
+        summary = hive.tally_sums(listed)
+        self.assertEqual(summary["signalled"], [t], "health names it, as it names the stuck tasks")
+        totals = hive.health_totals([{**summary, "project": p, "repository": f"o/{p}", "paused": False, "active_members": 1} for p in ("a", "b")])
+        self.assertEqual(totals["signalled"], 2, "the totals count them")
+        tie_lines = [line for line in map(hive.tally_line, tie) if line]
+        self.assertEqual(hive.tally(closed, tie_lines, hive.parse_iso(self.at("20:00:00")))["signalled"], [], "a tie is no majority here either")
+        cut_again = {**closed, "toy-0009": {"id": "toy-0009", "title": "Smaller", "files": ["lib.c"], "parent": t}}
+        self.assertEqual(hive.tally(cut_again, lines_of, hive.parse_iso(self.at("20:00:00")))["signalled"], [])
+        self.assertEqual(self.tally(*three)["signalled"], [], "a task still open is the stuck rule's, not this list's")
+        # One of three: halved as before. A goal_beyond says the goal stood in the way, and is no C1 code.
+        lines[-5] = self.given_back(2, t, "11:00:00", "11:30:00", ("goal_beyond", None))
+        counted = self.tally(*lines)
+        self.assertEqual(counted["tasks"][t]["signalled_failures"], 1)
+        proposal, said = hive.cut(config, published, {}, counted, set(), set(), TestTheCutGate.PATHS)
+        self.assertEqual([entry["from"] for entry in said["added"]], ["easier"])
+        # A member whose latest failure carried no code counts as such, whatever it said before.
+        lines += [self.deal(1, t, "13:00:00"), self.judged(1, t, "13:00:00", "13:30:00", "judge_refused")]
+        self.assertEqual(self.tally(*lines)["tasks"][t]["signalled_failures"], 0)
+
+    def test_the_project_wide_lists(self):
+        proven = self.proven(1, 2)
+        lines = [*proven,
+                 self.deal(1, "toy-0001", "10:00:00"),
+                 self.signalled(self.judged(1, "toy-0001", "10:00:00", "10:30:00"), ("more_gain", None), ("confidence", "low"), ("felt", "easier")),
+                 self.deal(2, "toy-0004", "11:00:00"),
+                 self.signalled(self.judged(2, "toy-0004", "11:00:00", "11:30:00", "judge_refused"), ("local_check", "passed"), ("confidence", "high")),
+                 self.deal(9, "toy-0004", "12:00:00"),
+                 self.signalled(self.judged(9, "toy-0004", "12:00:00", "12:30:00", "judge_refused"), ("local_check", "passed")),
+                 self.deal(1, "toy-0004", "12:40:00"),  # (refused for a figure, its check passed, more gain in sight: neither list counts it)
+                 self.signalled(self.judged(1, "toy-0004", "12:40:00", "12:50:00", "goal_not_met"), ("local_check", "passed"), ("more_gain", None)),
+                 self.deal(2, "toy-0004", "13:00:00"), self.given_back(2, "toy-0004", "13:00:00", "13:30:00", ("off_task_request", None)),
+                 # Account 9's first acceptance: it was not established when it said these, which count for nothing.
+                 self.deal(9, "toy-0002", "15:00:00"),
+                 self.signalled(self.judged(9, "toy-0002", "15:00:00", "15:30:00"), ("more_gain", None), ("felt", "harder"), ("confidence", "high"))]
+        counted = self.tally(*lines)
+        self.assertEqual((counted["headroom"], counted["disagreements"], counted["alarms"]), (["toy-0001"], {"toy-0004": 1}, ["toy-0004"]),
+                         "from established members alone")
+        self.assertEqual(counted["calibration"], {"felt": {"S": {"easier": 1}}, "effort": {},
+                                                  "confidence": {"low": {"accepted": 1, "refused": 0}, "high": {"accepted": 0, "refused": 1}}})
+        summary = hive.tally_sums(counted)
+        self.assertEqual({key: summary[key] for key in ("alarms", "headroom", "disagreements", "felt", "confidence_accepted", "confidence_refused")},
+                         {"alarms": ["toy-0004"], "headroom": ["toy-0001"], "disagreements": 1, "felt": {"easier": 1},
+                          "confidence_accepted": {"low": 1, "high": 0}, "confidence_refused": {"low": 0, "high": 1}})
+        self.assertEqual((summary["signals_by"]["local_check"], summary["signals_established"]["local_check"]), (3, 2))
+        totals = hive.health_totals([{**summary, "project": "a", "repository": "o/a", "paused": False, "active_members": 1},
+                                     {**summary, "project": "b", "repository": "o/b", "paused": False, "active_members": 1}])
+        self.assertEqual((totals["alarms"], totals["headroom"], totals["disagreements"], totals["signals_by"]["local_check"]), (2, 2, 2, 6))
+        # What the report prints: a project's column names its task ids, as « stuck tasks » does; the totals count them.
+        rows = dict(hive.report_rows("cutter", [summary, totals]))
+        for label in ("tasks with an alarm (an established member saw the project ask for something other than the task)",
+                      "tasks accepted with more gain in sight", "stuck tasks"):
+            self.assertIsInstance(rows[label](summary), list, label)
+        cells = [hive.report_cell(rows[label](totals)) for label in ("tasks with an alarm (an established member saw the project ask for "
+                                                                    "something other than the task)", "tasks accepted with more gain in sight",
+                                                                    "tasks closed for the AI cutter by C1, not cut again yet")]
+        self.assertEqual(cells, ["2", "2", "0"], "the totals count them")
+        self.assertEqual(hive.report_cell(rows["tasks with an alarm (an established member saw the project ask for something other than "
+                                               "the task)"](summary)), "toy-0004")
+        labels = [label for template in ("error", "cutter", "optimisation") for label, _ in hive.report_rows(template, [summary])]
+        for label in ("signal machine_failed, by accounts (any)", "tasks with an alarm (an established member saw the project ask for something "
+                      "other than the task)", "signal too_large, by established accounts", "effort lt1h, candidates and releases of established members",
+                      "confidence high: accepted, refused", "candidates the judge refused that their established member's own check passed"):
+            self.assertIn(label, labels)
+        self.assertNotIn("toy-0004", self.tally(*lines, self.deal(1, "toy-0004", "14:00:00"), self.judged(1, "toy-0004", "14:00:00", "14:30:00"))["alarms"],
+                         "a task done raises no alarm any more")
+
+    def test_a_probe_answer_says_its_outlook_and_effort(self):
+        t, proven = "toy-0006", self.proven(1)
+        tasks = {**self.TASKS, t: PROBE}
+        answer = self.signalled({**self.judged(1, t, "10:00:00", "10:30:00", "goal_not_met"), "probe": 1, "report": {"gain": 0.0}},
+                                ("outlook", "dead_end"), ("effort", "lt1h"))
+        counted = hive.tally(tasks, [line for line in map(hive.tally_line, [*proven, self.deal(1, t, "10:00:00"), answer]) if line],
+                             hive.parse_iso(self.at("20:00:00")))
+        entry, = counted["tasks"][t]["answers"]
+        self.assertEqual((entry["outlook"], entry["effort"]), ("dead_end", "lt1h"), "a dead end recorded with its effort")
 
 
 if __name__ == "__main__":

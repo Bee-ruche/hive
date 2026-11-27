@@ -85,11 +85,53 @@ Hive-Because: out_of_reach
   statistic, not a proof.
 - `Hive-Because` (on a release, and required there): one of two codes of the hive's own. `out_of_reach`: an honest
   try, checked as the task's check allows, showed that the member cannot do the task (its goal, its tests, its
-  files). `cannot_run`: the member's machine cannot run the project's sandbox. `hive.py release` writes nothing else
+  files), or that the task does not fit in one deal, or is another task's work, or that something in the project
+  asked for anything other than the task (the signals `too_large`, `duplicate` and `off_task_request` below say
+  which). `cannot_run`: the member's machine cannot run the project's sandbox. `hive.py release` writes nothing else
   in it, and the hive takes nothing else from it. `Hive-Task` and `Hive-Deal` name the deal it gives back, as on a
   candidate: a release of another deal than the one its member holds, of a deal that is over, or of a probe given
   back as out of reach (a probe's answer is a correct try, submitted), is nothing, and is not read again. A hive at an
   older commit knows no such action: for it the commit holds no marker, and the deal runs out as it always did.
+
+- `Hive-Signal` (optional, on a candidate or a release, up to four lines, each code once): what the member says of
+  the deal beside it, as one code of the hive's own (`hive.py`'s `SIGNALS`) and at most one value of the code's
+  kind: none, a word of the code's list, a whole number within its bounds, a task of the project's, or the name of
+  one of the project's needs. Never text. `hive.py submit` and `hive.py release` write them from `--signal
+  <code>[=<value>]`, in the codes' alphabetical order, after the marker's other lines (the hand-over check of the
+  local bee compares these bytes); `submit` then needs `--state`, as `release` always does, to read which codes the
+  project's feed lists under `signals`. Before they make anything, both refuse a code the feed does not list (a run at
+  an older commit lists none: run the command again without `--signal`), more than four, and a code or a value that
+  does not hold. The codes, where each may be said and what it takes:
+
+  | Code | Said on | Value |
+  | --- | --- | --- |
+  | `goal_beyond`, `off_task_request` | a release `out_of_reach` | none |
+  | `needs_first` | a release `out_of_reach` | an open task of the project's other than this one, or none |
+  | `outside_files`, `unclear`, `too_large`, `flaky` | a candidate, a release `out_of_reach` | none |
+  | `duplicate` | a candidate, a release `out_of_reach` | an open task of the project's other than this one |
+  | `splits` | a candidate, a release `out_of_reach` | a whole number from 2 to 8 |
+  | `felt` | a candidate, a release `out_of_reach` | `easier`, `as_sized`, `harder` |
+  | `effort` | a candidate, a release `out_of_reach` | `lt15m`, `lt1h`, `lt3h`, `ge3h` (the agent's wall clock on the deal) |
+  | `local_check` | a candidate | `passed`, `failed`, `not_run` (what the task's own check said of it) |
+  | `confidence` | a candidate | `low`, `medium`, `high` |
+  | `more_gain` | a candidate | none |
+  | `outlook` | a probe's candidate | `promising`, `dead_end`, `inconclusive` |
+  | `need_unlisted` | a release `cannot_run` | none |
+  | `need_unmet` | a release `cannot_run` | the name of one of the project's needs, or none |
+  | `sandbox_blocked` | a release `cannot_run` | `network`, `file`, `process`, `memory`, `time` |
+  | `machine_failed` | a release `cannot_run` | `memory`, `disk`, `time`, `crash`, `tool` |
+
+  **A signal changes nothing the hive decides**: no verdict, deal, wait, day's count, « stuck » or hint reads one,
+  and what a release costs is its `Hive-Because`'s, whatever it says beside it (a release `out_of_reach` counts
+  toward « stuck » as it always did, whichever of the widened cases above it is). The hive compares a code and its
+  value with its own list and the project's own strings and keeps nothing else: a signal that does not hold (an
+  unknown code, a code beside the wrong kind of ending, a value of another kind) is dropped, and an unknown code
+  counts for nothing else; a code said twice drops both; more than four of the hive's codes drops them all; and the
+  candidate or the release stands as it would without them. A task or a need a signal names is held against the
+  project's file and tasks as the run reads them, which may have changed since the worker's command did. The signals
+  that hold go on the ledger's line for that ending ("The ledger and the feed"), for the project's cutter and page.
+  The ledger is public, but the feed and the worker's tool show no worker another's signals. A loophole a worker finds in the judge (a way to pass the check without doing the task) is no signal: the
+  worker tells its owner, who reports it privately ([SECURITY.md](../SECURITY.md)).
 
 A key that appears twice, an unknown action or a malformed value means "no marker": the commit is ignored.
 `hive.py ready`, `hive.py submit` and `hive.py release` write these commits and push them to the fork. `release`
@@ -255,8 +297,11 @@ set the wait to nothing while it is tried, and then only the day's count is left
 wait, or, for a candidate that lacks a proof alone, its place in the day's limit. When the judge examined the
 candidate, the wait is two hours; there is none when the candidate is correct, reaches the task's own figure and
 lacks only a proof (`not_proven`): the hive cannot tell a gain the noise hid from no gain, so it neither accepts
-nor charges. **A deal given back costs two hours, each time**, as a judged refusal, never doubled. A worker that finds
-its task out of reach and says so at once frees it for others hours earlier, spends no judgement, and is free itself
+nor charges. **A deal given back costs two hours, each time**, as a judged refusal, never doubled, whatever signals the
+release carries. A worker that finds its task out of reach (or too large for one deal, another task's work, or that
+something in the project asked it for anything other than the task: the signals `too_large`, `duplicate` and
+`off_task_request`, whose releases count toward « stuck » as any `out_of_reach` from an established member does) and
+says so at once frees it for others hours earlier, spends no judgement, and is free itself
 as much sooner than after a deal it lets run out. When the task was held for nothing (no candidate, or one
 refused before the judge), it is two hours doubled at each such deal since the member's last accepted candidate,
 seven days at most; an acceptance clears both, and nothing else does. A project also limits the deals an account
@@ -909,8 +954,10 @@ The hive's files there:
   account's duty and its end: "Trusted accounts and their duties"); each carries the key of
   its run. **It holds no text a fork wrote**: logins, the numeric ids of the account and of its fork, task ids of
   the project, commit ids, instants, reason codes, a model identifier the project lists, whole numbers under the
-  hive's own keys, a file of the project as its tasks name it, the judge's figures the project lists, and the
-  bounds of a ruling under the project's own names for the figures. **A
+  hive's own keys, a file of the project as its tasks name it, the judge's figures the project lists, the
+  bounds of a ruling under the project's own names for the figures, and a member's signals: the hive's own codes,
+  each with a word of the hive's, a whole number, a task id of the project or the name of one of the project's needs
+  as its file writes it. **A
   login is written beside a deal and beside an accepted candidate, which is a credit; a refusal, a run without an
   answer and an expired deal carry the account's number alone.** That is discretion, not secrecy: the deal names its
   member, and the candidate sits in a public fork. A guardian's login is written beside each of its rulings,
@@ -955,6 +1002,14 @@ The hive's files there:
   release's commit id, which anyone can find in the member's public fork: a hive at an older commit reads the line as
   the expiry it also is.
 
+  **Signals.** A member's candidate's `verdict` (accepted, refused, or a probe's answer) and a deal given back's
+  `expired` line add `signals` when the member said any that hold ("What a worker pushes"): a list of at most four
+  objects, `{"code": "too_large"}` or `{"code": "splits", "value": 3}`, in the codes' alphabetical order, each value
+  the hive's word, a whole number or the project's own string. The steps that write hold each one again against the project's
+  file and tasks before they write it, drop what does not hold (their log counts it), and never stop for a signal. A
+  commit a guardian admitted carries none on its acceptance (its signals stay on its refusal). A line without
+  `signals` (written before this rule, or for a member who said none) means the same.
+
   A `duty` line carries the role, its account's login, the account's number and its fork's, when the duty starts
   and until when, `settings` (the commit of the published branch its plan read the settings at, from which a later
   plan reads a pause), and `area`, null: no part of the project is named yet. A `duty-end` line carries the role,
@@ -979,7 +1034,9 @@ The hive's files there:
   that changed its login since is found there again once it is dealt a task under the new one. `releases` lists the
   codes of a release the run reads (a run at an older commit lists none, and a worker's tool then gives nothing
   back). How often a task was given back is not in the feed: a worker reads the judge's word on a task, never
-  another member's that it could not do it. `duties` holds, under the same hash, the live duty of each account that
+  another member's that it could not do it. `signals` lists, in the same way, the codes of a signal the run reads (a
+  run at an older commit lists none, and a worker's tool then refuses `--signal`): never a count of them, for the same
+  reason. `duties` holds, under the same hash, the live duty of each account that
   holds one (its role, since when and until when), and `duty_wait` until when an account that was dealt a duty is
   dealt none: a run at an older commit writes neither, and the tool's `duty` command then asks for none.
 - `stats.json`: candidates judged and accepted by declared model, and, for each account with accepted work, how many were accepted (what was refused is added up for a model, not for a member). A probe's answer is counted apart, under `answered` (where there is one), and not under `judged`: accepted over judged stays the share of candidates meant to be accepted that were. The project's page counts the same, and the hive's `health` gives each kind of task its answers apart and an acceptance share that leaves them out.

@@ -200,12 +200,12 @@ case "$COMMAND:$SUB" in
   hive:next) KNOWN="project login fork needs-accepted despite-needs!" ;;
   hive:start) KNOWN="project login fork task deal needs-accepted despite-needs!" ;;
   hive:ready) KNOWN="project login fork tier prefer withdraw! needs-accepted despite-needs!" ;;
-  hive:submit) KNOWN="project login fork task deal message model" ;;
-  hive:release) KNOWN="project login fork task deal because" ;;
+  hive:submit) KNOWN="project login fork task deal message model signal" ;;
+  hive:release) KNOWN="project login fork task deal because signal" ;;
   hive:duty) KNOWN="project login fork role release withdraw!" ;;
 esac
 
-PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED=""
+PROJECT="" LOGIN="" FORK="" TASK="" WITHDRAW="" DUTY_RELEASE="" NEEDS_ACCEPTED="" SIGNALLED=""
 PASS=()       # the tool's options, as given
 SANDBOXED=()  # the sandbox's command, after --
 while [ $# -gt 0 ]; do
@@ -241,6 +241,7 @@ while [ $# -gt 0 ]; do
       [ "$name" = task ] && TASK="$value"
       [ "$name" = release ] && DUTY_RELEASE="$value"
       [ "$name" = needs-accepted ] && NEEDS_ACCEPTED="$value"
+      [ "$name" = signal ] && SIGNALLED=1  # (a submit that signals reads the state: the codes the run reads)
       PASS+=("$word" "$value") ;;
   esac
 done
@@ -834,11 +835,15 @@ case "$COMMAND" in
     ;;
   hive)
     [ -d "$CLONE/.git" ] || die "there is no clone at $CLONE: make it with local.sh clone"
+    READS_STATE=""
     case "$SUB" in
-      next|release|duty)
-        [ -d "$STATE/.git" ] || die "there is no state at $STATE: take it with local.sh refresh"
-        PASS+=(--state /hive/state) ;;
+      next|release|duty) READS_STATE=1 ;;
+      submit) READS_STATE="$SIGNALLED" ;;
     esac
+    if [ -n "$READS_STATE" ]; then
+      [ -d "$STATE/.git" ] || die "there is no state at $STATE: take it with local.sh refresh"
+      PASS+=(--state /hive/state)
+    fi
     case "$SUB" in
       next|ready|start)
         (umask 022 && mkdir -p "$NEEDS") || die "no room under $HIVE"
@@ -888,11 +893,10 @@ case "$COMMAND" in
     fi
     # Right before the tool runs: each place resolved, each mount built.
     CLONE_SOURCE=$(below_hive "$CLONE" "the clone's folder") || exit 2
-    case "$SUB" in
-      next|release|duty)
-        STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
-        TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly") ;;
-    esac
+    if [ -n "$READS_STATE" ]; then
+      STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
+      TOOL_MOUNTS+=(--mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly")
+    fi
     case "$SUB" in
       next|ready|start)
         NEEDS_SOURCE=$(below_hive "$NEEDS" "the needs' folder") || exit 2
