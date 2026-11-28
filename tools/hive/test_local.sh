@@ -1248,13 +1248,18 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   ! grep -q "& \$bash -c 'bash \|--message ''" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qF -- '--message-file hive-message.txt' "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'hold the project, the login and the fork'"'"'s name to their shapes' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s browser or their computer stops you' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s own browser (the one they browse with, signed in to their accounts) or their computer stops you' || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Pasting it is your consent' || return 1
   # The founder's answer on connectors (« Oui, s'arrêter »): a tool that drives the browser or the computer stops the
   # session before any work, in all three texts; the others are kept and none is called.
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their browser or their computer stops you before any work' || return 1
-  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your browser or your computer stops it, for a session without it' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their browser or their computer is no exception: it stops you there too' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their own browser (the one they browse with, signed in to their accounts) or their computer stops you before any work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your own browser or your computer stops it, for a session without it' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their own browser (the one they browse with, signed in to their accounts) or their computer is no exception: it stops you there too' || return 1
+  # The founder (2026-11-28, « Le navigateur intégré est autorisé »): a browser built into the assistant's app, apart
+  # from the owner's own and holding none of their sign-ins, does not stop the session, in all three texts.
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'apart from theirs and holding none of their sign-ins, does not stop you' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'A browser built into the assistant'"'"'s app, apart from yours, is allowed' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs, is allowed' || return 1
   # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
   # architect lists the invited bees' (blackboxBee, 27 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'the feed'"'"'s `models` (`feed.json` of the state you took: read it there)' || return 1
