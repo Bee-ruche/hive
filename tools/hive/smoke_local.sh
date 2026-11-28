@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The local bee's launcher against this machine's real Docker, before a launcher PR merges: what test_local.sh's
 # stand-in docker never runs. It builds the tool's image as the launcher does, if this machine has not built it yet,
-# and runs `local.sh check` for a public project of the hive: the image, hive.py in it, the gate, Docker's paths.
+# and runs `local.sh check` for a public project of the hive: the image, hive.py in it, the gate, Docker's paths; then
+# `local.sh status` for the same login (the project's public state, read with no network).
 #
 # - The launcher and the protocol are this clone's HEAD (commit first), in a home of the smoke's own, removed after:
 #   nothing of ~/.hive is read or written.
@@ -62,18 +63,32 @@ said=$(cd "$home/desk" && HOME="$home" PATH="$home/bin:$PATH" \
   timeout 1800 bash "$home/.hive/protocol/tools/hive/local.sh" check --project "$PROJECT" 2>&1)
 code=$?
 printf '%s\n' "$said"
+checked=1
 if [ -n "${SMOKE_EXPECT:-}" ]; then
   if [ "$code" -eq 2 ] && printf '%s\n' "$said" | grep -qF -- "$SMOKE_EXPECT" && printf '%s\n' "$said" | grep -qx "LOCAL login $LOGIN"; then
-    echo "smoke: PASSED (check ended on the line expected)"
-    exit 0
+    echo "smoke: check ended on the line expected"
+  else
+    echo "smoke: FAILED (exit $code, not the line expected)"; checked=""
   fi
-  echo "smoke: FAILED (exit $code, not the line expected)"
-  exit 1
-fi
-if [ "$code" -eq 0 ] && printf '%s\n' "$said" | grep -q '^NAMES-HELD [0-9][0-9]*$' && printf '%s\n' "$said" | grep -qx "LOCAL login $LOGIN"; then
-  echo "smoke: PASSED"
+elif [ "$code" -eq 0 ] && printf '%s\n' "$said" | grep -q '^NAMES-HELD [0-9][0-9]*$' && printf '%s\n' "$said" | grep -qx "LOCAL login $LOGIN"; then
+  echo "smoke: check passed"
 else
   [ -f "$home/.hive/build-tool.log" ] && { echo "smoke: the tool's build log:"; cat "$home/.hive/build-tool.log"; }
-  echo "smoke: FAILED (exit $code)"
+  echo "smoke: FAILED (exit $code)"; checked=""
+fi
+[ -n "$checked" ] || exit 1
+# Then status for the same login, as a bee asks where its task stands: the project's public state taken through the
+# gate, read by the tool in a container with no network, the state shown read-only. No credential either way.
+echo "smoke: local.sh status --project $PROJECT --login $LOGIN"
+said=$(cd "$home/desk" && HOME="$home" PATH="$home/bin:$PATH" \
+  env -u DOCKER_CONFIG -u XDG_CONFIG_HOME -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GH_HOST -u GH_CONFIG_DIR \
+  GCM_INTERACTIVE=never \
+  timeout 600 bash "$home/.hive/protocol/tools/hive/local.sh" status --project "$PROJECT" --login "$LOGIN" 2>&1)
+code=$?
+printf '%s\n' "$said"
+if [ "$code" -eq 0 ] && printf '%s\n' "$said" | head -n 1 | grep -Eq "^STATUS $PROJECT as of |^STATUS-NONE: "; then
+  echo "smoke: PASSED"
+else
+  echo "smoke: FAILED (status, exit $code)"
   exit 1
 fi
