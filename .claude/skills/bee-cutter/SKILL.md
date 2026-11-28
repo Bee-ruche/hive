@@ -111,7 +111,8 @@ report its lines (a trusted account on a live duty proposes nothing instead: "No
   when the task is done) and `gate` (a line of the backlog the gate would refuse: the architect mends it), which you
   report. You do not mend, clear or remove a line of the backlog that waits (`shown_passing`, `gate`): that is the
   architect's. You still add your own new lines to the backlog, as "Writing tasks" says.
-- `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`), what is missing. **`starving`:
+- `left`, `aim`, `short`: the tasks left to do, the project's target (`cutter.open`, or with `cutter.open_more` what its pace
+  asks: `pace` says the tasks held and the acceptances it read, docs/cutter.md "How many tasks"), what is missing. **`starving`:
   nothing is left to do: the first line of your report**, which says whether this cycle ends it.
 - `backlog_unread`: the backlog could not be read; report it, write no task to it in this run.
 

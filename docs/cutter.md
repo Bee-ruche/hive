@@ -230,8 +230,9 @@ for one thing, the proof at the tip (below):
   AI cutter reads it at each cycle; it is the only text it takes directions from, beside its guide.
 - `hive/backlog.jsonl`: **the tasks the architect plans**, one per line, as lines of `hive/tasks.jsonl`, with their
   `needs`. The deterministic cutter publishes them in the file's order, each once what it needs is done, while fewer
-  than `cutter.open` tasks are left to do. A line stays in the backlog once published, and is skipped: the backlog
-  is the plan, the tasks file what is offered now. The AI cutter writes there what it plans beyond this cycle.
+  tasks are left to do than the cutter aims at ("How many tasks", below). A line stays in the backlog once
+  published, and is skipped: the backlog is the plan, the tasks file what is offered now. The AI cutter writes there
+  what it plans beyond this cycle.
 
 ## The deterministic cutter
 
@@ -259,10 +260,31 @@ within `cutter.changes` lines added or closed:
    gives their word (`--failing <id>`). A line not shown to fail yet waits (`not_shown_failing`); one a run of the
    judge showed the tip passes already waits (`shown_passing`): the task is done, or empty, whatever word is given. A
    line the gate would refuse waits (`gate`) for the architect to mend it, and the rest of the cut goes on.
-3. **It says what is left to do** against `cutter.open` (`left`, `short`), whether the project **starves** (nothing
-   left to do), and what it left undone and why, as codes: the AI cutter's work, or the architect's.
+3. **It says what is left to do** against its aim (`left`, `aim`, `short`, and `pace`: "How many tasks"),
+   whether the project **starves** (nothing left to do), and what it left undone and why, as codes: the AI cutter's
+   work, or the architect's.
 
 It prints ids, codes and numbers, and the proposal's SHA-256; a proposal the gate refuses is not written.
+
+### How many tasks
+
+The cutter aims at `cutter.open` tasks left to do (open or dealt). A fixed number fits one pace only: one volunteer at
+night empties ten tasks in days, ten volunteers in hours, and a project with nothing left to do starves without anyone
+noticing. With `cutter.open_more`, the aim follows the project's pace, from `cutter.open` to `cutter.open` plus
+`cutter.open_more` (`open_aim` in `tools/hive/hive.py`):
+
+- **the tasks held now** by members with an acceptance on the project before their deal (`held`): each is left to do
+  and taken;
+- **and half again as many tasks as the acceptances of the last 72 hours** (`accepted`) would use up in
+  `trusted.cut_hours`, the project's time between two cut duties: what the members would take before the next cut.
+
+It is read from the ledger alone, in numbers. An account with no acceptance raises it by nothing, as it makes no task
+stuck: deals taken by accounts made for the purpose do not make the cutter publish more, and an acceptance is a task
+the judge found done. `cutter.open_more` is a hard ceiling, and `cutter.changes` still bounds each cut, so a pace
+read wrong cannot flood the project; tasks that share files are dealt one after the other whatever the aim (`areas`).
+With few members the pace is noisy, and the floor and the ceiling do most of the work. No run reads `open_more`: a
+run deals a cut duty early while fewer tasks are left than `cutter.open`, and otherwise every `trusted.cut_hours`,
+the horizon the aim is measured over. `cut` says the aim and what it read (`pace`); `cut-check` says the aim too.
 
 ## The loop
 
