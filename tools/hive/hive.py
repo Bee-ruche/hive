@@ -6620,8 +6620,11 @@ def paced_want(config, held, accepted):
 FORECAST_LEAST, URGENT_DAYS, SOON_DAYS, COVER_SHARE, JUDGE_DOUBT = 3, 3, 14, (4, 5), 2
 FORECAST_LEVELS = ("paused", "starving", "urgent", "soon", "ok", "unknown")
 SUGGESTIONS = {  # code: (what it names, the tool's sentence); the forecast gives each with a count, or none
-    "cut_now": ("hive cut", "backlog lines cleared by what they need wait while fewer tasks are left than the cutter aims at: run a cut, "
-                           "which publishes those the gate and the proof at the tip let through"),
+    "cut_now": ("hive cut", "backlog lines a cut may publish wait while fewer tasks are left than the cutter aims at: run a cut "
+                           "(without the proofs' count, those cleared by what they need: the gate and the proof at the tip may still "
+                           "hold some back)"),
+    "prove_backlog": ("hive cut --failing", "backlog lines cleared by what they need wait for the proof at the tip: the next quiet run gives "
+                      "it, or run the judge at the tip and give your word"),
     "write_tasks": ("hive/backlog.jsonl", "no backlog line is cleared by what it needs and the tasks run out: write the next ones, or pause "
                     "a project that is done"),
     "no_cut_duty": ("trusted.accounts", "no account is dealt cut duties: the backlog is published only when someone runs a cut"),
@@ -6634,10 +6637,12 @@ SUGGESTIONS = {  # code: (what it names, the tool's sentence); the forecast give
 }
 
 
-def forecast(config, tallied, lines, deals, instant, backlog=None):
+def forecast(config, tallied, lines, deals, instant, backlog=None, proofs=None, tip=None):
     """What a project's architect should see coming (docs/cutter.md, "The forecast"), from its tally (tally), the ledger's
     lines (tally_line()'s) and deals (Ledger.deals()), and, when known, the backlog's lines not published yet (`backlog`,
-    {id: task}; None when it could not be read). Numbers and codes alone, for « health », its readable form
+    {id: task}; None when it could not be read). `proofs` are the judge's answers about the tip the state holds
+    (read_tip_answers), and `tip` the commit of the branch the hive writes, when known: with both, the forecast tells
+    the cleared lines a cut may publish now from those that wait for the proof at the tip. Numbers and codes alone, for « health », its readable form
     (forecast_lines) and the project's page; no run reads it.
 
       pace        the acceptances of the last PACE_HOURS hours (open_aim's), and as many a day
@@ -6648,6 +6653,10 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
       stock       the same with the backlog's lines cleared by what they need (`cleared`: all their needs done; the gate, their
                   files or the proof at the tip may still hold one back) and those that wait on a task not done
                   (`waiting`); none when the backlog is unknown
+                  `proven`: of the cleared lines, those a cut may publish now: a goal on a figure, which needs no
+                  proof, or a « correct » one the judge showed to fail at this very tip, for this line, under this
+                  judge (the cut itself also takes an older answer that holds through the hive's own integrations:
+                  proof_holds); none when the proofs or the tip are unknown, or the judge cannot answer (TIP_KINDS)
       cuts        how often a cut duty is dealt (trusted.cut_hours), or none where the project trusts no account to cut
       room        how many more members the project could take now (`more`), and what bounds it (`limited_by`, each code
                   at that least): « dealable », the open tasks a member could be dealt now; « cover », what its guardians
@@ -6674,8 +6683,15 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
     queue = {"left": left, "runs_out": runs_out(left) if left else None}
     stock = None
     if backlog is not None:
-        cleared = sum(1 for task in backlog.values() if all(other in done for other in task.get("needs") or ()))
-        stock = {"cleared": cleared, "waiting": len(backlog) - cleared, "runs_out": runs_out(left + len(backlog)) if left + len(backlog) else None}
+        clear = {t: task for t, task in backlog.items() if all(other in done for other in task.get("needs") or ())}
+        cleared, proven = len(clear), None
+        if proofs is not None and tip is not None and config["judge"]["kind"] in TIP_KINDS:
+            newest = max(proofs.values(), key=lambda entry: entry["at"], default=None)
+            judge = (newest["tools"] if newest else None, settings_digest(config))
+            proven = sum(1 for t, task in clear.items() if (task.get("goal") or {"kind": "correct"}).get("kind") == "metric"
+                         or (t in proofs and proofs[t]["answer"] == "failing" and proofs[t]["tip"] == tip and proofs[t]["line"] == line_digest(task)
+                             and (proofs[t]["tools"], proofs[t]["settings"]) == judge))
+        stock = {"cleared": cleared, "proven": proven, "waiting": len(backlog) - cleared, "runs_out": runs_out(left + len(backlog)) if left + len(backlog) else None}
     cutters = trusted_accounts(config, "cut")
     cuts = {"hours": config["trusted"]["cut_hours"]} if cutters else None
     active, members = tallied["active_members"], config.get("members") or {}
@@ -6711,8 +6727,11 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
     def suggest(code, count=None):
         said["suggestions"].append({"code": code, **({"count": count} if count is not None else {})})
 
-    if stock and stock["cleared"] and left < aim:
-        suggest("cut_now", stock["cleared"])
+    publishable = None if stock is None else stock["cleared"] if stock["proven"] is None else stock["proven"]
+    if publishable and left < aim:
+        suggest("cut_now", publishable)
+    if stock and stock["proven"] is not None and stock["cleared"] > stock["proven"] and left < aim:
+        suggest("prove_backlog", stock["cleared"] - stock["proven"])
     if stock is not None and not stock["cleared"] and level in ("starving", "urgent", "soon"):
         suggest("write_tasks")
     if not cutters and (stock is None or stock["cleared"] + stock["waiting"]):
@@ -6761,7 +6780,9 @@ def forecast_lines(repository, said, as_of):
     elif stock["runs_out"] is None and not (stock["cleared"] or stock["waiting"] or queue["left"]):
         lines.append("stock: the backlog holds nothing more")
     else:
-        lines.append(span(stock["runs_out"], f"stock: the queue and the backlog's {stock['cleared']} line(s) cleared by what they need and "
+        proven = "" if stock["proven"] is None else (f" ({stock['proven']} publishable now, {stock['cleared'] - stock['proven']} waiting for "
+                                                     "the proof at the tip)")
+        lines.append(span(stock["runs_out"], f"stock: the queue and the backlog's {stock['cleared']} line(s) cleared by what they need{proven} and "
                                              f"{stock['waiting']} waiting on other tasks"))
     lines.append(f"cuts: a cut duty every {said['cuts']['hours']} hours" if said["cuts"] else
                  "cuts: no account is dealt cut duties; the backlog is published only when someone runs a cut")
@@ -7584,7 +7605,7 @@ def anonymous(home):
 
 
 def read_public_state(repository, folder, allow_local=False):
-    """(configuration, tasks, ledger, published commit, state commit, backlog) of one listed project, read from its public
+    """(configuration, tasks, ledger, published commit, state commit, backlog, proofs, tip) of one listed project, read from its public
     address (public_address) into `folder`, a store of this command's own that the caller removes: the branch the
     project publishes, which its repository names as its default one, for its settings and tasks, read there as a
     run reads them (settings_on); and its branch hive-state, for its ledger. One listing (git ls-remote) and one
@@ -7622,8 +7643,24 @@ def read_public_state(repository, folder, allow_local=False):
         ledger = Ledger(folder / "state")
     except (HiveError, ValueError, RecursionError):
         raise Unread("ledger") from None
-    backlog, unread = backlog_at(folder, commits[0], config, tasks)  # (for the forecast: none when it cannot be read)
-    return config, tasks, ledger, commits[0], commits[1], (None if unread else {t: task for t, task in backlog.items() if t not in tasks})
+    # For the forecast alone: the backlog's lines not published (none when it cannot be read), the judge's answers about
+    # the tip the state holds, and the commit of the branch the hive writes (none when it cannot be listed).
+    backlog, unread = backlog_at(folder, commits[0], config, tasks)
+    try:
+        answers = blob_at(folder, commits[1], TIP_FILE, most=TIP_FILE_BYTES)
+        (folder / "state" / TIP_FILE).write_bytes(answers or b"{}")
+        proofs = read_tip_answers(folder / "state")
+    except (HiveError, OSError):
+        proofs = None
+    try:
+        heads = git_capped(folder, "ls-remote", url, f"refs/heads/{config['branch']}", limit=HEALTH_LIST_BYTES, timeout=LIST_SECONDS,
+                           env=transport(allow_local))
+        found_tip = [line.partition("	")[0] for line in (heads or b"").decode("utf-8", errors="replace").splitlines()
+                     if line.partition("	")[2] == f"refs/heads/{config['branch']}" and is_sha(line.partition("	")[0])]
+    except HiveError:
+        found_tip = []
+    return (config, tasks, ledger, commits[0], commits[1], None if unread else {t: task for t, task in backlog.items() if t not in tasks},
+            proofs, found_tip[0] if len(found_tip) == 1 else None)
 
 
 def middle(values):
@@ -7752,8 +7789,9 @@ def health_totals(summaries):
 def health(projects, read, instant):
     """What the listed projects' public state says of the hive at an instant: a summary of each project read
     (project_health), the projects that could not be read with a code, and the totals of those read (health_totals).
-    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), and the backlog's lines
-    not published (None when unread or not given: the forecast then says nothing of the stock), or raises Unread.
+    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), and, for the
+    forecast, the backlog's lines not published, the judge's answers about the tip and the commit of the branch the hive
+    writes (each None when unread or not given: the forecast then says that much less), or raises Unread.
 
     A project whose name, or a task's id, is longer than ID_CHARS, whose file names more than HEALTH_ACCOUNTS_MOST
     accounts in members.only and members.banned, or whose tasks name more than HEALTH_FILES_MOST entries in their
@@ -7781,8 +7819,9 @@ def health(projects, read, instant):
             unread.append({"repository": repository, "because": error.because})
             continue
         try:  # (a forecast that cannot be made of this ledger is none: the summary stands)
+            backlog, proofs, tip = (list(more) + [None, None, None])[:3]
             foreseen = forecast(config, tallied, [line for line in map(tally_line, ledger.events) if line is not None], ledger.deals(), instant,
-                                more[0] if more else None)
+                                backlog, proofs, tip)
         except (KeyError, TypeError, AttributeError, ValueError, OverflowError, ZeroDivisionError):
             foreseen = None
         summaries.append({**project_health(repository, config, tallied, published, state), "forecast": foreseen})

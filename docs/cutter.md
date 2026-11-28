@@ -311,10 +311,14 @@ SUGGEST invite_more (1): every account the project invites is active: invite mor
   forecast says there are too few to tell, never a number.
 - **The queue** is the tasks left to do (open or dealt); **the stock** adds the backlog's lines not published yet,
   those whose `needs` are all done (`cleared`: the gate, their files or the proof at the tip may still hold one back,
-  so the stock is the most a cut could publish) and the others (`waiting`). Each says how long it lasts at that pace
-  (in hours under a day), and until when: the middle figure, and a probable range from the count's own spread, one
-  standard deviation of a count of acceptances, (√k − 1)² to (√k + 1)² of them, about two chances in three. With few
-  acceptances the range is wide, and it says so.
+  so the stock is the most a cut could publish) and the others (`waiting`). With the judge's answers about the tip the
+  state holds and the commit of the branch the hive writes, it tells, of the cleared lines, those a cut may publish
+  now (`proven`: a goal on a figure, or a « correct » one the judge showed to fail at this very tip, for this line,
+  under this judge) from those that wait for the proof at the tip. The cut itself also takes an older answer that
+  holds through the hive's own integrations; a maintainer's push sets every answer aside ("The proof at the tip").
+  Each says how long it lasts at that pace (in hours under a day), and until when: the middle figure, and a probable
+  range from the count's own spread, one standard deviation of a count of acceptances, (√k − 1)² to (√k + 1)² of
+  them, about two chances in three. With few acceptances the range is wide, and it says so.
 - **The level**: `paused` (its file pauses the project), `starving` (nothing left to do), `unknown` (too few
   acceptances), `urgent` (the queue runs out before the next cut, or within three days where nobody is dealt cuts, or
   the stock within three days, at the fastest), `soon` (the stock within fourteen days at the fastest), or `ok`.
@@ -322,7 +326,9 @@ SUGGEST invite_more (1): every account the project invites is active: invite mor
   less the active members (`members.per_guardian`), and the accounts `members.only` invites less the active ones; it
   names what bounds it. Active members count every account holding a deal, established or not.
 - **Suggestions**, from a closed list, each with the setting or file it means:
-  - `cut_now`: backlog lines cleared by what they need wait while fewer tasks are left than the cutter aims at;
+  - `cut_now`: backlog lines a cut may publish wait while fewer tasks are left than the cutter aims at;
+  - `prove_backlog`: cleared lines wait for the proof at the tip while fewer tasks are left than the aim: the next
+    quiet run gives it, or the architect runs the judge at the tip and gives their word (`--failing`);
   - `write_tasks`: no backlog line is cleared, and the tasks run out within fourteen days. A project that is done
     says so by pausing it (`"paused": true`): its forecast then asks for nothing;
   - `no_cut_duty`: no account is dealt cut duties (`trusted.accounts`), so the backlog is published only by hand;

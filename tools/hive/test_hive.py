@@ -14464,6 +14464,35 @@ class TestTheForecast(unittest.TestCase):
         self.assertIn({"code": "judge_doubt", "count": 2}, self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}, errors={"judge": 1}))["suggestions"])
         self.assertNotIn("judge_doubt", self.codes(self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}))))
 
+    def test_with_the_proofs_and_the_tip_the_stock_tells_the_lines_a_cut_may_publish_now(self):
+        """A cleared line a cut may publish now: a goal on a figure (no proof needed), or a « correct » one the judge showed
+        to fail at this very tip, for this line, under this judge. Any other answer waits for the proof at the tip, and
+        the forecast suggests giving it; the cut is suggested for the lines it may publish alone."""
+        config = self.config(judge={**JUDGE, "kind": "reference"})
+        tip, older, tools = "c" * 40, "d" * 40, "e" * 64
+        line = lambda n: {"id": f"toy-00{n}", "title": f"Task {n}", "files": [f"u{n}.c"], "goal": {"kind": "correct"}}  # noqa: E731
+        backlog = {f"toy-00{n}": line(n) for n in (10, 11, 12, 13, 14)}
+        backlog["toy-0015"] = {**line(15), "goal": PROVED_GAIN}
+        answer = lambda n, **more: {"tip": tip, "line": hive.line_digest(backlog[f"toy-00{n}"]), "answer": "failing",  # noqa: E731
+                                    "at": "2026-11-28T10:00:00Z", "runs": 2, "run": "f" * 32, "tools": tools,
+                                    "settings": hive.settings_digest(config), **more}
+        proofs = {"toy-0010": answer(10), "toy-0011": answer(11, tip=older), "toy-0012": answer(12, answer="passing"),
+                  "toy-0013": answer(13, line="0" * 64)}
+        said = hive.forecast(config, self.tallied(left=2), self.accepted(9), {}, self.NOW, backlog, proofs, tip)
+        self.assertEqual((said["stock"]["cleared"], said["stock"]["proven"]), (6, 2), "toy-0010 shown failing here, toy-0015 on a figure")
+        self.assertIn({"code": "cut_now", "count": 2}, said["suggestions"])
+        self.assertIn({"code": "prove_backlog", "count": 4}, said["suggestions"])
+        full = hive.forecast(config, self.tallied(left=4), self.accepted(9), {}, self.NOW, backlog, proofs, tip)
+        self.assertFalse({"cut_now", "prove_backlog"} & set(self.codes(full)), "as many left as the aim: nothing to publish yet")
+        other_judge = {**proofs, "toy-0010": answer(10, settings="1" * 64)}
+        self.assertEqual(hive.forecast(config, self.tallied(left=2), self.accepted(9), {}, self.NOW, backlog, other_judge, tip)["stock"]["proven"], 1)
+        self.assertIsNone(hive.forecast(config, self.tallied(left=2), self.accepted(9), {}, self.NOW, backlog, proofs, None)["stock"]["proven"],
+                          "no tip: the proofs cannot be told")
+        common = hive.forecast(self.config(), self.tallied(left=2), self.accepted(9), {}, self.NOW, backlog, proofs, tip)
+        self.assertEqual((common["stock"]["proven"], "prove_backlog" in self.codes(common)), (None, False), "a judge that cannot answer")
+        lines = hive.forecast_lines("Bee-ruche/toy", said, "x")
+        self.assertTrue(any("6 line(s) cleared by what they need (2 publishable now, 4 waiting for the proof at the tip)" in text for text in lines))
+
     def test_a_cut_is_suggested_only_below_the_aim_and_a_line_needing_a_closed_task_waits(self):
         backlog = {"toy-0010": {}, "toy-0011": {"needs": ["toy-0003"]}}
         self.assertNotIn("cut_now", self.codes(self.foresee(tallied=self.tallied(left=4), backlog=backlog)), "four left: the aim of four")
@@ -15751,7 +15780,11 @@ class TestTheHealthCommand(Base):
                    {**TASKS[2], "needs": []}]  # (a line published already: no stock)
         (self.w.published / hive.BACKLOG_FILE).write_text("".join(json.dumps(task) + "\n" for task in backlog))
         self.w.publish()
-        said = json.loads(self.health("--project", "Bee-ruche/toy"))
+        with mock.patch.object(hive, "forecast", wraps=hive.forecast) as foresaw:
+            said = json.loads(self.health("--project", "Bee-ruche/toy"))
+        proofs, tip = foresaw.call_args.args[6:8]
+        self.assertEqual((proofs, tip), ({}, sh("git", "rev-parse", f"refs/heads/{CONFIG['branch']}", cwd=self.w.upstream).stdout.strip()),
+                         "the state holds no answer about the tip yet; the commit of the branch the hive writes, listed")
         foreseen = said["projects"][0]["forecast"]
         self.assertEqual((foreseen["stock"]["cleared"], foreseen["stock"]["waiting"]), (1, 1), "toy-0002 accepted, toy-0001 stuck")
         self.assertIn(foreseen["level"], hive.FORECAST_LEVELS)
