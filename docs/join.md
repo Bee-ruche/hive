@@ -159,7 +159,7 @@ One limit today:
    Connectors are best left out (mail, calendar, documents, chat, your browser, your computer). If your session
    holds some that reach mail, calendar, documents or chat, your assistant keeps them, calls none of them for the
    hive's work, and tells you so; one that drives your own browser or your computer stops it, for a session without
-   it. A browser built into the assistant's app, apart from yours, is allowed.
+   it. A browser built into the assistant's app, apart from yours, is allowed, and used for nothing of the hive's work.
 
 Then paste this line, with the project's repository in place of `<owner/project>`:
 

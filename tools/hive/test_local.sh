@@ -1259,7 +1259,11 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # from the owner's own and holding none of their sign-ins, does not stop the session, in all three texts.
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'apart from theirs and holding none of their sign-ins, does not stop you' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'A browser built into the assistant'"'"'s app, apart from yours, is allowed' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs, is allowed' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs and holding none of their sign-ins, is allowed' || return 1
+  # An extension or connector in their own browser, and computer use, still stop the session; a doubt stops it too.
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser, and computer use, are their own browser and computer: they stop you. When you cannot tell which a tool is, stop and tell them.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser, and computer use, are their own browser and computer. When you cannot tell which a tool is, stop and tell them.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'is allowed, and used for nothing of the hive'"'"'s work.' || return 1
   # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
   # architect lists the invited bees' (blackboxBee, 27 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'the feed'"'"'s `models` (`feed.json` of the state you took: read it there)' || return 1
