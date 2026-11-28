@@ -2917,6 +2917,7 @@ class TestTheForecast(Case):
         box = re.search(r'<div class="none"><p><strong>Suggested</strong></p>(.*?)</div>', files["index.html"], re.S).group(1)
         self.assertEqual(re.findall(r"<p><code>([^<]*)</code>: ", box), [line.partition(": ")[0][len("SUGGEST "):] for line in lines if line.startswith("SUGGEST ")])
         self.assertIn("<code>cut_now (3)</code>: ", box)
+        self.assertNotIn("SUGGEST", section, "each suggestion in the box, once, under its code")
         seen = self.harmless(files)
         self.assertLess(seen.said.index("Forecast"), seen.said.index("Tasks that need attention"), "beside the tasks that need attention")
         self.assertNotIn("login", section + json.dumps(said), "no member is named")
@@ -2983,10 +2984,13 @@ class TestTheForecast(Case):
         self.assertEqual((self.summary(files)["forecast"], forecast_section(files)), (None, None))
         self.assertIn("page: the forecast is left out (", self.errors)
         self.assertEqual(self.summary(files)["ledger"]["unreadable_lines"], 1, "the page reads what it can")
-        with mock.patch.object(hive, "STATE_BYTES", 100):
-            files = self.made()
-        self.assertIsNone(self.summary(files)["forecast"])
-        self.assertIn("page: the forecast is left out (the ledger is larger than 100 bytes)", self.errors)
+        self.ledger(self.lines())
+        size = (self.state / "ledger.jsonl").stat().st_size
+        for most, made in ((size, True), (size - 1, False)):  # (the ledger is read up to the hive's bound, and not a byte beyond)
+            with mock.patch.object(hive, "STATE_BYTES", most):
+                files = self.made()
+            self.assertEqual(self.summary(files)["forecast"] is not None, made, most)
+        self.assertIn(f"page: the forecast is left out (the ledger is larger than {size - 1} bytes)", self.errors)
         self.ledger(self.lines())
         files = self.make("--repo-url", REPO, "--tasks", self.tasks(["not a task"]), "--project", self.file("project.json", self.config()))
         self.assertEqual((self.summary(files)["forecast"], self.summary(files)["attention"]), (None, None))
@@ -3667,6 +3671,16 @@ class TestThePageWorkflow(unittest.TestCase):
                     self.assertFalse((folder / "published/backlog.jsonl").exists())
                     self.assertIn("page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it", said)
                     self.assertIsNone(stock)
+        # git that fails while it writes the backlog out, a part of it written: no part of it is left, nor given to page.py.
+        folder, environment = self.forecasting()
+        blob = subprocess.run(["git", "-C", str(self.origin), "rev-parse", "HEAD:hive/backlog.jsonl"], check=True, capture_output=True, text=True,
+                              timeout=60, env={"PATH": os.environ["PATH"], **self.environment}).stdout.strip()
+        failing = '() { if [ "$3 $4 $5" = "cat-file blob $FAIL_OBJECT" ]; then printf \'{"id": "miniz-09\'; return 1; fi; command git "$@"; }'
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "BASH_FUNC_git%%": failing, "FAIL_OBJECT": blob}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["heads.txt", "project.json", "tasks.jsonl"])
+        self.assertIn("page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes", said)
+        self.assertIsNone(json.loads(self.packed(folder)["./summary.json"])["forecast"]["stock"])
 
     def test_a_listing_of_the_branches_that_fails_fails_nothing(self):
         """git ls-remote that fails (or a listing cut at its size): a line says so, the step goes on, and the forecast
