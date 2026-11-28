@@ -2972,7 +2972,7 @@ class TestTheForecast(Case):
         broken line before its last), or larger than the hive reads; a task file the hive would not read; no project file:
         the forecast is left out, in one line on the standard error, and the page is made as it was."""
         for project in (self.config(repo="Bee-ruche/other"), self.config(branch="stable"), self.config(cutter={"opens": 4}),
-                        self.config(members={"only": list(range(1, hive.HEALTH_ACCOUNTS_MOST + 2))})):
+                        self.config(members={"only": list(range(1, hive.HEALTH_ACCOUNTS_MOST + 2))}), self.config(project="a" * (hive.ID_CHARS + 1))):
             with self.subTest(project=json.dumps(project)[-80:]):
                 files = self.made(project=project, tip=self.tips())
                 self.assertIsNone(self.summary(files)["forecast"])
@@ -2984,6 +2984,15 @@ class TestTheForecast(Case):
         self.assertEqual((self.summary(files)["forecast"], forecast_section(files)), (None, None))
         self.assertIn("page: the forecast is left out (", self.errors)
         self.assertEqual(self.summary(files)["ledger"]["unreadable_lines"], 1, "the page reads what it can")
+        self.assertIsNotNone(self.summary(self.made(project=self.config(project="a" * hive.ID_CHARS)))["forecast"], "a name up to the bound")
+        real = hive.forecast
+        for odd in (lambda said: {**said, "level": "<b>dire</b>"}, lambda said: {**said, "suggestions": [{"code": "pay_us"}]},
+                    lambda said: {**said, "aim": float("nan")}, lambda said: 1 / 0):  # (what the hive does not list, JSON cannot hold, or a failure)
+            with self.subTest(odd=odd), mock.patch.object(hive, "forecast", side_effect=lambda *a, odd=odd: odd(real(*a))):
+                files = self.made(tip=self.tips())
+            self.assertEqual((self.summary(files)["forecast"], forecast_section(files)), (None, None))
+            self.assertIn("page: the forecast is left out (", self.errors)
+            self.assertNotIn("dire", files["index.html"])
         self.ledger(self.lines())
         size = (self.state / "ledger.jsonl").stat().st_size
         for most, made in ((size, True), (size - 1, False)):  # (the ledger is read up to the hive's bound, and not a byte beyond)
@@ -3239,7 +3248,8 @@ class TestThePageWorkflow(unittest.TestCase):
     def test_the_two_jobs_are_exactly_these(self):
         """build: the protocol's check and the hive's code at the workflow's own commit (the run's own first two
         steps), the repository's Pages asked where they take the site from, the state read without keeping the token,
-        the project's two files of its published branch, each held to its size, the page held to plain files and
+        the project's two files of its published branch and its backlog, each held to its size, and the list of its
+        branches, the page held to plain files and
         folders and packed, uploaded under the one name Pages takes. deploy: after build, one at a time, Pages' own
         action and nothing else."""
         self.maxDiff = None
@@ -3297,8 +3307,9 @@ class TestThePageWorkflow(unittest.TestCase):
 
     def test_the_hives_code_runs_at_this_workflows_own_commit_and_reads_the_state_and_two_files_as_data(self):
         """The one program build runs is the hive's page.py, from the tree the protocol's check checked out; the other
-        checkout is the project's branch hive-state. The project's published branch gives two files, written out from
-        git's objects (no tree is checked out, so no link of the tree is followed), and nothing is fetched from a fork,
+        checkout is the project's branch hive-state. The project's published branch gives two files and its backlog,
+        written out from git's objects (no tree is checked out, so no link of the tree is followed), the list of the
+        project's branches gives names and commits, and nothing is fetched from a fork,
         a candidate or the hive's own branch: nothing of a contributor's is on the machine, let alone run."""
         build = self.jobs["build"]["steps"]
         self.assertEqual(build[:2], [self.RUN.PROTOCOL, self.RUN.CODE])
@@ -3458,8 +3469,8 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertFalse((folder / "artifact.tar").exists(), "a page.py that failed is not packed, whatever it left")
 
     def making(self):
-        """The two steps of build that make the page, as the workflow file writes them: (the published branch's two
-        files, the page and its archive). The tests below run these, not a copy."""
+        """The two steps of build that make the page, as the workflow file writes them: (the published branch's
+        files and the list of the branches, the page and its archive). The tests below run these, not a copy."""
         steps = self.jobs["build"]["steps"]
         self.assertEqual([step.get("name") for step in steps[4:6]], [self.PUBLISHED["name"], self.PAGE["name"]])
         return steps[4], steps[5]
