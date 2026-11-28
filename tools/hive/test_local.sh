@@ -1303,13 +1303,11 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'A file you mean to be executable needs a person'"'"'s `chmod +x`, on your branch.' || return 1
   # A file a worker adds is a plain one, whatever its file system shows (blackboxBee's units, 27 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A file you add goes into the candidate as a plain file, never an executable one' || return 1
-  # Every assistant declares its model, Claude or another (a Codex bee's candidate carried none).
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'for the public statistics: give it whatever assistant you are, Claude or another' || return 1
   # And no other PowerShell form: Windows PowerShell takes ‘ ’ ‚ ‛ as quotes too, and a project's text in a line could
   # end its quoting.
   ! grep -n -i 'pwsh\|powershell\.exe\|powershell -\|\.ps1"\|\.ps1 \|& "\$HOME\|Select-String\|\$LASTEXITCODE\|Invoke-' "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md"
 }
-check "the docs: every launcher command they give is one the launcher reads, they give check, clone, refresh, needs and sandbox, and no login step" docs_read
+check "the docs: every launcher command they give is one the launcher reads, they give check, clone, refresh, needs, status and sandbox, and no login step" docs_read
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

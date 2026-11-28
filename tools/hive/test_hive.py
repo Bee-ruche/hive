@@ -21447,7 +21447,7 @@ class TestSignals(unittest.TestCase):
         feed = {"signals": sorted(hive.SIGNALS), "tasks": [{"id": "toy-0002", "status": "done"}, {"id": "toy-0005", "status": "open"}]}
         said = lambda value: hive.said_signals(argparse.Namespace(signal=[f"duplicate={value}"]), "submit", SIGNAL_TASKS["toy-0001"],  # noqa: E731
                                                SIGNAL_TASKS, SIGNAL_CONFIG, feed)
-        self.assertEqual(said("toy-0005"), [{"code": "duplicate", "value": "toy-0005"}])
+        self.assertEqual(said("toy-0005"), [("duplicate", "toy-0005")])
         with self.assertRaisesRegex(hive.HiveError, "--signal duplicate: names no open task of the project other than this one"):
             said("toy-0002")
         self.assertEqual(self.held([("need_unmet", None)], "cannot_run"), [{"code": "need_unmet"}])
