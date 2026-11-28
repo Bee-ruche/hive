@@ -277,6 +277,7 @@ noticing. With `cutter.open_more`, the aim follows the project's pace, from `cut
   and taken;
 - **and half again as many tasks as the acceptances of the last 72 hours** (`accepted`) would use up in
   `trusted.cut_hours`, the project's time between two cut duties: what the members would take before the next cut.
+  A project that trusts no account and cuts by hand sets it to its own pace of cutting: it is the horizon all the same.
 
 It is read from the ledger alone, in numbers. An account with no acceptance raises it by nothing, as it makes no task
 stuck: deals taken by accounts made for the purpose do not make the cutter publish more, and an acceptance is a task

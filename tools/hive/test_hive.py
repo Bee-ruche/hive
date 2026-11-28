@@ -14230,6 +14230,12 @@ class TestTheOpenAim(unittest.TestCase):
         self.assertEqual(self.aim(self.config(10), [], many), {"aim": 2, "held": 0, "accepted": 0},
                          "fifty deals of accounts with no acceptance raise the aim by nothing")
 
+    def test_with_open_more_the_pace_of_cuts_counts_even_where_the_project_trusts_nobody(self):
+        entry = {"key": "trusted.cut_hours"}
+        self.assertEqual([hive.no_effect("trusted.cut_hours", entry, self.config(more)) for more in (0, 10)], [True, False],
+                         "the doctor names it among the settings that act: the horizon of the aim")
+        self.assertTrue(hive.no_effect("trusted.window_days", {"key": "trusted.window_days"}, self.config(10)))
+
     def test_the_cut_publishes_up_to_the_aim_it_is_given(self):
         case = TestTheCut()
         case.setUp()

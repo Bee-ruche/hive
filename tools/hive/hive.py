@@ -8063,10 +8063,12 @@ def preset_word(value):
 def no_effect(key, entry, config):
     """True for a setting that does nothing in this project, or that its loader would refuse there: a setting of the
     common judge's (its description says so) in a project of another kind; a bound per guardian where none is named;
-    the length and the pace of duties where the project trusts nobody."""
+    the length and the pace of duties where the project trusts nobody, but for trusted.cut_hours with cutter.open_more,
+    which measures the cutter's aim over it (open_aim) whoever cuts."""
     return (entry.get("what", "").startswith("common judge:") and config["judge"]["kind"] != "common") \
         or (key == "members.per_guardian" and not config["guardians"]) \
-        or (key in ("duty_hours", "trusted.cut_hours", "trusted.window_days") and not trusted_accounts(config))
+        or (key in ("duty_hours", "trusted.cut_hours", "trusted.window_days") and not trusted_accounts(config)
+            and not (key == "trusted.cut_hours" and config["cutter"]["open_more"]))
 
 
 def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
