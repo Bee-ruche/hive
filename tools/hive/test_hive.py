@@ -13569,7 +13569,8 @@ class TestTheWorkersGuide(unittest.TestCase):
         self.assertEqual(keywords, {"PROJECT", "LOGIN", "UPSTREAM", "NOTE", "ASK", "ASK-UNANSWERED", "WAIT", "TASK", "DEAL", "UNTIL", "===",
                                     "|", "CHECK", "SET-ASIDE", "REMOVED", "STARTED", "THEN", "ASKED", "WITHDRAWN", "RELEASED", "DUTY", "REFUSED",
                                     "PUSHED", "NOT-PUSHED", "NEEDS-MET", "NEEDS-MISSING", "NEEDS-DOCKER", "NEEDS-UNACCEPTED", "CANNOT-ASK",
-                                    "NEEDS", "NEEDS-DIGEST"})
+                                    "NEEDS", "NEEDS-DIGEST", "STATUS", "STATUS-NONE", "DEALT", "CANDIDATE", "NO-DEAL", "VERDICT", "ENDED",
+                                    "NO-ENDING"})
         for line in WORKER_LINES:
             self.assertIn(re.match(r"(\\\||===|[A-Z-]+)", line.pattern).group(1).replace("\\", ""), keywords, line.pattern)
         source = Path(hive.__file__).read_text(encoding="utf-8")
@@ -21442,6 +21443,13 @@ class TestSignals(unittest.TestCase):
         self.assertEqual(accepted([("needs_first", "toy-0004")], "out_of_reach"), [])
         self.assertEqual(accepted([("duplicate", "toy-0002")]), [])
         self.assertEqual(accepted([("duplicate", "toy-0005")]), [{"code": "duplicate", "value": "toy-0005"}], "one not accepted holds")
+        # The worker's tool holds them the same way, the accepted tasks read from the feed: it says so before it pushes.
+        feed = {"signals": sorted(hive.SIGNALS), "tasks": [{"id": "toy-0002", "status": "done"}, {"id": "toy-0005", "status": "open"}]}
+        said = lambda value: hive.said_signals(argparse.Namespace(signal=[f"duplicate={value}"]), "submit", SIGNAL_TASKS["toy-0001"],  # noqa: E731
+                                               SIGNAL_TASKS, SIGNAL_CONFIG, feed)
+        self.assertEqual(said("toy-0005"), [{"code": "duplicate", "value": "toy-0005"}])
+        with self.assertRaisesRegex(hive.HiveError, "--signal duplicate: names no open task of the project other than this one"):
+            said("toy-0002")
         self.assertEqual(self.held([("need_unmet", None)], "cannot_run"), [{"code": "need_unmet"}])
         self.assertEqual(self.held([("need_unmet", "gcc")], "cannot_run"), [], "a need the project does not list")
         self.assertEqual(self.held([("need_unmet", "g++")], "cannot_run", config={}), [], "nor in a project that lists none")

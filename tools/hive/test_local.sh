@@ -976,7 +976,7 @@ check "the API's spelling of the login is the one used (--login compared without
 STUB_API_LOGIN=bob launch hive next --project Bee-ruche/toy
 check "the account changed since the last run: its own clone's place, never the other's" eval 'refused 2 "there is no clone at $HOME/.hive/work/bob/toy"'
 launch login Alice
-check "refused: login is no command of the launcher's any more" eval 'refused 2 "local.sh takes check, clone, refresh, needs, hive or sandbox" && nothing_ran'
+check "refused: login is no command of the launcher's any more" eval 'refused 2 "local.sh takes check, clone, refresh, needs, status, hive or sandbox" && nothing_ran'
 launch hive next --project Bee-ruche/toy --login bob
 check "refused: a --login that is not the account git pushes as" eval 'refused 2 "this machine'"'"'s git pushes to GitHub as alice, not as --login bob" && nothing_ran'
 launch clone --project Bee-ruche/toy --login bob

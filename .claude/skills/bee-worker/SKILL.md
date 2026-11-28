@@ -132,6 +132,19 @@ PUSHED <commit>                 submit: the candidate is made, marked and pushed
                                 whatever the line after it adds about this clone
 NOT-PUSHED <commit>: <sentence> ready, submit, release with --no-push: nothing was pushed; the same command without
                                 it pushes
+STATUS <owner/name> as of <instant>
+                                status: where the account stands, read from the project's public state alone; then
+                                the lines below, and WAIT until <instant>: <sentence> if it waits for its next deal
+STATUS-NONE: <sentence>         status: the hive has published no feed for this project yet
+DEALT <id> since <instant> until <instant>
+                                status: the task the account holds, and until when
+CANDIDATE <id>: <sentence>      status: its candidate is with the hive, and the judge has not answered it yet
+NO-DEAL: <sentence>             status: the account holds no task now
+VERDICT <id> <result> at <instant>, candidate <commit>, model <model>
+                                status: a verdict on a candidate of the account's, newest first: accepted, or refused
+                                with the reason's code in brackets; the model the hive recorded (« undeclared »)
+ENDED <id> <how> at <instant>   status: a deal of the account's given back (the release's code) or run out
+NO-ENDING: <sentence>           status: no candidate of the account's has a verdict yet, and none of its deals ended
 ```
 
 An error is one line on the standard error, `hive: <sentence>`, with exit code 2: read it, correct your command if
