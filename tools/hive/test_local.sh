@@ -853,6 +853,9 @@ check "status: the state taken afresh, then read by the tool, its lines passed t
    && grep -q "^run .* --network none --label hive.role=status " "$STUB_DIR/calls" \
    && grep -qx "python3 -I /hive/protocol/tools/hive/hive.py status --project Bee-ruche/toy --login alice --state /hive/state" "$STUB_DIR/args.status"'
 check "status: no credential of git's asked, no token: the login is given" eval '! grep -q "credential fill" "$T/git.log"'
+STUB_STATUS_CODE=3 HERE="$CLONE" launch status --project Bee-ruche/toy --login alice
+check "status: the tool's own exit code passed on, and asked from the clone's folder too (it reads nothing there)" eval \
+  '[ "$CODE" -eq 3 ] && ran status'
 launch status --project Bee-ruche/toy
 check "refused: status with no --login, before any container" eval 'refused 2 "local.sh status takes --login" && nothing_ran'
 launch status --project Bee-ruche/toy --login "not a login"
@@ -1291,8 +1294,9 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   # the feed's list writes it (dots and all: the project lists gpt-6.2-sol), and for the list's own when the bee does
   # not know its exact identifier.
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'give it on every `submit`, whatever assistant you are, Claude or another. Read the feed'"'"'s `models` first (`feed.json` of the state you took)' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If it lists your model, give that identifier exactly as it writes it, dots and all (`gpt-6.2-sol`, `claude-opus-5-5`). If you do not know your exact identifier, give the one of the list that names your model'"'"'s maker and family.' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If it lists your model, give that identifier exactly as it writes it, dots and all (`gpt-6.2-sol`, `claude-opus-5-5`). If you do not know your exact identifier, give the one of the list that names your model'"'"'s maker and family. If the list holds none of your maker'"'"'s, give your identifier as its maker names the model, in lower case, and a project adds it to its list in its settings. Leave it out only if you know neither.' || return 1
   ! grep -q "a version's dots too\|Leave it out only if you do not know your identifier" "$ROOT/.claude/skills/bee-worker/SKILL.md" "$ROOT/docs/architect.md" || return 1
+  tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'in lower case, dots kept (`claude-opus-5-5`, `gpt-6.2-sol`, `gemini-2.5-pro`): a bee gives the identifier exactly as your list writes it' || return 1
   # hive status: where the bee waits, the guide and the entry give it (the founder, 28 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '`hive status --project <PROJECT> --login <LOGIN> --state ~/.hive/state/<PROJECT>`' || return 1
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'your owner asks where the task stands, `local.sh status`' || return 1
