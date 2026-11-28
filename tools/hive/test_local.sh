@@ -1261,6 +1261,9 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   ! tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qiE 'drives (your owner'"'"'s|their) own browser' || return 1
   ! tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qiE 'drives your own browser' || return 1
   ! tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qiE 'drives their own browser' || return 1
+  # Computer use is never among the tools kept: the guide lists it apart from the others.
+  ! tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qiF 'their browser or their computer' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '(mail, calendar, documents, chat, their own browser), **stop now**' || return 1
   # The founder (2026-11-28, « Le navigateur intégré est autorisé »): a browser built into the assistant's app, apart
   # from the owner's own and holding none of their sign-ins, does not stop the session, in all three texts.
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'apart from theirs and holding none of their sign-ins, does not stop you' || return 1
