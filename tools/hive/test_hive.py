@@ -14368,6 +14368,120 @@ class TestTheOpenAim(unittest.TestCase):
                 self.assertEqual((len(said["added"]), said["aim"]), (added, 1 if aim is None else aim))
 
 
+class TestTheForecast(unittest.TestCase):
+    """What a project's architect should see coming (hive.forecast, docs/cutter.md "The forecast"): when its tasks run
+    out at its pace, with the count's spread, how many more members it could take and what bounds it, a level, and the
+    suggestions of a closed list; and the same as plain lines (hive.forecast_lines)."""
+    NOW = TestTheOpenAim.NOW
+    at = TestTheOpenAim.at
+
+    def config(self, **more):
+        return hive.config_of({**CONFIG, "cutter": {"open": 4, "open_more": 0}, **more}, "hive/project.json")
+
+    def tallied(self, left=6, dealable=3, areas=3, active=1, done=(), stuck=(), signalled=(), disagreements=None, errors=None):
+        rows = {f"toy-{n:04d}": {"status": "done" if f"toy-{n:04d}" in done else "open", "errors": dict(errors or {}) if n == 1 else {}}
+                for n in range(1, 8)}
+        return {"tasks": rows, "left": left, "dealable": dealable, "areas": areas, "active_members": active, "stuck": list(stuck),
+                "signalled": list(signalled), "disagreements": dict(disagreements or {})}
+
+    def accepted(self, count):
+        return [{"type": "verdict", "task": "toy-0001", "member_id": 7, "at": self.at(1 + n), "result": "accepted"} for n in range(count)]
+
+    def foresee(self, config=None, tallied=None, accepted=9, backlog=None, deals=None):
+        return hive.forecast(config or self.config(), tallied or self.tallied(), self.accepted(accepted), deals or {}, self.NOW, backlog)
+
+    def codes(self, said):
+        return [item["code"] for item in said["suggestions"]]
+
+    def test_the_tasks_run_out_at_the_windows_pace_with_the_counts_spread_and_none_below_the_least(self):
+        # Nine acceptances in three days: six tasks last two days; (3 ± 1)² acceptances give 1.1 and 4.5 days around it.
+        said = self.foresee()
+        self.assertEqual(said["pace"], {"accepted": 9, "hours": 72, "per_day": 3.0})
+        self.assertEqual(said["queue"], {"left": 6, "runs_out": {"days": 2.0, "fast": 1.1, "slow": 4.5, "date": "2026-11-30"}})
+        self.assertIsNone(self.foresee(accepted=hive.FORECAST_LEAST - 1)["queue"]["runs_out"], "too few acceptances to tell")
+        self.assertIsNotNone(self.foresee(accepted=hive.FORECAST_LEAST)["queue"]["runs_out"])
+        self.assertEqual(self.foresee(accepted=hive.FORECAST_LEAST - 1)["level"], "unknown")
+
+    def test_the_stock_counts_the_backlogs_lines_ready_and_waiting_and_is_none_when_the_backlog_is_unknown(self):
+        backlog = {"toy-0010": {"needs": ["toy-0001"]}, "toy-0011": {}, "toy-0012": {"needs": ["toy-0002"]}}
+        said = self.foresee(tallied=self.tallied(done=("toy-0001",)), backlog=backlog)
+        self.assertEqual((said["stock"]["ready"], said["stock"]["waiting"], said["stock"]["runs_out"]["days"]), (2, 1, 3.0))
+        self.assertIsNone(self.foresee()["stock"])
+
+    def test_the_level_says_how_soon_the_tasks_run_out(self):
+        backlog = {f"toy-{n:04d}": {} for n in range(20, 120)}
+        self.assertEqual(self.foresee(tallied=self.tallied(left=0, dealable=0))["level"], "starving")
+        cutting = self.config(trusted={"accounts": [{"account": 100, "roles": ["cut"]}], "cut_hours": 6})
+        self.assertEqual(self.foresee(config=cutting, backlog=backlog)["level"], "ok", "a hundred and six tasks: twenty days at the fastest")
+        self.assertEqual(self.foresee(config=cutting, backlog=dict(list(backlog.items())[:20]))["level"], "soon", "twenty-six: five days")
+        self.assertEqual(self.foresee(config=cutting)["level"], "urgent", "six tasks run out in 1.1 days at the fastest")
+        self.assertEqual(self.foresee(backlog=backlog)["level"], "urgent",
+                         "nobody is dealt cuts: a queue that runs out within URGENT_DAYS is urgent, whatever waits in the backlog")
+        # With a cut duty every 24 hours, a queue that runs out before the next cut is urgent, whatever the stock.
+        trusted = self.config(trusted={"accounts": [{"account": 100, "roles": ["cut"]}], "cut_hours": 24})
+        said = self.foresee(config=trusted, tallied=self.tallied(left=2), backlog=backlog)
+        self.assertEqual((said["cuts"], said["level"]), ({"hours": 24}, "urgent"))
+        self.assertEqual(self.foresee(config=self.config(paused=True))["level"], "paused")
+        self.assertEqual(self.foresee(config=self.config(paused=True))["suggestions"], [], "a paused project asks for nothing")
+
+    def test_the_room_for_more_members_is_the_least_of_what_bounds_it(self):
+        self.assertEqual(self.foresee()["room"], {"more": 3, "limited_by": ["dealable"], "active": 1, "dealable": 3, "areas": 3,
+                                                  "cover": None, "invited": None})
+        invited = self.config(members={"only": [7, 8]})
+        self.assertEqual(self.foresee(config=invited)["room"]["limited_by"], ["invited"])
+        self.assertEqual(self.foresee(config=invited, tallied=self.tallied(dealable=1))["room"]["limited_by"], ["dealable", "invited"])
+        guarded = self.config(**TestTheSettingsList.GUARDED, members={"per_guardian": 2})
+        room = self.foresee(config=guarded, tallied=self.tallied(active=2))["room"]
+        self.assertEqual((room["more"], room["limited_by"], room["cover"]), (0, ["cover"], 2))
+
+    def test_each_suggestion_holds_on_its_own_condition(self):
+        backlog = {"toy-0010": {}, "toy-0011": {"needs": ["toy-0009"]}}
+        self.assertEqual(self.codes(self.foresee(backlog=backlog)), ["no_cut_duty"], "six left: as many as the aim of four, and more")
+        self.assertEqual(self.codes(self.foresee(tallied=self.tallied(left=2), backlog=backlog))[:1], ["cut_now"])
+        self.assertEqual(self.foresee(tallied=self.tallied(left=2), backlog=backlog)["suggestions"][0], {"code": "cut_now", "count": 1})
+        self.assertIn("write_tasks", self.codes(self.foresee(backlog={"toy-0011": {"needs": ["toy-0009"]}})))
+        self.assertNotIn("write_tasks", self.codes(self.foresee(backlog={f"toy-{n:04d}": {} for n in range(20, 80)})), "three weeks of tasks")
+        cutting = self.config(trusted={"accounts": [{"account": 100, "roles": ["cut"]}], "cut_hours": 6})
+        later = {f"toy-{n:04d}": {"needs": ["toy-0009"]} for n in range(20, 120)}
+        self.assertEqual(self.foresee(config=cutting, backlog=later)["level"], "ok")
+        self.assertNotIn("write_tasks", self.codes(self.foresee(config=cutting, backlog=later)), "nothing ready, but weeks of tasks to come")
+        self.assertNotIn("no_cut_duty", self.codes(self.foresee(backlog={})), "nothing in the backlog to publish: no cut to miss")
+        trusted = self.config(trusted={"accounts": [{"account": 100, "roles": ["cut"]}]})
+        self.assertNotIn("no_cut_duty", self.codes(self.foresee(config=trusted, backlog=backlog)))
+        ceiling = self.config(cutter={"open": 2, "open_more": 1}, trusted={"cut_hours": 72})
+        self.assertIn({"code": "raise_open_more", "count": 14}, self.foresee(config=ceiling)["suggestions"],
+                      "nine acceptances in 72 hours ask for half again as many before the next cut: fourteen")
+        self.assertIn({"code": "more_areas", "count": 3}, self.foresee(tallied=self.tallied(dealable=0, active=3))["suggestions"])
+        self.assertNotIn("more_areas", self.codes(self.foresee(tallied=self.tallied(dealable=0, active=2))))
+        self.assertIn({"code": "invite_more", "count": 1}, self.foresee(config=self.config(members={"only": [7]}))["suggestions"])
+        self.assertNotIn("invite_more", self.codes(self.foresee(config=self.config(members={"only": [7, 8]}))))
+        guarded = lambda per: self.config(**TestTheSettingsList.GUARDED, members={"per_guardian": per})  # noqa: E731
+        self.assertIn({"code": "more_guardians", "count": 5}, self.foresee(config=guarded(5), tallied=self.tallied(active=4))["suggestions"],
+                      "four active of five covered: four fifths")
+        self.assertNotIn("more_guardians", self.codes(self.foresee(config=guarded(5), tallied=self.tallied(active=3))))
+        self.assertIn({"code": "stuck_tasks", "count": 2},
+                      self.foresee(tallied=self.tallied(stuck=("toy-0002",), signalled=("toy-0003", "toy-0002")))["suggestions"], "each task once")
+        self.assertIn({"code": "judge_doubt", "count": 2}, self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}, errors={"judge": 1}))["suggestions"])
+        self.assertNotIn("judge_doubt", self.codes(self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}))))
+
+    def test_the_plain_lines_say_the_level_first_and_each_suggestion_with_what_it_names(self):
+        said = self.foresee(config=self.config(members={"only": [7]}), tallied=self.tallied(left=2), backlog={"toy-0010": {}})
+        lines = hive.forecast_lines("Bee-ruche/toy", said, "2026-11-28T12:00:00Z")
+        self.assertEqual(lines[0], "FORECAST Bee-ruche/toy as of 2026-11-28T12:00:00Z: urgent")
+        self.assertIn("pace: 9 accepted in the last 72 hours (3.0 a day)", lines)
+        self.assertIn("queue: 2 task(s) left to do (the cutter aims at 4): they run out in about 0.7 days (between 0.4 and 1.5 days), "
+                      "around 2026-11-29", lines)
+        self.assertIn("cuts: no account is dealt cut duties; the backlog is published when someone runs a cut", lines)
+        self.assertIn("volunteers: 1 active; room for 0 more now, bound by members.only names 1 account(s)", lines)
+        self.assertEqual([line.split(":")[0] for line in lines if line.startswith("SUGGEST")],
+                         ["SUGGEST cut_now (1)", "SUGGEST no_cut_duty", "SUGGEST invite_more (1)"])
+        self.assertTrue(all(line.endswith(")") for line in lines if line.startswith("SUGGEST")), "each names its setting or file")
+        few = hive.forecast_lines("Bee-ruche/toy", self.foresee(accepted=1), "x")
+        self.assertIn("queue: 6 task(s) left to do (the cutter aims at 4): too few acceptances to tell when they run out", few)
+        for code, (names, sentence) in hive.SUGGESTIONS.items():
+            self.assertTrue(names and sentence and not sentence.endswith("."), code)
+
+
 class TestTheCutCommand(Base):
     def test_the_gate_holds_the_backlog_proposed_with_the_tasks(self):
         self.first_day()
@@ -15607,6 +15721,28 @@ class TestTheHealthCommand(Base):
             printed, _ = self.step(Path(self.tmp.name), command, "--registry", str(self.registry), *argv)
         return printed
 
+    def test_forecast_prints_each_projects_plain_lines_and_health_carries_the_same_forecast(self):
+        """« forecast » prints, for each listed project read, the forecast's plain lines (hive.forecast_lines), a blank
+        line between two projects; « health » carries the same forecast, in numbers and codes, with the backlog it read
+        from the project's published branch."""
+        self.activity()
+        backlog = [{"id": "toy-0090", "title": "Planned", "files": ["src/b.c"], "goal": {"kind": "correct"}, "needs": ["toy-0002"]},
+                   {"id": "toy-0091", "title": "Planned too", "files": ["src/b.c"], "goal": {"kind": "correct"}, "needs": ["toy-0001"]},
+                   {**TASKS[2], "needs": []}]  # (a line published already: no stock)
+        (self.w.published / hive.BACKLOG_FILE).write_text("".join(json.dumps(task) + "\n" for task in backlog))
+        self.w.publish()
+        said = json.loads(self.health("--project", "Bee-ruche/toy"))
+        foreseen = said["projects"][0]["forecast"]
+        self.assertEqual((foreseen["stock"]["ready"], foreseen["stock"]["waiting"]), (1, 1), "toy-0002 accepted, toy-0001 stuck")
+        self.assertIn(foreseen["level"], hive.FORECAST_LEVELS)
+        printed = self.health(command="forecast").splitlines()
+        self.assertEqual([line.split(" as of ")[0] for line in printed if line.startswith("FORECAST")], ["FORECAST Bee-ruche/toy", "FORECAST Bee-ruche/port"])
+        self.assertEqual(printed.count(""), 1, "a blank line between the two projects")
+        self.assertIn("queue: nothing is left to do: volunteers are dealt nothing", printed, "port starves")
+        self.assertIn("SUGGEST stuck_tasks (1): stuck tasks have no rule left to cut them again: the AI cutter's, or the architect's "
+                      "(hive/backlog.jsonl)", printed)
+        self.assertFalse({"alice", "vera-the-bee", "claude-fable-5-2", "7000001"} & {word.strip("();,") for line in printed for word in line.split()})
+
     def test_no_login_and_no_members_number_reaches_what_health_prints(self):
         """Whatever the ledger holds of a member (its login, its account's and its fork's numbers, a guardian's, a
         candidate's commit, a model, a note), « health » prints none of it: numbers, codes and the projects' own ids."""
@@ -15636,9 +15772,10 @@ class TestTheHealthCommand(Base):
                 found.append(value)
         walk(said)
         self.assertFalse(numbers & {value for value in found if type(value) is int}, "no member's number, anywhere")
-        allowed = re.compile(r"[a-z_]+|\(none\)|[A-Z]|[0-9a-f]{40}|Bee-ruche/(?:toy|port)|(?:toy|port)(?:-[0-9]{4})?|2026-11-12T12:00:00Z")
+        allowed = re.compile(r"[a-z_]+|\(none\)|[A-Z]|[0-9a-f]{40}|Bee-ruche/(?:toy|port)|(?:toy|port)(?:-[0-9]{4})?|2026-11-12T12:00:00Z|20[0-9]{2}-[01][0-9]-[0-3][0-9]")
         self.assertEqual([value for value in found if isinstance(value, str) and not allowed.fullmatch(value)], [],
-                         "every string is a code of the hive's, a size, a commit read, or the projects' and their tasks' own ids")
+                         "every string is a code of the hive's, a size, a commit read, the projects' and their tasks' own ids, or a date the "
+                         "forecast gives")
         self.assertEqual({project["published"] for project in said["projects"]},
                          {sh("git", "rev-parse", "stable", cwd=world.upstream).stdout.strip() for world in (self.w, self.v)})
 

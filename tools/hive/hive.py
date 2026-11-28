@@ -6606,6 +6606,169 @@ def easier(config, task):
                                               "The goal decides."}, lowered
 
 
+def paced_want(config, held, accepted):
+    """What the project's pace asks of the tasks left to do, before cutter.open and cutter.open_more bound it (open_aim):
+    the tasks held, and half again as many tasks as `accepted` acceptances in PACE_HOURS would use up in
+    trusted.cut_hours, rounded up."""
+    return held - (-3 * accepted * config["trusted"]["cut_hours"] // (2 * PACE_HOURS))
+
+
+# The project's forecast (forecast, docs/cutter.md "The forecast"): below FORECAST_LEAST acceptances in PACE_HOURS it
+# says too few to predict; a project whose tasks run out sooner than URGENT_DAYS, or before its next cut, is « urgent »,
+# sooner than SOON_DAYS « soon »; its guardians are near their cover at COVER_SHARE of it; the judge is in doubt from
+# JUDGE_DOUBT disagreements or judge errors.
+FORECAST_LEAST, URGENT_DAYS, SOON_DAYS, COVER_SHARE, JUDGE_DOUBT = 3, 3, 14, (4, 5), 2
+FORECAST_LEVELS = ("paused", "starving", "urgent", "soon", "ok", "unknown")
+SUGGESTIONS = {  # code: (what it names, the tool's sentence); the forecast gives each with a count, or none
+    "cut_now": ("hive cut", "tasks ready in the backlog wait while fewer are left than the cutter aims at: run a cut"),
+    "write_tasks": ("hive/backlog.jsonl", "the backlog holds nothing ready to publish and the tasks run out: write the next ones"),
+    "no_cut_duty": ("trusted.accounts", "no account is dealt cut duties: the backlog is published only when someone runs a cut"),
+    "raise_open_more": ("cutter.open_more", "the pace asks for more open tasks than the cutter's ceiling allows"),
+    "more_areas": ("hive/backlog.jsonl", "every separate area of files is held: plan work in more separate files to take more volunteers"),
+    "invite_more": ("members.only", "every account the project invites is active: invite more to take more volunteers"),
+    "more_guardians": ("guardians.accounts", "the active members near what the guardians cover: name another guardian, or raise members.per_guardian"),
+    "stuck_tasks": ("hive/backlog.jsonl", "stuck tasks have no rule left to cut them again: the AI cutter's, or the architect's"),
+    "judge_doubt": ("the judge", "established members' own checks passed where the judge refused, or the judge failed: look at the judge"),
+}
+
+
+def forecast(config, tallied, lines, deals, instant, backlog=None):
+    """What a project's architect should see coming (docs/cutter.md, "The forecast"), from its tally (tally), the ledger's
+    lines (tally_line()'s) and deals (Ledger.deals()), and, when known, the backlog's lines not published yet (`backlog`,
+    {id: task}; None when it could not be read). Numbers and codes alone, for « health », its readable form
+    (forecast_lines) and the project's page; no run reads it.
+
+      pace        the acceptances of the last PACE_HOURS hours (open_aim's), and as many a day
+      queue       the tasks left to do (open or dealt), and in how many days they run out at that pace: `days`, with
+                  `fast` and `slow` around it (the count's own spread, one standard deviation of a count: (√k ± 1)²
+                  acceptances in the window), and the date of `days`; none below FORECAST_LEAST acceptances, and no
+                  `slow` below two
+      stock       the same with the backlog's lines ready to publish (all they need done) and those that wait on a task
+                  not done (`waiting`); none when the backlog is unknown
+      cuts        how often a cut duty is dealt (trusted.cut_hours), or none where the project trusts no account to cut
+      room        how many more members the project could take now (`more`), and what bounds it (`limited_by`, each code
+                  at that least): « dealable », the open tasks a member could be dealt now; « cover », what its guardians
+                  cover less its active members; « invited », the accounts members.only names less the active ones.
+                  Active members count every account holding a deal, established or not (active_members)
+      level       « paused » (its file pauses it: no suggestion then), « starving » (nothing left to do), « unknown » (too few acceptances to tell), « urgent », « soon » or « ok »
+      suggestions each code of SUGGESTIONS whose condition holds, with a count where one says more"""
+    days = PACE_HOURS / 24
+    paced = open_aim(config, lines, deals, instant)
+    k, held, aim = paced["accepted"], paced["held"], paced["aim"]
+    rows = tallied["tasks"]
+    done = {task_id for task_id, row in rows.items() if row["status"] == "done"}
+    left = tallied["left"]
+
+    def runs_out(count):
+        """(days, fast, slow, date) for `count` tasks at the window's pace; None where it cannot be told."""
+        if k < FORECAST_LEAST:
+            return None
+        mid, fast = count * days / k, count * days / (math.sqrt(k) + 1) ** 2
+        slow = count * days / (math.sqrt(k) - 1) ** 2 if k >= 2 else None
+        return {"days": round(mid, 1), "fast": round(fast, 1), "slow": None if slow is None else round(slow, 1),
+                "date": (instant + dt.timedelta(days=mid)).date().isoformat()}
+
+    queue = {"left": left, "runs_out": runs_out(left) if left else None}
+    stock = None
+    if backlog is not None:
+        ready = sum(1 for task in backlog.values() if all(other in done for other in task.get("needs") or ()))
+        stock = {"ready": ready, "waiting": len(backlog) - ready, "runs_out": runs_out(left + len(backlog)) if left + len(backlog) else None}
+    cutters = trusted_accounts(config, "cut")
+    cuts = {"hours": config["trusted"]["cut_hours"]} if cutters else None
+    active, members = tallied["active_members"], config.get("members") or {}
+    bounds = [("dealable", tallied["dealable"])]
+    cover = cover_of(config)
+    if cover is not None:
+        bounds.append(("cover", max(0, cover - active)))
+    if members.get("only") is not None:
+        bounds.append(("invited", max(0, len(members["only"]) - active)))
+    more = min(count for _, count in bounds)
+    room = {"more": more, "limited_by": [code for code, count in bounds if count == more], "active": active,
+            "dealable": tallied["dealable"], "areas": tallied["areas"], "cover": cover,
+            "invited": None if members.get("only") is None else len(members["only"])}
+    soonest = (stock or queue)["runs_out"]
+    if config.get("paused") is True:
+        level = "paused"
+    elif not left:
+        level = "starving"
+    elif queue["runs_out"] is None:
+        level = "unknown"
+    elif (queue["runs_out"]["fast"] * 24 < cuts["hours"] if cuts else queue["runs_out"]["fast"] < URGENT_DAYS) \
+            or soonest["fast"] < URGENT_DAYS:
+        level = "urgent"
+    elif soonest["fast"] < SOON_DAYS:
+        level = "soon"
+    else:
+        level = "ok"
+    said = {"pace": {"accepted": k, "hours": PACE_HOURS, "per_day": round(k * 24 / PACE_HOURS, 1)}, "queue": queue, "stock": stock,
+            "cuts": cuts, "room": room, "aim": aim, "level": level, "suggestions": []}
+    if level == "paused":  # (a project its architect paused deals nothing, and asks for nothing)
+        return said
+
+    def suggest(code, count=None):
+        said["suggestions"].append({"code": code, **({"count": count} if count is not None else {})})
+
+    if stock and stock["ready"] and left < aim:
+        suggest("cut_now", stock["ready"])
+    if stock is not None and not stock["ready"] and level in ("starving", "urgent", "soon"):
+        suggest("write_tasks")
+    if not cutters and (stock is None or stock["ready"] + stock["waiting"]):
+        suggest("no_cut_duty")
+    if config["cutter"]["open_more"] and paced_want(config, held, k) > config["cutter"]["open"] + config["cutter"]["open_more"]:
+        suggest("raise_open_more", paced_want(config, held, k))
+    if left and not tallied["dealable"] and active >= tallied["areas"]:
+        suggest("more_areas", tallied["areas"])
+    if members.get("only") is not None and active >= len(members["only"]):
+        suggest("invite_more", len(members["only"]))
+    if cover is not None and active * COVER_SHARE[1] >= cover * COVER_SHARE[0]:
+        suggest("more_guardians", cover)
+    stuck = len(set(tallied["stuck"]) | set(tallied.get("signalled", ())))
+    if stuck:
+        suggest("stuck_tasks", stuck)
+    doubt = sum(tallied.get("disagreements", {}).values()) + sum(row["errors"].get("judge", 0) for row in rows.values())
+    if doubt >= JUDGE_DOUBT:
+        suggest("judge_doubt", doubt)
+    return said
+
+
+def forecast_lines(repository, said, as_of):
+    """The forecast (forecast) as plain lines a person reads at a glance: the level first, then the pace, the queue,
+    the stock, the cuts, the room for more members, and one SUGGEST line for each suggestion, with the setting or file
+    it names. The tool's own words around numbers, codes and the project's name alone."""
+    def span(runs, what):
+        if runs is None:
+            return f"{what}: too few acceptances to tell when they run out"
+        slow = runs["slow"] if runs["slow"] is not None else "many more"
+        return f"{what}: they run out in about {runs['days']} days (between {runs['fast']} and {slow} days), around {runs['date']}"
+
+    pace, queue, stock, room = said["pace"], said["queue"], said["stock"], said["room"]
+    lines = [f"FORECAST {repository} as of {as_of}: {said['level']}",
+             f"pace: {pace['accepted']} accepted in the last {pace['hours']} hours ({pace['per_day']} a day)"]
+    if said["level"] == "paused":
+        lines.append("paused: its file pauses the project; nothing is dealt until its architect resumes it")
+    if said["level"] == "starving":
+        lines.append("queue: nothing is left to do: volunteers are dealt nothing")
+    else:
+        lines.append(span(queue["runs_out"], f"queue: {queue['left']} task(s) left to do (the cutter aims at {said['aim']})"))
+    if stock is None:
+        lines.append("stock: the backlog could not be read")
+    elif stock["runs_out"] is None and not (stock["ready"] or stock["waiting"] or queue["left"]):
+        lines.append("stock: the backlog holds nothing more")
+    else:
+        lines.append(span(stock["runs_out"], f"stock: with the backlog's {stock['ready']} ready and {stock['waiting']} waiting on other tasks"))
+    lines.append(f"cuts: a cut duty every {said['cuts']['hours']} hours" if said["cuts"] else
+                 "cuts: no account is dealt cut duties; the backlog is published when someone runs a cut")
+    bounds = {"dealable": f"{room['dealable']} open task(s) dealable now, in {room['areas']} separate area(s)",
+              "cover": f"the guardians cover {room['cover']} active member(s)",
+              "invited": f"members.only names {room['invited']} account(s)"}
+    lines.append(f"volunteers: {room['active']} active; room for {room['more']} more now, bound by "
+                 + "; ".join(bounds[code] for code in room["limited_by"]))
+    for item in said["suggestions"]:
+        names, sentence = SUGGESTIONS[item["code"]]
+        lines.append(f"SUGGEST {item['code']}" + (f" ({item['count']})" if "count" in item else "") + f": {sentence} ({names})")
+    return lines
+
+
 def open_aim(config, lines, deals, instant):
     """How many tasks left to do the cutter aims at (docs/cutter.md, "How many tasks"): {"aim", "held", "accepted"}.
     Without cutter.open_more, cutter.open. With it, as many as the project's pace asks, from cutter.open to cutter.open
@@ -6626,7 +6789,7 @@ def open_aim(config, lines, deals, instant):
                and instant_text(deal.get("at")) is not None and instant_text(deal["at"]) <= until
                and deal["member_id"] in first and first[deal["member_id"]] < instant_text(deal["at"]))
     # (Without cutter.open_more, the ceiling is cutter.open: the aim is it.)
-    wanted = held - (-3 * accepted * config["trusted"]["cut_hours"] // (2 * PACE_HOURS))  # (a ceiling: half again, rounded up)
+    wanted = paced_want(config, held, accepted)
     return {"aim": min(max(wanted, cutter["open"]), cutter["open"] + cutter["open_more"]), "held": held, "accepted": accepted}
 
 
@@ -7412,7 +7575,7 @@ def anonymous(home):
 
 
 def read_public_state(repository, folder, allow_local=False):
-    """(configuration, tasks, ledger, published commit, state commit) of one listed project, read from its public
+    """(configuration, tasks, ledger, published commit, state commit, backlog) of one listed project, read from its public
     address (public_address) into `folder`, a store of this command's own that the caller removes: the branch the
     project publishes, which its repository names as its default one, for its settings and tasks, read there as a
     run reads them (settings_on); and its branch hive-state, for its ledger. One listing (git ls-remote) and one
@@ -7450,7 +7613,8 @@ def read_public_state(repository, folder, allow_local=False):
         ledger = Ledger(folder / "state")
     except (HiveError, ValueError, RecursionError):
         raise Unread("ledger") from None
-    return config, tasks, ledger, commits[0], commits[1]
+    backlog, unread = backlog_at(folder, commits[0], config, tasks)  # (for the forecast: none when it cannot be read)
+    return config, tasks, ledger, commits[0], commits[1], (None if unread else {t: task for t, task in backlog.items() if t not in tasks})
 
 
 def middle(values):
@@ -7579,7 +7743,8 @@ def health_totals(summaries):
 def health(projects, read, instant):
     """What the listed projects' public state says of the hive at an instant: a summary of each project read
     (project_health), the projects that could not be read with a code, and the totals of those read (health_totals).
-    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), or raises Unread.
+    `read(repository)` gives (configuration, tasks, ledger, published commit, state commit), and the backlog's lines
+    not published (None when unread or not given: the forecast then says nothing of the stock), or raises Unread.
 
     A project whose name, or a task's id, is longer than ID_CHARS, whose file names more than HEALTH_ACCOUNTS_MOST
     accounts in members.only and members.banned, or whose tasks name more than HEALTH_FILES_MOST entries in their
@@ -7588,7 +7753,7 @@ def health(projects, read, instant):
     summaries, unread = [], []
     for repository in projects:
         try:
-            config, tasks, ledger, published, state = read(repository)
+            config, tasks, ledger, published, state, *more = read(repository)
             members = config.get("members") or {}
             if len(config["project"]) > ID_CHARS or len(members.get("only") or ()) + len(members.get("banned") or ()) > HEALTH_ACCOUNTS_MOST:
                 raise Unread("settings")
@@ -7606,7 +7771,12 @@ def health(projects, read, instant):
         except Unread as error:
             unread.append({"repository": repository, "because": error.because})
             continue
-        summaries.append(project_health(repository, config, tallied, published, state))
+        try:  # (a forecast that cannot be made of this ledger is none: the summary stands)
+            foreseen = forecast(config, tallied, [line for line in map(tally_line, ledger.events) if line is not None], ledger.deals(), instant,
+                                more[0] if more else None)
+        except (KeyError, TypeError, AttributeError, ValueError, OverflowError, ZeroDivisionError):
+            foreseen = None
+        summaries.append({**project_health(repository, config, tallied, published, state), "forecast": foreseen})
     return {"as_of": iso(instant), "projects": summaries, "unread": unread, "totals": health_totals(summaries)}
 
 
@@ -7648,6 +7818,21 @@ def cmd_health(args):
     """Prints, as JSON, what the public state of the projects the hive's repository lists says of the hive (health):
     numbers, codes and ids, for those who build the hive. It uses no account, sends nothing and writes nothing."""
     print(json.dumps(health_of(args), sort_keys=True, indent=1, ensure_ascii=True))
+
+
+def cmd_forecast(args):
+    """Prints the forecast of each project the hive's repository lists (or of the one --project names), in plain lines
+    (forecast_lines), read from its public state as « health » reads it. It uses no account, sends nothing and writes
+    nothing; a project read whose forecast could not be made says so."""
+    result = health_of(args)
+    for number, summary in enumerate(result["projects"]):
+        if number:
+            print()  # (a blank line between two projects)
+        if summary["forecast"] is None:
+            print(f"FORECAST {summary['repository']} as of {result['as_of']}: none (its ledger holds lines the forecast cannot read)")
+            continue
+        for line in forecast_lines(summary["repository"], summary["forecast"], result["as_of"]):
+            print(safe_text(line, LINE_MOST))
 
 
 def report_cell(value):
@@ -13415,6 +13600,11 @@ def main(argv=None):
                                       "nothing sent, nothing written (docs/cutter.md)")
     reads_the_projects(p)
     p.set_defaults(run=cmd_health)
+    p = sub.add_parser("forecast", help="what each project's architect should see coming, in plain lines: when its tasks run out, "
+                                        "how many more volunteers it could take, and what to do: no account, nothing sent, nothing written "
+                                        "(docs/cutter.md)")
+    reads_the_projects(p)
+    p.set_defaults(run=cmd_forecast)
     p = sub.add_parser("report", help="print an issue template with its numbers filled from health, for the architect to read and "
                                       "post themselves: it posts nothing (docs/cutter.md)")
     reads_the_projects(p)

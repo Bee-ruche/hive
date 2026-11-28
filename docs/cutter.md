@@ -287,6 +287,50 @@ With few members the pace is noisy, and the floor and the ceiling do most of the
 run deals a cut duty early while fewer tasks are left than `cutter.open`, and otherwise every `trusted.cut_hours`,
 the horizon the aim is measured over. `cut` says the aim and what it read (`pace`); `cut-check` says the aim too.
 
+### The forecast
+
+The architect should see a shortage coming, not find it once volunteers are dealt nothing. `hive.py forecast`
+prints, for each project the hive lists (or the one `--project` names), what its public state says is coming, in
+plain lines; `hive.py health` carries the same in numbers and codes (its `forecast`; `forecast` and `forecast_lines` in `tools/hive/hive.py`).
+It is read from the ledger, the tasks and the backlog on the published branch, in numbers; it decides nothing, and no
+run reads it. For example:
+
+```
+FORECAST Bee-ruche/blackboxBee as of 2026-11-28T14:07:11Z: urgent
+pace: 8 accepted in the last 72 hours (2.7 a day)
+queue: 2 task(s) left to do (the cutter aims at 6): they run out in about 0.8 days (between 0.4 and 1.8 days), around 2026-11-29
+stock: with the backlog's 12 ready and 3 waiting on other tasks: they run out in about 6.4 days (between 3.5 and 15.3 days), around 2026-12-04
+cuts: no account is dealt cut duties; the backlog is published when someone runs a cut
+volunteers: 1 active; room for 0 more now, bound by members.only names 1 account(s)
+SUGGEST cut_now (12): tasks ready in the backlog wait while fewer are left than the cutter aims at: run a cut (hive cut)
+SUGGEST no_cut_duty: no account is dealt cut duties: the backlog is published only when someone runs a cut (trusted.accounts)
+SUGGEST invite_more (1): every account the project invites is active: invite more to take more volunteers (members.only)
+```
+
+- **The pace** is the acceptances of the last 72 hours, the cutter's own ("How many tasks"). Below three, the
+  forecast says there are too few to tell, never a number.
+- **The queue** is the tasks left to do (open or dealt); **the stock** adds the backlog's lines not published yet,
+  those whose `needs` are all done (`ready`) and the others (`waiting`). Each says in how many days it runs out at
+  that pace, and when: the middle figure, and a range from the count's own spread, one standard deviation of a count
+  of acceptances, (√k − 1)² to (√k + 1)² of them. With few acceptances the range is wide, and it says so.
+- **The level**: `paused` (its file pauses the project), `starving` (nothing left to do), `unknown` (too few
+  acceptances), `urgent` (the queue runs out before the next cut, or within three days where nobody is dealt cuts, or
+  the stock within three days, at the fastest), `soon` (the stock within fourteen days at the fastest), or `ok`.
+- **Room for more volunteers**: the least of the open tasks a member could be dealt now, what the guardians cover
+  less the active members (`members.per_guardian`), and the accounts `members.only` invites less the active ones; it
+  names what bounds it. Active members count every account holding a deal, established or not.
+- **Suggestions**, from a closed list, each with the setting or file it means:
+  - `cut_now`: tasks ready in the backlog wait while fewer are left than the cutter aims at;
+  - `write_tasks`: the backlog holds nothing ready, and the tasks run out within fourteen days;
+  - `no_cut_duty`: no account is dealt cut duties (`trusted.accounts`), so the backlog is published only by hand;
+  - `raise_open_more`: the pace asks for more open tasks than `cutter.open` plus `cutter.open_more`;
+  - `more_areas`: every separate area of files is held while tasks are left: more volunteers need work in more
+    separate files;
+  - `invite_more`: every account `members.only` names is active;
+  - `more_guardians`: the active members reach four fifths of what the guardians cover;
+  - `stuck_tasks`: stuck tasks, or tasks C1 closed, have no rule left to cut them again;
+  - `judge_doubt`: two or more refusals where the established member's own check passed, or judge errors.
+
 ## The loop
 
 Once a day, by the architect's agent; a whole cycle (cut, publish, deal, judge, read) takes a day or more, since

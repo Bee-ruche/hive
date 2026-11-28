@@ -167,6 +167,10 @@ for a project one trusts. A text you may use, with your project's name:
 - Read what the judge accepted, on the hive's branch, before you publish it.
 - Answer what the doctor, the feed and the cutter's report raise: a project with nothing left to do, stuck tasks, a
   sandbox workers cannot run, errors, a schedule GitHub disabled.
+- Read the forecast, `hive.py forecast --project <owner/name>`, for a project the hive lists: when its tasks run out
+  at its pace, with a range, how many more volunteers it could take now and what bounds it, and what to do
+  (SUGGEST lines, each naming the setting or file it means). It decides nothing: you do ([cutter.md](cutter.md),
+  "The forecast").
 - Measure again once the project has moved far.
 - Take a newer hive by changing the caller's pin, reviewed ([hosting.md](hosting.md), "Which version of the hive a
   project runs"); stop it by disabling the workflow or with `"paused": true` ("Stopping the hive").
@@ -192,7 +196,8 @@ runs anything of your project (git only fetches into your clone); your AI runs a
   schedule GitHub disabled), and, for a `reference` project alone, `tip.json`, the judge's answers about the tip for
   planned tasks ([cutter.md](cutter.md), "The proof at the tip"). No command prints them.
 
-`hive.py health` reads only the projects the hive lists (`hive/projects.json`); for another it says so and stops.
+`hive.py health` and `hive.py forecast` read only the projects the hive lists (`hive/projects.json`); for another they
+say so and stop.
 Listing your project is the founder's decision; the tally gives your project's numbers meanwhile.
 
 Then section 9: what you read decides what you do next.
