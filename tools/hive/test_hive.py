@@ -14405,7 +14405,7 @@ class TestTheForecast(unittest.TestCase):
     def test_the_stock_counts_the_backlogs_lines_ready_and_waiting_and_is_none_when_the_backlog_is_unknown(self):
         backlog = {"toy-0010": {"needs": ["toy-0001"]}, "toy-0011": {}, "toy-0012": {"needs": ["toy-0002"]}}
         said = self.foresee(tallied=self.tallied(done=("toy-0001",)), backlog=backlog)
-        self.assertEqual((said["stock"]["ready"], said["stock"]["waiting"], said["stock"]["runs_out"]["days"]), (2, 1, 3.0))
+        self.assertEqual((said["stock"]["cleared"], said["stock"]["waiting"], said["stock"]["runs_out"]["days"]), (2, 1, 3.0))
         self.assertIsNone(self.foresee()["stock"])
 
     def test_the_level_says_how_soon_the_tasks_run_out(self):
@@ -14464,15 +14464,35 @@ class TestTheForecast(unittest.TestCase):
         self.assertIn({"code": "judge_doubt", "count": 2}, self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}, errors={"judge": 1}))["suggestions"])
         self.assertNotIn("judge_doubt", self.codes(self.foresee(tallied=self.tallied(disagreements={"toy-0002": 1}))))
 
+    def test_a_cut_is_suggested_only_below_the_aim_and_a_line_needing_a_closed_task_waits(self):
+        backlog = {"toy-0010": {}, "toy-0011": {"needs": ["toy-0003"]}}
+        self.assertNotIn("cut_now", self.codes(self.foresee(tallied=self.tallied(left=4), backlog=backlog)), "four left: the aim of four")
+        self.assertIn("cut_now", self.codes(self.foresee(tallied=self.tallied(left=3), backlog=backlog)))
+        closed = self.tallied()
+        closed["tasks"]["toy-0003"]["status"] = "closed"
+        self.assertEqual(self.foresee(tallied=closed, backlog=backlog)["stock"]["waiting"], 1, "a closed task is not done")
+
+    def test_health_says_no_forecast_for_a_ledger_it_cannot_read_and_the_summary_stands(self):
+        config = self.config()
+        with mock.patch.object(hive, "forecast", side_effect=TypeError("a line of another shape")):
+            said = hive.health(["Bee-ruche/toy"], lambda repository: (config, {t["id"]: t for t in TASKS}, hive.Ledger(Path("/nonexistent-hive-state")),
+                                                                         "a" * 40, "b" * 40, None), self.NOW)
+        self.assertEqual((len(said["projects"]), said["projects"][0]["forecast"], said["unread"]), (1, None, []))
+
     def test_the_plain_lines_say_the_level_first_and_each_suggestion_with_what_it_names(self):
         said = self.foresee(config=self.config(members={"only": [7]}), tallied=self.tallied(left=2), backlog={"toy-0010": {}})
         lines = hive.forecast_lines("Bee-ruche/toy", said, "2026-11-28T12:00:00Z")
         self.assertEqual(lines[0], "FORECAST Bee-ruche/toy as of 2026-11-28T12:00:00Z: urgent")
         self.assertIn("pace: 9 accepted in the last 72 hours (3.0 a day)", lines)
-        self.assertIn("queue: 2 task(s) left to do (the cutter aims at 4): they run out in about 0.7 days (between 0.4 and 1.5 days), "
-                      "around 2026-11-29", lines)
-        self.assertIn("cuts: no account is dealt cut duties; the backlog is published when someone runs a cut", lines)
-        self.assertIn("volunteers: 1 active; room for 0 more now, bound by members.only names 1 account(s)", lines)
+        self.assertIn("queue: 2 task(s) left to do (the cutter aims at 4): they run out in about 17 hours (probably between 10 hours and "
+                      "1.5 days), around 2026-11-29", lines)
+        self.assertIn("stock: the queue and the backlog's 1 line(s) cleared by what they need and 0 waiting on other tasks: they run "
+                      "out in about 1.0 days (probably between 14 hours and 2.2 days), around 2026-11-29", lines)
+        self.assertIn("cuts: no account is dealt cut duties; the backlog is published only when someone runs a cut", lines)
+        self.assertIn("volunteers: 1 active; room for 0 more now: every account the project invites (1) is already active", lines)
+        two = hive.forecast_lines("Bee-ruche/toy", self.foresee(config=self.config(members={"only": [7, 8]}), tallied=self.tallied(dealable=1)), "x")
+        self.assertIn("volunteers: 1 active; room for 1 more now: 1 open task(s) can be dealt now, in 3 separate area(s) of files; "
+                      "1 invited account(s) not active yet", two)
         self.assertEqual([line.split(":")[0] for line in lines if line.startswith("SUGGEST")],
                          ["SUGGEST cut_now (1)", "SUGGEST no_cut_duty", "SUGGEST invite_more (1)"])
         self.assertTrue(all(line.endswith(")") for line in lines if line.startswith("SUGGEST")), "each names its setting or file")
@@ -15733,7 +15753,7 @@ class TestTheHealthCommand(Base):
         self.w.publish()
         said = json.loads(self.health("--project", "Bee-ruche/toy"))
         foreseen = said["projects"][0]["forecast"]
-        self.assertEqual((foreseen["stock"]["ready"], foreseen["stock"]["waiting"]), (1, 1), "toy-0002 accepted, toy-0001 stuck")
+        self.assertEqual((foreseen["stock"]["cleared"], foreseen["stock"]["waiting"]), (1, 1), "toy-0002 accepted, toy-0001 stuck")
         self.assertIn(foreseen["level"], hive.FORECAST_LEVELS)
         printed = self.health(command="forecast").splitlines()
         self.assertEqual([line.split(" as of ")[0] for line in printed if line.startswith("FORECAST")], ["FORECAST Bee-ruche/toy", "FORECAST Bee-ruche/port"])

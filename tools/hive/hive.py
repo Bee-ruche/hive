@@ -6620,8 +6620,10 @@ def paced_want(config, held, accepted):
 FORECAST_LEAST, URGENT_DAYS, SOON_DAYS, COVER_SHARE, JUDGE_DOUBT = 3, 3, 14, (4, 5), 2
 FORECAST_LEVELS = ("paused", "starving", "urgent", "soon", "ok", "unknown")
 SUGGESTIONS = {  # code: (what it names, the tool's sentence); the forecast gives each with a count, or none
-    "cut_now": ("hive cut", "tasks ready in the backlog wait while fewer are left than the cutter aims at: run a cut"),
-    "write_tasks": ("hive/backlog.jsonl", "the backlog holds nothing ready to publish and the tasks run out: write the next ones"),
+    "cut_now": ("hive cut", "backlog lines cleared by what they need wait while fewer tasks are left than the cutter aims at: run a cut, "
+                           "which publishes those the gate and the proof at the tip let through"),
+    "write_tasks": ("hive/backlog.jsonl", "no backlog line is cleared by what it needs and the tasks run out: write the next ones, or pause "
+                    "a project that is done"),
     "no_cut_duty": ("trusted.accounts", "no account is dealt cut duties: the backlog is published only when someone runs a cut"),
     "raise_open_more": ("cutter.open_more", "the pace asks for more open tasks than the cutter's ceiling allows"),
     "more_areas": ("hive/backlog.jsonl", "every separate area of files is held: plan work in more separate files to take more volunteers"),
@@ -6643,8 +6645,9 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
                   `fast` and `slow` around it (the count's own spread, one standard deviation of a count: (√k ± 1)²
                   acceptances in the window), and the date of `days`; none below FORECAST_LEAST acceptances, and no
                   `slow` below two
-      stock       the same with the backlog's lines ready to publish (all they need done) and those that wait on a task
-                  not done (`waiting`); none when the backlog is unknown
+      stock       the same with the backlog's lines cleared by what they need (`cleared`: all their needs done; the gate, their
+                  files or the proof at the tip may still hold one back) and those that wait on a task not done
+                  (`waiting`); none when the backlog is unknown
       cuts        how often a cut duty is dealt (trusted.cut_hours), or none where the project trusts no account to cut
       room        how many more members the project could take now (`more`), and what bounds it (`limited_by`, each code
                   at that least): « dealable », the open tasks a member could be dealt now; « cover », what its guardians
@@ -6671,8 +6674,8 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
     queue = {"left": left, "runs_out": runs_out(left) if left else None}
     stock = None
     if backlog is not None:
-        ready = sum(1 for task in backlog.values() if all(other in done for other in task.get("needs") or ()))
-        stock = {"ready": ready, "waiting": len(backlog) - ready, "runs_out": runs_out(left + len(backlog)) if left + len(backlog) else None}
+        cleared = sum(1 for task in backlog.values() if all(other in done for other in task.get("needs") or ()))
+        stock = {"cleared": cleared, "waiting": len(backlog) - cleared, "runs_out": runs_out(left + len(backlog)) if left + len(backlog) else None}
     cutters = trusted_accounts(config, "cut")
     cuts = {"hours": config["trusted"]["cut_hours"]} if cutters else None
     active, members = tallied["active_members"], config.get("members") or {}
@@ -6708,11 +6711,11 @@ def forecast(config, tallied, lines, deals, instant, backlog=None):
     def suggest(code, count=None):
         said["suggestions"].append({"code": code, **({"count": count} if count is not None else {})})
 
-    if stock and stock["ready"] and left < aim:
-        suggest("cut_now", stock["ready"])
-    if stock is not None and not stock["ready"] and level in ("starving", "urgent", "soon"):
+    if stock and stock["cleared"] and left < aim:
+        suggest("cut_now", stock["cleared"])
+    if stock is not None and not stock["cleared"] and level in ("starving", "urgent", "soon"):
         suggest("write_tasks")
-    if not cutters and (stock is None or stock["ready"] + stock["waiting"]):
+    if not cutters and (stock is None or stock["cleared"] + stock["waiting"]):
         suggest("no_cut_duty")
     if config["cutter"]["open_more"] and paced_want(config, held, k) > config["cutter"]["open"] + config["cutter"]["open_more"]:
         suggest("raise_open_more", paced_want(config, held, k))
@@ -6735,11 +6738,14 @@ def forecast_lines(repository, said, as_of):
     """The forecast (forecast) as plain lines a person reads at a glance: the level first, then the pace, the queue,
     the stock, the cuts, the room for more members, and one SUGGEST line for each suggestion, with the setting or file
     it names. The tool's own words around numbers, codes and the project's name alone."""
+    def lasting(days):  # (a time under a day in hours: « 0.8 days » reads worse than « 19 hours »)
+        return f"{round(days * 24)} hours" if days < 1 else f"{days} days"
+
     def span(runs, what):
         if runs is None:
             return f"{what}: too few acceptances to tell when they run out"
-        slow = runs["slow"] if runs["slow"] is not None else "many more"
-        return f"{what}: they run out in about {runs['days']} days (between {runs['fast']} and {slow} days), around {runs['date']}"
+        slow = lasting(runs["slow"]) if runs["slow"] is not None else "much longer"
+        return f"{what}: they run out in about {lasting(runs['days'])} (probably between {lasting(runs['fast'])} and {slow}), around {runs['date']}"
 
     pace, queue, stock, room = said["pace"], said["queue"], said["stock"], said["room"]
     lines = [f"FORECAST {repository} as of {as_of}: {said['level']}",
@@ -6752,16 +6758,19 @@ def forecast_lines(repository, said, as_of):
         lines.append(span(queue["runs_out"], f"queue: {queue['left']} task(s) left to do (the cutter aims at {said['aim']})"))
     if stock is None:
         lines.append("stock: the backlog could not be read")
-    elif stock["runs_out"] is None and not (stock["ready"] or stock["waiting"] or queue["left"]):
+    elif stock["runs_out"] is None and not (stock["cleared"] or stock["waiting"] or queue["left"]):
         lines.append("stock: the backlog holds nothing more")
     else:
-        lines.append(span(stock["runs_out"], f"stock: with the backlog's {stock['ready']} ready and {stock['waiting']} waiting on other tasks"))
+        lines.append(span(stock["runs_out"], f"stock: the queue and the backlog's {stock['cleared']} line(s) cleared by what they need and "
+                                             f"{stock['waiting']} waiting on other tasks"))
     lines.append(f"cuts: a cut duty every {said['cuts']['hours']} hours" if said["cuts"] else
-                 "cuts: no account is dealt cut duties; the backlog is published when someone runs a cut")
-    bounds = {"dealable": f"{room['dealable']} open task(s) dealable now, in {room['areas']} separate area(s)",
-              "cover": f"the guardians cover {room['cover']} active member(s)",
-              "invited": f"members.only names {room['invited']} account(s)"}
-    lines.append(f"volunteers: {room['active']} active; room for {room['more']} more now, bound by "
+                 "cuts: no account is dealt cut duties; the backlog is published only when someone runs a cut")
+    left_invited = None if room["invited"] is None else room["invited"] - room["active"]
+    bounds = {"dealable": f"{room['dealable']} open task(s) can be dealt now, in {room['areas']} separate area(s) of files",
+              "cover": f"the guardians cover {room['cover']} active member(s), and they are reached",
+              "invited": f"every account the project invites ({room['invited']}) is already active" if left_invited is not None and left_invited <= 0
+              else f"{left_invited} invited account(s) not active yet"}
+    lines.append(f"volunteers: {room['active']} active; room for {room['more']} more now: "
                  + "; ".join(bounds[code] for code in room["limited_by"]))
     for item in said["suggestions"]:
         names, sentence = SUGGESTIONS[item["code"]]

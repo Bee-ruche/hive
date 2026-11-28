@@ -298,11 +298,11 @@ run reads it. For example:
 ```
 FORECAST Bee-ruche/blackboxBee as of 2026-11-28T14:07:11Z: urgent
 pace: 8 accepted in the last 72 hours (2.7 a day)
-queue: 2 task(s) left to do (the cutter aims at 6): they run out in about 0.8 days (between 0.4 and 1.8 days), around 2026-11-29
-stock: with the backlog's 12 ready and 3 waiting on other tasks: they run out in about 6.4 days (between 3.5 and 15.3 days), around 2026-12-04
-cuts: no account is dealt cut duties; the backlog is published when someone runs a cut
-volunteers: 1 active; room for 0 more now, bound by members.only names 1 account(s)
-SUGGEST cut_now (12): tasks ready in the backlog wait while fewer are left than the cutter aims at: run a cut (hive cut)
+queue: 2 task(s) left to do (the cutter aims at 6): they run out in about 19 hours (probably between 10 hours and 1.8 days), around 2026-11-29
+stock: the queue and the backlog's 12 line(s) cleared by what they need and 3 waiting on other tasks: they run out in about 6.4 days (probably between 3.5 days and 15.3 days), around 2026-12-04
+cuts: no account is dealt cut duties; the backlog is published only when someone runs a cut
+volunteers: 1 active; room for 0 more now: every account the project invites (1) is already active
+SUGGEST cut_now (12): backlog lines cleared by what they need wait while fewer tasks are left than the cutter aims at: run a cut, which publishes those the gate and the proof at the tip let through (hive cut)
 SUGGEST no_cut_duty: no account is dealt cut duties: the backlog is published only when someone runs a cut (trusted.accounts)
 SUGGEST invite_more (1): every account the project invites is active: invite more to take more volunteers (members.only)
 ```
@@ -310,9 +310,11 @@ SUGGEST invite_more (1): every account the project invites is active: invite mor
 - **The pace** is the acceptances of the last 72 hours, the cutter's own ("How many tasks"). Below three, the
   forecast says there are too few to tell, never a number.
 - **The queue** is the tasks left to do (open or dealt); **the stock** adds the backlog's lines not published yet,
-  those whose `needs` are all done (`ready`) and the others (`waiting`). Each says in how many days it runs out at
-  that pace, and when: the middle figure, and a range from the count's own spread, one standard deviation of a count
-  of acceptances, (√k − 1)² to (√k + 1)² of them. With few acceptances the range is wide, and it says so.
+  those whose `needs` are all done (`cleared`: the gate, their files or the proof at the tip may still hold one back,
+  so the stock is the most a cut could publish) and the others (`waiting`). Each says how long it lasts at that pace
+  (in hours under a day), and until when: the middle figure, and a probable range from the count's own spread, one
+  standard deviation of a count of acceptances, (√k − 1)² to (√k + 1)² of them, about two chances in three. With few
+  acceptances the range is wide, and it says so.
 - **The level**: `paused` (its file pauses the project), `starving` (nothing left to do), `unknown` (too few
   acceptances), `urgent` (the queue runs out before the next cut, or within three days where nobody is dealt cuts, or
   the stock within three days, at the fastest), `soon` (the stock within fourteen days at the fastest), or `ok`.
@@ -320,8 +322,9 @@ SUGGEST invite_more (1): every account the project invites is active: invite mor
   less the active members (`members.per_guardian`), and the accounts `members.only` invites less the active ones; it
   names what bounds it. Active members count every account holding a deal, established or not.
 - **Suggestions**, from a closed list, each with the setting or file it means:
-  - `cut_now`: tasks ready in the backlog wait while fewer are left than the cutter aims at;
-  - `write_tasks`: the backlog holds nothing ready, and the tasks run out within fourteen days;
+  - `cut_now`: backlog lines cleared by what they need wait while fewer tasks are left than the cutter aims at;
+  - `write_tasks`: no backlog line is cleared, and the tasks run out within fourteen days. A project that is done
+    says so by pausing it (`"paused": true`): its forecast then asks for nothing;
   - `no_cut_duty`: no account is dealt cut duties (`trusted.accounts`), so the backlog is published only by hand;
   - `raise_open_more`: the pace asks for more open tasks than `cutter.open` plus `cutter.open_more`;
   - `more_areas`: every separate area of files is held while tasks are left: more volunteers need work in more
