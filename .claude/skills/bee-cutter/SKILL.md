@@ -126,7 +126,7 @@ project with fewer members who ever had a candidate accepted never has a stuck t
 architect, and do not close it yourself.
 
 The settings you write within, from `hive/project.json`, and their values when it says nothing: `cutter.changes`
-10, `cutter.open` 10, `cutter.context_chars` 2000, `cutter.floors` none (the charter may then name the least a goal
+10, `cutter.open` 10, `cutter.open_more` 0, `cutter.context_chars` 2000, `cutter.floors` none (the charter may then name the least a goal
 asks).
 
 ## Writing tasks
