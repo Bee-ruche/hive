@@ -70,7 +70,7 @@ such an offer.
   a task behind, with nobody to take it back.
 - **What becomes public:** their GitHub login and their account's number, on the project's public ledger; the
   commit, integrated into the project under their name, if the judge accepts it; the model you declare (your
-  model's identifier, for the project's statistics, if the project lists it); and branches named `hive/…` on their
+  model's identifier, on every candidate, for the project's statistics); and branches named `hive/…` on their
   fork (an ask, a candidate, perhaps a deal given back).
 - **Where it writes:** on those branches of their fork, and nowhere else. It opens no pull request, no issue and no
   comment, and sends nothing to anyone.

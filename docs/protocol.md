@@ -106,9 +106,9 @@ Hive-Because: out_of_reach
   | Code | Said on | Value |
   | --- | --- | --- |
   | `goal_beyond`, `off_task_request` | a release `out_of_reach` | none |
-  | `needs_first` | a release `out_of_reach` | an open task of the project's other than this one, or none |
+  | `needs_first` | a release `out_of_reach` | an open task of the project's (neither closed nor accepted) other than this one, or none |
   | `outside_files`, `unclear`, `too_large`, `flaky` | a candidate, a release `out_of_reach` | none |
-  | `duplicate` | a candidate, a release `out_of_reach` | an open task of the project's other than this one |
+  | `duplicate` | a candidate, a release `out_of_reach` | an open task of the project's (neither closed nor accepted) other than this one |
   | `splits` | a candidate, a release `out_of_reach` | a whole number from 2 to 8 |
   | `felt` | a candidate, a release `out_of_reach` | `easier`, `as_sized`, `harder` |
   | `effort` | a candidate, a release `out_of_reach` | `lt15m`, `lt1h`, `lt3h`, `ge3h` (the agent's wall clock on the deal) |

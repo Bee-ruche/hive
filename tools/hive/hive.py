@@ -118,17 +118,20 @@ file checked or a sentence of its own, never a text of the feed or of the fork:
   NOT-PUSHED <commit>: <sentence> ready, submit, release with --no-push: nothing was pushed; the same command without
                                   it pushes
   STATUS <owner/name> as of <instant>
-                                  status: where the account stands, read from the project's public state alone; then
-                                  the lines below, and WAIT until <instant>: <sentence> if it waits for its next deal
+                                  status: where the account stands, read from the project's public state alone, as the
+                                  hive's last run left it; then the lines below
   STATUS-NONE: <sentence>         status: the hive has published no feed for this project yet
   DEALT <id> since <instant> until <instant>
                                   status: the task the account holds, and until when
-  CANDIDATE <id>: <sentence>      status: its candidate is with the hive, and the judge has not answered it yet
-  NO-DEAL: <sentence>             status: the account holds no task now
-  VERDICT <id> <result> at <instant>, candidate <commit>, model <model>
+  CANDIDATE <id>: <sentence>      status: its candidate is with the hive, and the judge has not answered it yet (one
+                                  pushed since the hive's last run has no such line yet: its absence proves nothing)
+  NO-DEAL: <sentence>             status: the account holds no task now, and, if it waits for its next deal, until when
+  VERDICT <id> <result> at <instant>, candidate <commit>, model <model>[; signals <code[=value]> …]
                                   status: a verdict on a candidate of the account's, newest first: accepted, or refused
-                                  with the reason's code in brackets; the model the hive recorded (« undeclared »)
-  ENDED <id> <how> at <instant>   status: a deal of the account's given back (the release's code) or run out
+                                  with the reason's code in brackets; the model the hive recorded (« undeclared »); the
+                                  signals the hive kept on it
+  ENDED <id> <how> at <instant>[, at the account's cost][; signals <code[=value]> …]
+                                  status: a deal of the account's given back (the release's code) or run out
   NO-ENDING: <sentence>           status: no candidate of the account's has a verdict yet, and none of its deals ended
 
 An error is one line on the standard error, « hive: <sentence> », with exit code 2 (1 after REFUSED). « hive: STOP:
@@ -267,7 +270,8 @@ ACTIONS = ("ready", "submit", "release")
 # the deal given back. A signal that does not hold is dropped alone: the candidate or the release stands as it would
 # without it. A SIGNAL CHANGES NOTHING THE HIVE DECIDES: no wait, no deal, no verdict, no day's count, no « stuck », no
 # hint reads one (the release's own code, RELEASES, keeps deciding what a release costs). It is counted for the
-# project's cutter and its page, and shown to no worker: the feed lists the codes a run reads, never a count.
+# project's cutter and its page; the feed shows no worker a count, only the codes a run reads (the public ledger keeps
+# each line's own, and hive status shows an account those of its own lines).
 # code -> (where it may be said: on a candidate, « submit », or on a release, by the release's code; the kind of its
 # value: None (no value), « word » (one of `values`), « number » (a whole number within `values`), « task » (a task of
 # the project's, as its tasks write it), « need » (the name of one of the project's needs); whether the value may be
@@ -1883,7 +1887,7 @@ def signal_form(code, value, where):
     return kind in ("task", "need")
 
 
-def held_signals(said, where, task, tasks, config, done=frozenset()):
+def held_signals(said, where, task, tasks, config, done):
     """The signals that hold, of those `said` ((code, value or None) pairs, as read_signals reads them, or as the
     worker's tool takes them), for a candidate (where « submit ») or a release (where: its code) of `task`: a list of
     {"code": …} or {"code": …, "value": …}, in the codes' alphabetical order, the values the project's own strings or
@@ -4769,7 +4773,7 @@ def paused_between(repo, since, until):
     return False
 
 
-def signals_held_again(plan_, config, tasks, done=frozenset()):
+def signals_held_again(plan_, config, tasks, done):
     """The plan, its candidates' and its deals given back's signals held again by the step that writes (held_signals),
     against the project's file and tasks as this step reads them, whatever the plan says of them: a candidate's as said
     beside a candidate (« submit »), a release's as said beside a release of its code. A signal that does not hold, or
@@ -11810,7 +11814,7 @@ def status_signals(said):
     shown = []
     for signal in said if isinstance(said, list) else ():
         code = signal.get("code") if isinstance(signal, dict) else None
-        if code not in SIGNALS:
+        if not isinstance(code, str) or code not in SIGNALS:
             continue
         value = signal.get("value")
         if value is None:
@@ -11824,7 +11828,7 @@ def cmd_status(args):
     """Where an account stands on a project, read from the project's public state alone (a clone of its branch
     hive-state, --state): no clone, no token, nothing written, nothing pushed. For a bee waiting on its task, and for
     its owner: the task it holds and until when (DEALT), whether its candidate is with the hive and waits for the
-    judge (CANDIDATE), the wait before its next deal (WAIT), then its latest endings, newest first: each verdict on a
+    judge (CANDIDATE), or that it holds none and the wait before its next deal (NO-DEAL), then its latest endings, newest first: each verdict on a
     candidate of its (VERDICT: accepted, or refused with the reason's code; the candidate's commit; the model the hive
     recorded), each deal given back or run out (ENDED), with the signals the hive kept on it. Only what the hive's own
     forms hold is printed: ids, instants, codes and numbers; no other account's login, no text of anyone's."""
@@ -11847,16 +11851,14 @@ def cmd_status(args):
         print(f"DEALT {deal['task']} since {deal['at']} until {deal['until']}")
         if deal.get("candidate") is True:
             print(f"CANDIDATE {deal['task']}: pushed, with the hive; its judge has not answered yet")
-    else:
-        print("NO-DEAL: this account holds no task of the project now")
-    if wait:
-        print(f"WAIT until {wait}: no task is dealt to this account before")
+    else:  # (the wait is said on this line, never on a line of its own: « WAIT » is next's, which a bee waits on)
+        print(f"NO-DEAL: this account holds no task of the project now{f', and none is dealt to it before {wait}' if wait else ''}")
     found, raw = read_untrusted_bytes(state / "ledger.jsonl", STATE_BYTES)
     events = []
     for line in (raw or b"").split(b"\n") if found == "ok" else ():
         try:
             event = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):  # (a line nested past Python's depth is skipped as any other unreadable one)
             continue
         if isinstance(event, dict):
             events.append(event)
@@ -11868,16 +11870,16 @@ def cmd_status(args):
         if shown >= STATUS_ENDINGS:
             break
         task, at = event.get("task"), event.get("at")
-        if event.get("member_id") not in numbers or not (isinstance(task, str) and TASK_ID.match(task) and instant(at)):
+        if type(event.get("member_id")) is not int or event["member_id"] not in numbers or not (isinstance(task, str) and TASK_ID.match(task) and instant(at)):
             continue
         signals = status_signals(event.get("signals"))
         said = f"; signals {' '.join(signals)}" if signals else ""
         if event.get("type") == "verdict" and event.get("result") in ("accepted", "refused") and is_sha(event.get("sha")):
-            reason = f" ({event['reason']})" if event["result"] == "refused" and event.get("reason") in REASONS else ""
+            reason = f" ({event['reason']})" if event["result"] == "refused" and isinstance(event.get("reason"), str) and event["reason"] in REASONS else ""
             model = event["model"] if isinstance(event.get("model"), str) and MODEL.match(event["model"]) else "undeclared"
             print(f"VERDICT {task} {event['result']}{reason} at {at}, candidate {event['sha']}, model {model}{said}")
         elif event.get("type") == "expired":
-            how = f"given back ({event['released']})" if event.get("released") in RELEASES else "ran out"
+            how = f"given back ({event['released']})" if isinstance(event.get("released"), str) and event["released"] in RELEASES else "ran out"
             print(f"ENDED {task} {how} at {at}{', at the account' + chr(39) + 's cost' if event.get('fault') is True else ''}{said}")
         else:
             continue
@@ -12131,7 +12133,9 @@ def said_signals(args, where, task, tasks, config, feed):
         if code not in read:
             raise HiveError(f"--signal {code}: the project's hive does not read it yet (its run is at an older commit of the hive, or the "
                             "state given is older than its last run: take it again): nothing was pushed. Leave the signals out")
-    done = {entry.get("id") for entry in feed.get("tasks", ()) if isinstance(entry, dict) and entry.get("status") == "done"}
+    listed = feed.get("tasks")  # (the feed is another's text: a list of tasks, each with an id, or nothing is taken of it)
+    done = {entry["id"] for entry in (listed if isinstance(listed, list) else ()) if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+            and entry.get("status") == "done"}
     held = held_signals(said, where, task, tasks, config, done)
     codes = [code for code, _ in said]
     for code, value in said:
@@ -12788,8 +12792,19 @@ def cmd_submit(args):
         raise HiveError(f"task {task['id']} is closed: the hive takes no candidate for it")
     if not instant(args.deal):
         raise HiveError("--deal: the instant 'next' printed after DEAL")
-    if args.model and not MODEL.match(args.model):
-        raise HiveError("--model: the model's identifier, without spaces (claude-fable-5-2); leave it out if you are not sure")
+    # Every candidate declares its model, whatever assistant made it: a Codex bee's three accepted candidates carried
+    # none, the help having said to leave it out when unsure (blackboxBee, 28 November 2026). Asked here, before
+    # anything is made, with the project's own list: the bee gives it again at once, and the candidate counts.
+    if not args.model or not MODEL.match(args.model):
+        listed = ""
+        for model in config["models"]:  # (the error line is cut at 400 characters: the list comes last, cut whole)
+            if len(listed) + len(model) > 130:
+                listed += ", …"
+                break
+            listed += (", " if listed else "") + model
+        raise HiveError("--model: give it on every submit, exactly as the project lists it, dots and all; if yours is not "
+                        "listed, the entry of your maker and family (the newest), else your maker's name for it, lower "
+                        f"case, no spaces; undeclared only if you know none. Listed: {listed or 'none'}")
     title = args.message or f"Work on {task['id']}"
     if not ONE_LINE.match(title) or MARKER_LINE.match(title) or SIGNAL_LINE.match(title):
         raise HiveError("--message: one plain line (200 characters at most) that says what you changed")
@@ -13447,7 +13462,7 @@ def main(argv=None):
     p.add_argument("--task", required=True)
     p.add_argument("--deal", required=True, help="the deal's instant, as « next » printed it")
     p.add_argument("--message", help="one plain line that says what you changed (the work commit's title)")
-    p.add_argument("--model", help="your model's identifier, if the project lists it; leave it out if you are not sure")
+    p.add_argument("--model", help="your model's identifier, on every submit, as the project's settings list it (dots and all); undeclared only if you know none")
     signal_flags(p)
     p.add_argument("--state", help="a clone of the project's branch hive-state, which --signal needs (the codes the project's run reads)")
     p.set_defaults(run=cmd_submit)

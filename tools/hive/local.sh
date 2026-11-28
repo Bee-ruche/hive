@@ -881,7 +881,11 @@ case "$COMMAND" in
     # git's on this machine, no token (the login is given, and only its shape is held).
     [[ $LOGIN =~ $LOGIN_RE ]] || die "local.sh status takes --login: the GitHub account the bee works for, as check's LOCAL login line gives it"
     take_state
-    "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=status --user 65534:65534 --tmpfs /tmp:rw,size=64m -e HOME=/tmp -e LANG=C.UTF-8 \
+    # Right before the run, the state's folder resolved again (a link made meanwhile would have Docker show what it
+    # leads to), and read as the account that wrote it: the owner's, as refresh and the tool run (on Linux, a folder
+    # made under a umask of 077 is the owner's alone).
+    STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
+    "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=status --user "$OWNER_IDS" --tmpfs /tmp:rw,size=64m -e HOME=/tmp -e LANG=C.UTF-8 \
       -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly" "$IMAGE" \
       python3 -I /hive/protocol/tools/hive/hive.py status --project "$PROJECT" --login "$LOGIN" --state /hive/state
     exit $?
