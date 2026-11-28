@@ -213,6 +213,7 @@ case "$role" in
     [ -z "${STUB_CHECK_SWAP:-}" ] || cp "$STUB_CHECK_SWAP" "$folder/handover.bundle"
     [ -z "${STUB_CHECK_SWAP_TXT:-}" ] || echo "task x" >> "$folder/handover.txt"
     exit 0 ;;
+  status) [ -z "${STUB_STATUS_OUT:-}" ] || cat "$STUB_STATUS_OUT"; exit "${STUB_STATUS_CODE:-0}" ;;
   needs) printf 'NEEDS Bee-ruche/toy at %s\nNEEDS-DIGEST %s\n' "$(printf a%.0s $(seq 40))" "${STUB_NEEDS_DIGEST:-0}" ;;
   needs-fetch)
     [ -z "${STUB_FETCH_SLEEP:-}" ] || sleep "$STUB_FETCH_SLEEP"
@@ -841,6 +842,21 @@ check "clone: made by the tool's container, from the fork's address" eval '[ "$C
 rm -rf "$CLONE" && mv "$T/clone-aside" "$CLONE"
 launch refresh --project Bee-ruche/toy
 check "refresh: the state, read-write for this command alone" eval '[ "$CODE" -eq 0 ] && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state" "$STUB_DIR/mounts.refresh"'
+# hive status: where the account stands, from the project's public state taken afresh, read by the tool with no
+# network and the state read-only; nothing of git's credentials asked (the founder, 28 November 2026).
+printf 'STATUS Bee-ruche/toy as of 2026-11-28T10:00:00Z\nNO-DEAL: this account holds no task of the project now\n' > "$T/status-out"
+: > "$T/git.log"
+STUB_STATUS_OUT="$T/status-out" launch status --project Bee-ruche/toy --login alice
+check "status: the state taken afresh, then read by the tool, its lines passed through, with no network and the state read-only" eval \
+  '[ "$CODE" -eq 0 ] && [ "$OUT" = "$(cat "$T/status-out")" ] && ran refresh \
+   && grep -qx "type=bind,source=$HOME/.hive/state/Bee-ruche/toy,target=/hive/state,readonly" "$STUB_DIR/mounts.status" \
+   && grep -q "^run .* --network none --label hive.role=status " "$STUB_DIR/calls" \
+   && grep -qx "python3 -I /hive/protocol/tools/hive/hive.py status --project Bee-ruche/toy --login alice --state /hive/state" "$STUB_DIR/args.status"'
+check "status: no credential of git's asked, no token: the login is given" eval '! grep -q "credential fill" "$T/git.log"'
+launch status --project Bee-ruche/toy
+check "refused: status with no --login, before any container" eval 'refused 2 "local.sh status takes --login" && nothing_ran'
+launch status --project Bee-ruche/toy --login "not a login"
+check "refused: status with a --login of another shape" eval 'refused 2 "local.sh status takes --login" && nothing_ran'
 
 # ---------------------------------------------------------------------------------------------------------------
 # The second review: the login, the environment, the PATH, the lock, links, the gate, the order of the checks.
@@ -1174,7 +1190,7 @@ while IFS= read -r line; do
   # The one line each must stop on once its words are read: no login recorded, or, for login, no terminal. refresh
   # takes no login: it must stop on none of the launcher's readings of a command line.
   case "$words" in
-    refresh\ *|needs\ *) want="" ;;
+    refresh\ *|needs\ *|status\ *) want="" ;;  # (status reads the public state alone: no login of git's)
     *) want="hive: this machine's git has no GitHub account it can push with" ;;
   esac
   if [ -n "$want" ]; then
@@ -1201,7 +1217,7 @@ done < "$T/doc-lines"
 docs_read() {  # every line read, and each of the launcher's commands given at least once
   [ ! -s "$T/doc-unread" ] || { cat "$T/doc-unread"; return 1; }
   local word
-  for word in check clone refresh needs sandbox; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
+  for word in check clone refresh needs status sandbox; do grep -q "local.sh $word " "$T/doc-lines" || return 1; done
   ! grep -n "local\.sh login" "$ROOT/docs/enter.md" "$ROOT/docs/join.md" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   # The account: connected by the user in GitHub's own page, the agent seeing no secret (the founder's word).
   grep -q "^- \*\*Connecting a GitHub account\.\*\*" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
@@ -1271,8 +1287,15 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs and holding none of their sign-ins, is allowed, and you use it for nothing of the hive'"'"'s work.' || return 1
   # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
   # architect lists the invited bees' (blackboxBee, 27 November 2026).
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'the feed'"'"'s `models` (`feed.json` of the state you took: read it there)' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '(`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`)' || return 1
+  # A Codex bee's candidate carried no model (blackbox-0003, -0005): the guide asks for it on every submit, exactly as
+  # the feed's list writes it (dots and all: the project lists gpt-6.2-sol), and for the list's own when the bee does
+  # not know its exact identifier.
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'give it on every `submit`, whatever assistant you are, Claude or another. Read the feed'"'"'s `models` first (`feed.json` of the state you took)' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If it lists your model, give that identifier exactly as it writes it, dots and all (`gpt-6.2-sol`, `claude-opus-5-5`). If you do not know your exact identifier, give the one of the list that names your model'"'"'s maker and family.' || return 1
+  ! grep -q "a version's dots too\|Leave it out only if you do not know your identifier" "$ROOT/.claude/skills/bee-worker/SKILL.md" "$ROOT/docs/architect.md" || return 1
+  # hive status: where the bee waits, the guide and the entry give it (the founder, 28 November 2026).
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF '`hive status --project <PROJECT> --login <LOGIN> --state ~/.hive/state/<PROJECT>`' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'your owner asks where the task stands, `local.sh status`' || return 1
   ! grep -q "miniz lists \`claude" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF '**The models your bees declare.**' || return 1
   # A --prefer file begins with no « - » and climbs nowhere; the architect knows a new file is integrated plain.

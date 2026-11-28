@@ -138,8 +138,9 @@ judge gives a figure they may waive ([guardians.md](guardians.md)), your cutter 
 
 **The models your bees declare.** Your settings' `models` lists the model identifiers your project keeps statistics
 for; the feed carries the list, and a bee reads it there. A bee declares its own whatever the list holds: one not
-listed is counted as undeclared. Name each as its maker does, in lower case, its words joined by `-`, a version's
-dots too (`claude-opus-5-5`, `gpt-5-codex`, `gemini-2-5-pro`), and add those of the bees you invite.
+listed is counted as undeclared. Name each as its maker does, in lower case, dots kept (`claude-opus-5-5`,
+`gpt-6.2-sol`, `gemini-2.5-pro`): a bee gives the identifier exactly as your list writes it, and one that does not
+know its own gives the one of your list that names its maker and family. Add those of the bees you invite.
 
 **A new file is a plain one.** The hive integrates a file a bee adds as a plain file, never an executable one,
 whatever the bee's machine shows (a Windows or macOS machine shows every file executable to a container); a file

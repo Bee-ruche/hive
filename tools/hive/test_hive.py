@@ -7137,6 +7137,40 @@ class TestVolunteerSide(Volunteer):
         self.w.run()
         self.assertEqual(self.w.feed_file()["models"], [])
 
+    def test_status_says_where_the_account_stands_from_the_public_state_alone(self):
+        """hive status: where an account stands on a project, read from the project's public state alone (no clone, no
+        token): no deal yet, then its deal and until when, then its verdict with the candidate's commit and the model
+        the hive recorded (« undeclared » when it recorded none: the Codex bee's case). No other account's login, and
+        no login at all, is printed (the founder, 28 November 2026)."""
+        def status(login="alice"):
+            code, text = self.run_cli("status", "--project", "Bee-ruche/toy", "--login", login, "--state", self.state_root)
+            self.assertEqual(code, 0, self.err)
+            return text.splitlines()
+        self.w.set_config({"models": ["claude-fable-5-2"]})
+        self.w.run()
+        lines = status()
+        self.assertRegex(lines[0], r"\ASTATUS Bee-ruche/toy as of \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
+        self.assertEqual(lines[1:], ["NO-DEAL: this account holds no task of the project now",
+                                     "NO-ENDING: no candidate of this account has a verdict yet, and none of its deals has ended"])
+        dealt = self.w.deal(self.alice, "toy-0001")
+        self.w.run()
+        self.assertRegex(status()[1], rf"\ADEALT toy-0001 since {dealt} until \d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
+        candidate = self.alice.submit("toy-0001", model="claude-fable-5-2", deal=dealt)
+        self.w.run()
+        lines = status("Alice")  # (a login's case is GitHub's own matter)
+        self.assertEqual(lines[1], "NO-DEAL: this account holds no task of the project now")
+        self.assertRegex(lines[2], rf"\AVERDICT toy-0001 accepted at \S+, candidate {candidate}, model claude-fable-5-2\Z")
+        bob = self.w.fork("bob", 102)
+        bob.submit("toy-0002", path="src/b.c", content="int b;\n", model="some-other-model", deal=self.w.deal(bob, "toy-0002"))
+        self.w.run()
+        lines = status("bob")
+        self.assertRegex(lines[2], r"\AVERDICT toy-0002 accepted at \S+, candidate [0-9a-f]{40}, model undeclared\Z")
+        for login in ("alice", "bob"):
+            self.assertNotIn("alice", "\n".join(status(login)).lower())
+            self.assertNotIn("bob", "\n".join(status(login)).lower())
+        self.one_line(self.run_cli("status", "--project", "Bee-ruche/toy", "--login", "not a login", "--state", self.state_root),
+                      "--login: the GitHub account whose standing is read")
+
     def test_a_login_is_a_plain_name_and_start_takes_no_tip_from_the_command_line(self):
         """What the command line gives goes into git commands and into the marker of a commit. A login is a GitHub
         login. The project's tip is no word of the command line at all: start asks the project's own address for it,
@@ -13552,9 +13586,10 @@ class TestTheWorkersGuide(unittest.TestCase):
         # The models: the guide sends the worker to the feed's list (the project's own, which differs from project to
         # project), and the example's identifiers are written as the guide says any maker's is (lower case, words joined
         # by « - »).
-        self.assertIn("the feed's `models` (`feed.json` of the state you took: read it there)", " ".join(guide.split()))
+        self.assertIn("Read the feed's `models` first (`feed.json` of the state you took)", " ".join(guide.split()))
+        self.assertIn("give that identifier exactly as it writes it, dots and all", " ".join(guide.split()))
         for model in json.loads((registry / "examples/project" / hive.PROJECT_FILE).read_text())["models"]:
-            self.assertRegex(model, r"\A[a-z0-9]+(-[a-z0-9]+)*\Z", "a model's identifier, as the guide writes one")
+            self.assertRegex(model, r"\A[a-z0-9]+([.-][a-z0-9]+)*\Z", "a model's identifier, as its maker names it, in lower case")
 
     def test_the_guide_and_the_pages_give_one_rule_for_installing_packages(self):
         """A worker installs packages only under one of two sentences of its owner's prompt: the accepted digest of
@@ -15307,7 +15342,7 @@ class TestHealth(unittest.TestCase):
         self.assertIn("| | Bee-ruche/toy |\n| --- | --- |\n", text, "one project: one column, under its repository, and no column for all of them")
         self.assertIn("| error marks, kind judge (the judge did not answer) | 1 |\n", text)
         self.assertIn("| error marks of no known kind | 1 |\n", text)
-        self.assertIn("| tasks with error marks | toy-0004 |\n", text)
+        self.assertIn("| tasks with error marks | 1 |\n", text)
         self.assertTrue(text.endswith("\nNot read: Bee-ruche/gone (unreachable).\n"), text)
         optimisation = hive.report_numbers("optimisation", result)
         self.assertIn("| acceptance, kind work | 0.333 (1 of 3) |\n", optimisation)
@@ -15315,7 +15350,7 @@ class TestHealth(unittest.TestCase):
         self.assertIn("| refused, not_answered | 1 |\n", optimisation)
         cutter = hive.report_numbers("cutter", {**result, "projects": [summary, summary], "unread": []})
         self.assertIn("| | Bee-ruche/toy | Bee-ruche/toy | all projects |\n", cutter)
-        self.assertIn("| stuck tasks | - | - | 0 |\n", cutter)
+        self.assertIn("| stuck tasks | 0 | 0 | 0 |\n", cutter)
         self.assertEqual(hive.report_cell("toy-0001|\x1b[31m"), "toy-0001??[31m", "a value of health's, made plain all the same")
 
     def test_the_list_of_projects(self):
@@ -15575,12 +15610,12 @@ class TestTheHealthCommand(Base):
                         "the template's own text, as it is, around the numbers")
         self.assertIn("| | Bee-ruche/toy |\n", numbers)
         self.assertIn("| error marks, kind judge (the judge did not answer) | 1 |\n", numbers)
-        self.assertIn("| tasks with error marks | toy-0004 |\n", numbers)
+        self.assertIn("| tasks with error marks | 1 |\n", numbers)
         self.assertNotIn("alice", printed)
         self.assertNotIn("7000004", printed)
         both = self.health("--template", "cutter", command="report")
         self.assertIn("| | Bee-ruche/toy | Bee-ruche/port | all projects |\n", both)
-        self.assertIn("| stuck tasks | toy-0001 | - | 1 |\n", both)
+        self.assertIn("| stuck tasks | 1 | 0 | 1 |\n", both)
         self.assertIn("| starving | no | yes | Bee-ruche/port |\n", both)
         for argv in (("--template", "posting"), ("--template", "error", "--project", "Bee-ruche/unlisted")):
             with self.subTest(argv), self.assertRaises(SystemExit) as stopped:
@@ -21402,6 +21437,11 @@ class TestSignals(unittest.TestCase):
         for task in ("toy-0001", "toy-0003", "toy-0099"):  # itself, a closed task, none of the project's
             self.assertEqual(self.held([("needs_first", task)], "out_of_reach"), [], task)
             self.assertEqual(self.held([("duplicate", task)]), [], task)
+        # A task accepted already is no open task either: needed first by none, duplicated by none (the bees' feedback).
+        accepted = lambda said, where="submit": hive.held_signals(said, where, SIGNAL_TASKS["toy-0001"], SIGNAL_TASKS, SIGNAL_CONFIG, {"toy-0002", "toy-0004"})  # noqa: E731
+        self.assertEqual(accepted([("needs_first", "toy-0004")], "out_of_reach"), [])
+        self.assertEqual(accepted([("duplicate", "toy-0002")]), [])
+        self.assertEqual(accepted([("duplicate", "toy-0005")]), [{"code": "duplicate", "value": "toy-0005"}], "one not accepted holds")
         self.assertEqual(self.held([("need_unmet", None)], "cannot_run"), [{"code": "need_unmet"}])
         self.assertEqual(self.held([("need_unmet", "gcc")], "cannot_run"), [], "a need the project does not list")
         self.assertEqual(self.held([("need_unmet", "g++")], "cannot_run", config={}), [], "nor in a project that lists none")
@@ -21852,17 +21892,17 @@ class TestTheTallyReadsSignals(unittest.TestCase):
         totals = hive.health_totals([{**summary, "project": "a", "repository": "o/a", "paused": False, "active_members": 1},
                                      {**summary, "project": "b", "repository": "o/b", "paused": False, "active_members": 1}])
         self.assertEqual((totals["alarms"], totals["headroom"], totals["disagreements"], totals["signals_by"]["local_check"]), (2, 2, 2, 6))
-        # What the report prints: a project's column names its task ids, as « stuck tasks » does; the totals count them.
+        # What the report prints: a project's column counts its task ids, as the totals do: an issue's table holds numbers.
         rows = dict(hive.report_rows("cutter", [summary, totals]))
         for label in ("tasks with an alarm (an established member saw the project ask for something other than the task)",
                       "tasks accepted with more gain in sight", "stuck tasks"):
-            self.assertIsInstance(rows[label](summary), list, label)
+            self.assertIs(type(rows[label](summary)), int, label)
         cells = [hive.report_cell(rows[label](totals)) for label in ("tasks with an alarm (an established member saw the project ask for "
                                                                     "something other than the task)", "tasks accepted with more gain in sight",
                                                                     "tasks closed for the AI cutter by C1, not cut again yet")]
         self.assertEqual(cells, ["2", "2", "0"], "the totals count them")
         self.assertEqual(hive.report_cell(rows["tasks with an alarm (an established member saw the project ask for something other than "
-                                               "the task)"](summary)), "toy-0004")
+                                               "the task)"](summary)), "1")
         labels = [label for template in ("error", "cutter", "optimisation") for label, _ in hive.report_rows(template, [summary])]
         for label in ("signal machine_failed, by accounts (any)", "tasks with an alarm (an established member saw the project ask for something "
                       "other than the task)", "signal too_large, by established accounts", "effort lt1h, candidates and releases of established members",

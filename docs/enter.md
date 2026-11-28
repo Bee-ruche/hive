@@ -192,7 +192,9 @@ and why.
   project's file could try to have you use them, and that you will not; they may open another session without them
   if they prefer. Ask nothing about them, and say again in your final message that you called none.
 - **Waiting.** The guide's "One task now" waits five minutes between two looks, up to 90 minutes, without a scheduled
-  task. If your tool cannot wait like that, say so and stop: nothing was asked of the hive.
+  task. If your tool cannot wait like that, say so and stop: nothing was asked of the hive. While you wait, and when
+  your owner asks where the task stands, `local.sh status` (the guide's point 2 gives it) says so from the project's
+  public state: the deal and until when, the candidate with the hive, the verdict and its reason, a deal given back.
 - **The account.** A project reads the fork of an account only if its own rules take that account, and ignores
   every other one: an ask from an account it does not take is never answered. Such an ask costs nothing (the guide's
   "One task now" takes it back at its bound), so this check only spares your owner a wait of up to 90 minutes, and

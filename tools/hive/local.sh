@@ -180,7 +180,7 @@ COMMAND="${1:-}"
 
 SUB=""
 case "$COMMAND" in
-  check|clone|refresh|needs|sandbox) ;;
+  check|clone|refresh|needs|status|sandbox) ;;
   hive)
     SUB="${1:-}"
     [ $# -gt 0 ] && shift
@@ -188,13 +188,14 @@ case "$COMMAND" in
       setup|next|start|ready|submit|release|duty) ;;
       *) die "local.sh hive takes one of setup, next, start, ready, submit, release, duty: the worker's commands, and no other" ;;
     esac ;;
-  *) die "local.sh takes check, clone, refresh, needs, hive or sandbox" ;;
+  *) die "local.sh takes check, clone, refresh, needs, status, hive or sandbox" ;;
 esac
 
 # The options each command takes: « name » takes a value, « name! » is a flag.
 case "$COMMAND:$SUB" in
   check:|clone:) KNOWN="project login fork" ;;
   refresh:|needs:) KNOWN="project" ;;
+  status:) KNOWN="project login" ;;
   sandbox:) KNOWN="project login fork command-file" ;;
   hive:setup) KNOWN="project login fork" ;;
   hive:next) KNOWN="project login fork needs-accepted despite-needs!" ;;
@@ -351,7 +352,7 @@ if [ -n "$MESSAGE_FILE" ]; then
 fi
 PUSH_SIGN_IN=()
 trap 'rm -rf ${LOGIN_ASK:+"$LOGIN_ASK"} ${LOGIN_ANSWER:+"$LOGIN_ANSWER"}' EXIT
-if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
+if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ] && [ "$COMMAND" != status ]; then
   # The login, before anything of the project's: read from what this machine's git pushes with, never typed. (A stop
   # meanwhile, TERM or INT, ends bash through its EXIT trap, which removes found_login's temporaries: the tests stop it
   # while curl and while git's credential helper run.)
@@ -437,7 +438,7 @@ needs_own() {  # the needs' folder and the two above it: the user's own, written
 PROTOCOL_TOOLS=$(below_hive "$PROTOCOL/tools/hive" "the protocol's tools") || exit 2
 HERE=$(pwd -P)
 if [ -d "$CLONE" ]; then CLONE_REAL=$(cd -P "$CLONE" && pwd -P); else CLONE_REAL="$CLONE"; fi
-if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ]; then
+if [ "$COMMAND" != refresh ] && [ "$COMMAND" != needs ] && [ "$COMMAND" != status ]; then
   if same_or_below "$HERE" "$CLONE_REAL" || same_or_below "$CLONE_REAL" "$HERE"; then
     die "this session's folder ($HERE) is the clone, lies inside it or above it: start the assistant in a folder of its own (~/hive-desk), and run local.sh from there"
   fi
@@ -588,6 +589,21 @@ egress_up() {
     [ "$tries" -lt 20 ] || die "the hive's gate does not answer: run the command again; if it fails again, tell the user"
     sleep 0.5
   done
+}
+
+# The project's state, taken afresh from its own address, through the gate, into ~/.hive/state/<PROJECT> (refresh, status).
+take_state() {
+  mkdir -p "$STATE" || die "no room under $HIVE"
+  egress_up
+  watch_clock_and_owner "$STATE"  # (with no network, reading an owner and a clock: the places are checked after it)
+  STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
+  "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=refresh --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
+    --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state" "$IMAGE" sh -c '
+      if [ -d /hive/state/.git ]; then
+        git -C /hive/state fetch --quiet --depth 1 "$1" hive-state && git -C /hive/state reset --quiet --hard FETCH_HEAD && git -C /hive/state clean -ffdx --quiet
+      else
+        git clone --quiet --depth 1 --branch hive-state "$1" /hive/state
+      fi' sh "$PROJECT_URL" >/dev/null || die "the project's state could not be taken from $PROJECT_URL: run the command again"
 }
 
 TOOL_ENV=(-e HOME=/tmp/home -e LANG=C.UTF-8 -e TZ=UTC -e "https_proxy=http://$EGRESS:$EGRESS_PORT")
@@ -856,18 +872,19 @@ case "$COMMAND" in
     exit $?
     ;;
   refresh)
-    mkdir -p "$STATE" || die "no room under $HIVE"
-    egress_up
-    watch_clock_and_owner "$STATE"  # (with no network, reading an owner and a clock: the places are checked after it)
-    STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
-    "$DOCKER" run "${LIMITS[@]}" --network "$INNER" --label hive.role=refresh --user "$OWNER_IDS" --tmpfs /tmp:rw,size=1g "${TOOL_ENV[@]}" -w /tmp \
-      --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state" "$IMAGE" sh -c '
-        if [ -d /hive/state/.git ]; then
-          git -C /hive/state fetch --quiet --depth 1 "$1" hive-state && git -C /hive/state reset --quiet --hard FETCH_HEAD && git -C /hive/state clean -ffdx --quiet
-        else
-          git clone --quiet --depth 1 --branch hive-state "$1" /hive/state
-        fi' sh "$PROJECT_URL" >/dev/null || die "the project's state could not be taken from $PROJECT_URL: run the command again"
+    take_state
     say "LOCAL state $STATE"
+    ;;
+  status)
+    # Where the account stands on the project (its deal, its candidate, its verdicts), read by the tool from the
+    # project's public state, taken afresh as refresh takes it, in a container with no network: no clone, nothing of
+    # git's on this machine, no token (the login is given, and only its shape is held).
+    [[ $LOGIN =~ $LOGIN_RE ]] || die "local.sh status takes --login: the GitHub account the bee works for, as check's LOCAL login line gives it"
+    take_state
+    "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=status --user 65534:65534 --tmpfs /tmp:rw,size=64m -e HOME=/tmp -e LANG=C.UTF-8 \
+      -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly" "$IMAGE" \
+      python3 -I /hive/protocol/tools/hive/hive.py status --project "$PROJECT" --login "$LOGIN" --state /hive/state
+    exit $?
     ;;
   hive)
     [ -d "$CLONE/.git" ] || die "there is no clone at $CLONE: make it with local.sh clone"
