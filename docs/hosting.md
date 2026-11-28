@@ -567,7 +567,8 @@ What it does:
   what is read of it anyway (16 MiB for the tasks, as the hive reads them; 1 MiB for the settings, as `page.py` reads
   them; the clone itself has fetched the published tip whole). For the forecast, it writes out the backlog
   (`hive/backlog.jsonl`) as well when the branch holds one, under the same checks and the same 16 MiB (one that is not
-  a file, or larger, is left out with a line, and the job goes on), and the list of the project's branches
+  a file, or larger, is left out with a line, and the job goes on), and an empty one when it holds none, as the hive
+  reads such a branch, and the list of the project's branches
   (`git ls-remote --heads`, 1 MiB at most; a list that fails fails nothing), where `page.py` finds the commit of the
   branch the hive writes. It makes the page with `page.py` into a folder of its
   own, checks that the folder holds plain files and folders alone (no link, no file of several names), packs it, and

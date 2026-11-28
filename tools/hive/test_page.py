@@ -3220,6 +3220,8 @@ class TestThePageWorkflow(unittest.TestCase):
                         "    rm -f published/backlog.part\n"
                         '    echo "page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it" >&2\n'
                         "  fi\n"
+                        "else\n"
+                        "  : > published/backlog.jsonl  # (no backlog: an empty one, as the hive reads a branch that holds none)\n"
                         "fi\n"
                         "{ timeout 60 git -C project ls-remote --heads origin || echo \"page: the project's branches could not be listed whole: the forecast may "
                         'go without the branch the hive writes" >&2; } | head -c 1048576 > published/heads.txt || true\n'}
@@ -3537,8 +3539,9 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual(code, 0, said)
         for name in ("project.json", "tasks.jsonl"):
             self.assertEqual((folder / "published" / name).read_bytes(), (self.ROOT / "examples/project/hive" / name).read_bytes())
-        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["heads.txt", "project.json", "tasks.jsonl"],
-                         "no backlog on this published branch: none is written, and the step goes on")
+        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["backlog.jsonl", "heads.txt", "project.json", "tasks.jsonl"],
+                         "no backlog on this published branch: an empty one is written, and the step goes on")
+        self.assertEqual((folder / "published/backlog.jsonl").read_bytes(), b"")
         self.assertEqual((folder / "published/heads.txt").read_text(), f"{self.head('master')}\trefs/heads/master\n")
         self.assertEqual(sorted(path.name for path in (folder / "project").iterdir()), [".git"], "no tree is checked out")
         self.assertFalse((folder / "ran").exists() or (folder / "page/ran").exists(), "the title ran nothing")
@@ -3621,7 +3624,8 @@ class TestThePageWorkflow(unittest.TestCase):
     def test_the_backlog_and_the_list_of_the_branches_reach_the_forecast(self):
         """The backlog of the published branch is written out byte for byte, and the list of the project's branches beside
         it; page.py is given both, and the page shows the forecast, its stock counting the backlog's line, read with the
-        commit of the branch the hive writes. A published branch without a backlog is no error: the page is given none."""
+        commit of the branch the hive writes. A published branch without a backlog is no error: the page is given an empty one,
+        as the hive reads a branch that holds none (its forecast then says the backlog holds nothing more)."""
         folder, environment = self.forecasting()
         code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
         self.assertEqual(code, 0, said)
@@ -3638,9 +3642,10 @@ class TestThePageWorkflow(unittest.TestCase):
         folder, environment = self.forecasting(backlog=False)
         code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
         self.assertEqual(code, 0, said)
-        self.assertFalse((folder / "published/backlog.jsonl").exists())
+        self.assertEqual((folder / "published/backlog.jsonl").read_bytes(), b"")
         self.assertNotIn("backlog", said, "absent is no error, and nothing is said of it")
-        self.assertIsNone(json.loads(self.packed(folder)["./summary.json"])["forecast"]["stock"], "no backlog given: the stock is unknown")
+        stock = json.loads(self.packed(folder)["./summary.json"])["forecast"]["stock"]
+        self.assertEqual((stock["cleared"], stock["waiting"]), (0, 0), "an empty backlog: known, and holding nothing")
 
     def test_a_backlog_that_is_no_file_or_too_large_is_left_out_and_the_job_goes_on(self):
         """In place of the backlog: a link, a folder or a submodule, or a file larger than the hive reads one

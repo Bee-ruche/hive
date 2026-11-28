@@ -84,6 +84,8 @@ jobs:
               rm -f published/backlog.part
               echo "page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it" >&2
             fi
+          else
+            : > published/backlog.jsonl  # (no backlog: an empty one, as the hive reads a branch that holds none)
           fi
           { timeout 60 git -C project ls-remote --heads origin || echo "page: the project's branches could not be listed whole: the forecast may go without the branch the hive writes" >&2; } | head -c 1048576 > published/heads.txt || true
       - name: The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages
