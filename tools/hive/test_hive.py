@@ -13985,10 +13985,10 @@ class TestTheMap(unittest.TestCase):
 
     def test_the_cutters_settings(self):
         load = lambda cutter: hive.config_of({**CONFIG, "cutter": cutter}, "hive/project.json")  # noqa: E731
-        self.assertEqual(load({"floors": {"gain": 0.02}, "changes": 3})["cutter"], {"floors": {"gain": 0.02}, "changes": 3, "open": 10, "context_chars": 2000})
+        self.assertEqual(load({"floors": {"gain": 0.02}, "changes": 3})["cutter"], {"floors": {"gain": 0.02}, "changes": 3, "open": 10, "open_more": 0, "context_chars": 2000})
         self.assertIsNot(load({})["cutter"]["floors"], hive.DEFAULTS["cutter"]["floors"], "a project's floors are its own")
         for bad in ({"floors": {"speed": 0.02}}, {"floors": {"gain": "much"}}, {"floors": ["gain"]}, {"floors": {"sure_gain": 1}}, {"changes": 0},
-                    {"open": True}, {"pace": 1}):
+                    {"open": True}, {"pace": 1}, {"open_more": -1}, {"open_more": True}, {"open_more": None}):
             with self.subTest(bad), self.assertRaises(hive.HiveError):
                 load(bad)
 
@@ -14289,6 +14289,83 @@ class TestTheOutline(unittest.TestCase):
                              ("int f(" + ") " * size + "{}", ".c"), ("/*" * size, ".rs")):
             hive.outline_of(text, suffix)
         self.assertLess(time.monotonic() - started, 30, "eight files of 400 KB")
+
+
+class TestTheOpenAim(unittest.TestCase):
+    """How many tasks left to do the cutter aims at (hive.open_aim, docs/cutter.md "How many tasks"): cutter.open, or,
+    with cutter.open_more, the project's pace, from cutter.open to cutter.open plus cutter.open_more, read from the
+    ledger in numbers; an account with no acceptance raises it by nothing."""
+    NOW = hive.dt.datetime(2026, 11, 28, 12, 0, tzinfo=hive.dt.timezone.utc)
+
+    def config(self, open_more, open_=2, cut_hours=24):
+        return hive.config_of({**CONFIG, "cutter": {"open": open_, "open_more": open_more}, "trusted": {"cut_hours": cut_hours}}, "hive/project.json")
+
+    def at(self, hours):  # an instant, hours before NOW
+        return hive.iso(self.NOW - hive.dt.timedelta(hours=hours))
+
+    def accepted(self, member, hours, task="toy-0001"):
+        return {"type": "verdict", "task": task, "member_id": member, "at": self.at(hours), "result": "accepted"}
+
+    def aim(self, config, lines=(), deals=None):
+        return hive.open_aim(config, list(lines), deals or {}, self.NOW)
+
+    def test_without_open_more_the_aim_is_cutter_open_whatever_the_pace(self):
+        lines = [self.accepted(7, hours) for hours in range(1, 30)]
+        self.assertEqual(self.aim(self.config(0), lines)["aim"], 2)
+        self.assertEqual(self.aim(self.config(0, open_=5))["aim"], 5)
+
+    def test_the_acceptances_of_the_window_raise_the_aim_by_half_again_what_they_would_use_up_before_the_next_cut(self):
+        # Six acceptances in 72 hours, a cut every 24: two tasks before the next cut, half again: three.
+        lines = [self.accepted(7, hours) for hours in (1, 10, 20, 30, 40, 50)]
+        self.assertEqual(self.aim(self.config(10), lines), {"aim": 3, "held": 0, "accepted": 6})
+        # Twelve: four, half again: six. Rounded up: one acceptance asks for one task.
+        self.assertEqual(self.aim(self.config(10), lines * 2)["aim"], 6)
+        self.assertEqual(self.aim(self.config(10, open_=1), lines[:1])["aim"], 1)
+        # A cut every six hours: twelve acceptances use up one task before it, half again: two, the floor.
+        self.assertEqual(self.aim(self.config(10, cut_hours=6), lines * 2)["aim"], 2)
+
+    def test_the_aim_stays_between_cutter_open_and_cutter_open_plus_open_more(self):
+        lines = [self.accepted(7, hours / 4) for hours in range(1, 280)]
+        self.assertEqual(self.aim(self.config(4), lines)["aim"], 6, "the ceiling: cutter.open plus cutter.open_more")
+        self.assertEqual(self.aim(self.config(4))["aim"], 2, "no pace: the floor")
+
+    def test_only_the_window_counts_and_nothing_after_the_instant(self):
+        lines = [self.accepted(7, 73), self.accepted(7, 100), self.accepted(7, -1), self.accepted(7, 1)]
+        self.assertEqual(self.aim(self.config(10), lines)["accepted"], 1)
+
+    def test_a_task_held_counts_only_when_its_member_had_an_acceptance_before_the_deal(self):
+        lines = [self.accepted(7, 50), self.accepted(8, 1)]
+        deals = {"toy-0002": {"member_id": 7, "at": self.at(2), "state": "live"},  # established before its deal: held
+                 "toy-0003": {"member_id": 8, "at": self.at(2), "state": "live"},  # its acceptance came after the deal
+                 "toy-0004": {"member_id": 9, "at": self.at(2), "state": "live"},  # never accepted: an account made for the purpose
+                 "toy-0005": {"member_id": 7, "at": self.at(3), "state": "closed"},
+                 "toy-0006": {"member_id": 7, "at": self.at(-1), "state": "live"}}  # dealt after the instant
+        paced = self.aim(self.config(10, cut_hours=6), lines, deals)
+        self.assertEqual((paced["held"], paced["accepted"]), (1, 2))
+        self.assertEqual(paced["aim"], 2, "one held, and one task for two acceptances in six hours of seventy-two")
+        many = {f"toy-{90 + n:04d}": {"member_id": 100 + n, "at": self.at(1), "state": "live"} for n in range(50)}
+        self.assertEqual(self.aim(self.config(10), [], many), {"aim": 2, "held": 0, "accepted": 0},
+                         "fifty deals of accounts with no acceptance raise the aim by nothing")
+
+    def test_with_open_more_the_pace_of_cuts_counts_even_where_the_project_trusts_nobody(self):
+        entry = {"key": "trusted.cut_hours"}
+        self.assertEqual([hive.no_effect("trusted.cut_hours", entry, self.config(more)) for more in (0, 10)], [True, False],
+                         "the doctor names it among the settings that act: the horizon of the aim")
+        self.assertTrue(hive.no_effect("trusted.window_days", {"key": "trusted.window_days"}, self.config(10)))
+
+    def test_the_cut_publishes_up_to_the_aim_it_is_given(self):
+        case = TestTheCut()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.config["cutter"]["open"] = 1
+        task = lambda number: {"id": f"toy-00{number}", "title": f"Task {number}", "files": ["lib.c"], "goal": PROVED_GAIN}  # noqa: E731
+        backlog = {t["id"]: t for t in (task(10), task(11), task(12))}
+        counted = {"stuck": [], "tasks": {task_id: {"established_failures": 0} for task_id in case.published}}
+        left = sum(1 for t in case.published.values() if not t.get("closed"))
+        for aim, added in ((None, 0), (left + 2, 2), (left + 9, 3)):
+            with self.subTest(aim=aim):
+                said = hive.cut(case.config, case.published, backlog, counted, set(), set(), case.PATHS, aim=aim)[1]
+                self.assertEqual((len(said["added"]), said["aim"]), (added, 1 if aim is None else aim))
 
 
 class TestTheCutCommand(Base):

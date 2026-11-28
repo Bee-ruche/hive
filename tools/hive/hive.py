@@ -231,7 +231,8 @@ VOID_MEMORY_DAYS = 7  # how long a promised push the hive gave up on is still lo
 UNREAD_HOURS = 24  # a deal whose member's fork could not be read for this long after its time is closed, at no cost to the member
 BACKOFF_MAX_HOURS = 7 * 24
 ACTIVE_DAYS_MAX = 3650  # the longest a project may count a member active after a deal (members.active_days)
-CUTTER_BOUNDS = {"changes": (1, 500), "open": (1, 1000), "context_chars": (100, 20000)}  # the cutter's settings (cutter.*)
+CUTTER_BOUNDS = {"changes": (1, 500), "open": (1, 1000), "open_more": (0, 1000), "context_chars": (100, 20000)}  # the cutter's settings (cutter.*)
+PACE_HOURS = 72  # the hours of acceptances the cutter reads its pace from, with cutter.open_more (open_aim)
 JUDGED_REASONS = ("judge_refused", "goal_not_met", "requirement_not_met")  # the judge examined the candidate: a real attempt
 NEAR_REASONS = ("not_proven",)  # examined, correct, the task's own figure reached: only a proof is missing or short
 MEASURED_REASONS = ("goal_not_met", "requirement_not_met", "not_proven")  # the judge ran, the candidate is correct, a figure is short: the line keeps the figures
@@ -413,8 +414,9 @@ DEFAULTS = {
     "trusted": {"accounts": [], "cut_hours": 6, "window_days": 7},
     # cutter: what the project's cutter keeps to (docs/cutter.md), held by its gate (cut_check) and read by no run but
     # for « open », which paces the cut duty (duty_due): floors, the least a goal on a figure may ask; changes, the most
-    # task lines one cut adds or closes; open, how many open tasks it aims at; context_chars, the longest context a task may carry
-    "cutter": {"floors": {}, "changes": 10, "open": 10, "context_chars": 2000},
+    # task lines one cut adds or closes; open, how many open tasks it aims at; open_more, how many more it may aim at as the
+    # project's pace asks (open_aim; 0: none); context_chars, the longest context a task may carry
+    "cutter": {"floors": {}, "changes": 10, "open": 10, "open_more": 0, "context_chars": 2000},
     "deal_hours": 3,  # how long a member has, from the moment its deal is published, to push its candidate
     "grace_hours": 1,  # how long after that the hive still waits before the deal expires
     "backoff_hours": 2,  # the wait after a deal that ended badly; doubled at each one in a row, until an acceptance
@@ -6297,9 +6299,11 @@ def cmd_cut_check(args):
     if refusals:
         raise HiveError(f"the proposal is refused ({len(refusals)}): publish nothing of it")
     added, done = len(set(proposal) - set(published)), ledger.done()
-    still, aim = sum(1 for task_id, task in proposal.items() if not task.get("closed") and task_id not in done), config["cutter"]["open"]
+    paced = open_aim(config, [line for line in map(tally_line, ledger.events) if line is not None], ledger.deals(), now())
+    still, aim = sum(1 for task_id, task in proposal.items() if not task.get("closed") and task_id not in done), paced["aim"]
     print(f"PASSED {added} new, {sum(1 for t in published if task_json(proposal[t]) != task_json(published[t]))} closed; {still} left to do, the project aims at "
-          f"{aim} open (cutter.open)")
+          f"{aim} open (cutter.open" + (f", and its pace: {paced['held']} held, {paced['accepted']} accepted in {PACE_HOURS} hours, cutter.open_more"
+                                        if config["cutter"]["open_more"] else "") + ")")
     # What was checked, so that what is published can be held to it: the file's own SHA-256, the published commit it was
     # held against, the new tasks whose goal is « correct » that a run of the judge showed to fail at the tip (an answer
     # the project's run wrote to its state), and the cutter's word on them (a claim, which the gate cannot check).
@@ -6602,7 +6606,31 @@ def easier(config, task):
                                               "The goal decides."}, lowered
 
 
-def cut(config, published, backlog, counted, live, done, paths, failing=(), passing=()):
+def open_aim(config, lines, deals, instant):
+    """How many tasks left to do the cutter aims at (docs/cutter.md, "How many tasks"): {"aim", "held", "accepted"}.
+    Without cutter.open_more, cutter.open. With it, as many as the project's pace asks, from cutter.open to cutter.open
+    plus cutter.open_more: the tasks held now by members with an acceptance on the project before their deal (`held`,
+    from `deals`, Ledger.deals()), and half again as many tasks as the acceptances of the last PACE_HOURS hours
+    (`accepted`, from `lines`, tally_line()'s; a line dated after `instant` says nothing yet) would use up in
+    trusted.cut_hours, the project's time between two cut duties: what the members would take before the next cut.
+    An account with no acceptance raises it by nothing, so that deals taken by accounts made for the purpose do not
+    make the cutter publish more; an acceptance is a task the judge found done. Numbers alone, read from the ledger."""
+    cutter = config["cutter"]
+    until, since = iso(instant), iso(instant - dt.timedelta(hours=PACE_HOURS))
+    first, accepted = {}, 0  # each member's first acceptance on the project, and the acceptances of the window
+    for line in lines:
+        if line["at"] <= until and line["type"] == "verdict" and line["result"] == "accepted":
+            first.setdefault(line["member_id"], line["at"])
+            accepted += line["at"] > since
+    held = sum(1 for deal in deals.values() if deal["state"] == "live" and type(deal.get("member_id")) is int
+               and instant_text(deal.get("at")) is not None and instant_text(deal["at"]) <= until
+               and deal["member_id"] in first and first[deal["member_id"]] < instant_text(deal["at"]))
+    # (Without cutter.open_more, the ceiling is cutter.open: the aim is it.)
+    wanted = held - (-3 * accepted * config["trusted"]["cut_hours"] // (2 * PACE_HOURS))  # (a ceiling: half again, rounded up)
+    return {"aim": min(max(wanted, cutter["open"]), cutter["open"] + cutter["open_more"]), "held": held, "accepted": accepted}
+
+
+def cut(config, published, backlog, counted, live, done, paths, failing=(), passing=(), aim=None):
     """The deterministic cutter (docs/cutter.md, "The loop"): the proposal its rules make of the project's task file,
     and what it did and left undone, in ids, codes and numbers. `published`: the project's tasks; `backlog`: the tasks
     its architect plans (BACKLOG_FILE), in their order; `counted`: the tally of the published tasks; `live`: the tasks
@@ -6614,14 +6642,15 @@ def cut(config, published, backlog, counted, live, done, paths, failing=(), pass
     In this order, and within cutter.changes lines added or closed:
       1. each stuck task (tally) is closed, unless it is dealt now; and cut again with a lower goal (easier) when its
          goal is on figures the project floors, above their floors;
-      2. the backlog's tasks that are not published yet are published in its order while fewer than cutter.open tasks
-         are left to do, each once what it needs is done, its parent closed or done, its files on the tip and none
-         protected, and, for a goal « correct », once it is shown to fail; a line the gate would refuse
+      2. the backlog's tasks that are not published yet are published in its order while fewer than the aim (`aim`:
+         open_aim's, or cutter.open) are left to do, each once what it needs is done, its parent closed or done, its
+         files on the tip and none protected, and, for a goal « correct », once it is shown to fail; a line the gate would refuse
          (new_task_refusals) waits, « gate », for the architect to mend it.
     It says what is left to do against that aim, whether the project still starves, and the stuck tasks it could not
     cut again (for_the_cutter: the AI cutter's, or the architect's). What it proposes is held to the gate (cut_check),
     as any proposal is: a line of the backlog the gate refuses is the architect's to mend."""
     cutter, rows = config["cutter"], counted["tasks"]
+    aim = cutter["open"] if aim is None else aim
     proposal = dict(published)
     known_options = options_known(config, published)
     said = {"closed": [], "added": [], "waiting": [], "for_the_cutter": []}
@@ -6670,14 +6699,14 @@ def cut(config, published, backlog, counted, live, done, paths, failing=(), pass
                "files" if any(protected(path.rstrip("/"), config["protected"]) or not on_the_tip(path, paths) for path in task["files"]) else
                "shown_passing" if goal.get("kind") != "metric" and task_id in passing else
                "not_shown_failing" if goal.get("kind") != "metric" and task_id not in failing else
-               "enough_open" if left >= cutter["open"] else
+               "enough_open" if left >= aim else
                "changes" if used >= cutter["changes"] else None)
         if why:
             said["waiting"].append({"id": task_id, "because": why})
             continue
         proposal[task_id], used, left = dict(task), used + 1, left + 1
         said["added"].append({"id": task_id, "from": "backlog"})
-    said.update({"changes": used, "left": left, "aim": cutter["open"], "short": max(0, cutter["open"] - left), "starving": not left})
+    said.update({"changes": used, "left": left, "aim": aim, "short": max(0, aim - left), "starving": not left})
     return proposal, said
 
 
@@ -6703,8 +6732,11 @@ def cmd_cut(args):
                              integrations(ledger))
     judged, passing = ({t for t, answer in shown.items() if answer == kind} for kind in ("failing", "passing"))
     failing = judged | word
+    paced = open_aim(config, lines, ledger.deals(), instant)
     proposal, said = cut(config, published, backlog, tally(published, lines, instant, taken=taken_accounts(ledger, config)), live, done, paths,
-                         failing, passing)
+                         failing, passing, paced["aim"])
+    said["pace"] = {"held": paced["held"], "accepted": paced["accepted"], "hours": PACE_HOURS, "open": config["cutter"]["open"],
+                    "open_more": config["cutter"]["open_more"]}
     for entry in said["added"]:  # whose word a task « correct » from the backlog is published on: the judge's, or the architect's
         if entry["from"] == "backlog" and (backlog[entry["id"]].get("goal") or {"kind": "correct"}).get("kind") != "metric":
             entry["shown"] = "judge" if entry["id"] in judged else "word"
@@ -8053,10 +8085,12 @@ def preset_word(value):
 def no_effect(key, entry, config):
     """True for a setting that does nothing in this project, or that its loader would refuse there: a setting of the
     common judge's (its description says so) in a project of another kind; a bound per guardian where none is named;
-    the length and the pace of duties where the project trusts nobody."""
+    the length and the pace of duties where the project trusts nobody, but for trusted.cut_hours with cutter.open_more,
+    which measures the cutter's aim over it (open_aim) whoever cuts."""
     return (entry.get("what", "").startswith("common judge:") and config["judge"]["kind"] != "common") \
         or (key == "members.per_guardian" and not config["guardians"]) \
-        or (key in ("duty_hours", "trusted.cut_hours", "trusted.window_days") and not trusted_accounts(config))
+        or (key in ("duty_hours", "trusted.cut_hours", "trusted.window_days") and not trusted_accounts(config)
+            and not (key == "trusted.cut_hours" and config["cutter"]["open_more"]))
 
 
 def decisions(raw, config, tasks, backlog, listed, manifest_bounds):
