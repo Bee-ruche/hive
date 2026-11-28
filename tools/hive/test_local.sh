@@ -1241,33 +1241,31 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Paste it only for a project you trust' || return 1
   # PowerShell, the parent's read: Git's bash checked, the line's words held to their shapes before any PowerShell
   # line, the same bash inside ($BASH), no quote at all (the message through a file too); a tool that drives the
-  # browser or the computer stops (until the founder says otherwise); the architect's warning says it is the consent.
+  # computer stops (until the founder says otherwise); the architect's warning says it is the consent.
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'If `Test-Path -LiteralPath $bash` answers `False`, stop' || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Before each line, hold the words it carries to their shapes, and stop on any other' || return 1
   grep -qF "& \$bash -c '\$BASH ~/.hive/protocol/tools/hive/local.sh check --project <PROJECT>'" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   ! grep -q "& \$bash -c 'bash \|--message ''" "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
   grep -qF -- '--message-file hive-message.txt' "$ROOT/.claude/skills/bee-worker/SKILL.md" || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'hold the project, the login and the fork'"'"'s name to their shapes' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s own browser (the one they browse with, signed in to their accounts) or their computer stops you' || return 1
   tr '\n' ' ' < "$ROOT/docs/architect.md" | tr -s ' ' | grep -qF 'Pasting it is your consent' || return 1
-  # The founder's answer on connectors (« Oui, s'arrêter »): a tool that drives the browser or the computer stops the
-  # session before any work, in all three texts; the others are kept and none is called.
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that drives their own browser (the one they browse with, signed in to their accounts) or their computer stops you before any work' || return 1
-  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'one that drives your own browser or your computer stops it, for a session without it' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A tool that drives their own browser (the one they browse with, signed in to their accounts) and is shown connected, or their computer, is no exception: it stops you there too' || return 1
+  # The founder (2026-11-28, « seulement le contrôle de l'ordinateur devrait stopper l'abeille »): only a tool that
+  # drives the computer stops the session, before any work, in all three texts, and a doubt about one stops it too; a
+  # tool in their own browser, connected or not, is kept and never called, not even to check, like mail or calendar.
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool of your session that drives your owner'"'"'s computer (computer use: its screen, mouse or keyboard) stops you: tell them in one line to open a session without it. When you cannot tell whether a tool drives their computer, stop and tell them.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'A tool that acts in their own Chrome, Edge or other browser, connected or not, or that reaches their mail, calendar, documents or chat, does not: if so, keep them, and call none of them for the hive'"'"'s work, not even to see whether one is connected' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'a tool that acts in their own browser, connected or not, is one of them; a tool that drives their computer (computer use) stops you before any work' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'Each of these stops you; « Connectors » only for a tool that drives their computer.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'holds some that reach your browser, mail, calendar, documents or chat, your assistant keeps them, calls none of them for the hive'"'"'s work, not even to check, and tells you so; one that drives your computer stops it, for a session without it' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'Computer use, a tool that drives their computer (its screen, mouse or keyboard), is no exception: it stops you there too. When you cannot tell whether a tool drives their computer, stop and tell them. A tool that acts in their own Chrome, Edge or other browser, connected or not, is kept like the others: you never call it, not even to see whether it is connected.' || return 1
+  # No text says any more that their own browser stops the session.
+  ! tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qiE 'drives (your owner'"'"'s|their) own browser' || return 1
+  ! tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qiE 'drives your own browser' || return 1
+  ! tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qiE 'drives their own browser' || return 1
   # The founder (2026-11-28, « Le navigateur intégré est autorisé »): a browser built into the assistant's app, apart
   # from the owner's own and holding none of their sign-ins, does not stop the session, in all three texts.
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'apart from theirs and holding none of their sign-ins, does not stop you' || return 1
-  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'A browser built into the assistant'"'"'s app, apart from yours, is allowed' || return 1
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs and holding none of their sign-ins, is allowed' || return 1
-  # The founder (2026-11-28, « Non, jamais l'appeler »): an extension of their own browser not shown connected is kept
-  # and never called; shown connected, it stops the session; computer use and a doubt still stop it.
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser stops you when your session shows it connected or they tell you it is; otherwise it does not stop you: you keep it and never call it, not even to see whether it is connected. Computer use is their own computer: it stops you. When you cannot tell which a tool is (not whether an extension is connected: that you never check), stop and tell them.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser stops you when your session shows it connected or they tell you it is; otherwise it does not: you keep it and never call it, not even to see whether it is connected. Computer use is their own computer. When you cannot tell which a tool is (not whether an extension is connected: that you never check), stop and tell them.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'Each of these stops you; « Connectors » only for a tool that drives their own browser and is shown connected, or their computer.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'An extension for your own Chrome or Edge that the assistant does not see connected does not stop it either: it never calls it, not even to check.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'nor does an extension of their own Chrome or Edge that is not shown connected, which you never call' || return 1
-  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'is allowed, and used for nothing of the hive'"'"'s work.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'A browser built into the assistant'"'"'s app, apart from yours, is allowed, and used for nothing of the hive'"'"'s work.' || return 1
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs and holding none of their sign-ins, is allowed, and you use it for nothing of the hive'"'"'s work.' || return 1
   # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
   # architect lists the invited bees' (blackboxBee, 27 November 2026).
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'the feed'"'"'s `models` (`feed.json` of the state you took: read it there)' || return 1
