@@ -160,6 +160,8 @@ One limit today:
    holds some that reach mail, calendar, documents or chat, your assistant keeps them, calls none of them for the
    hive's work, and tells you so; one that drives your own browser or your computer stops it, for a session without
    it. A browser built into the assistant's app, apart from yours, is allowed, and used for nothing of the hive's work.
+   An extension for your own Chrome or Edge that the assistant does not see connected does not stop it either: it
+   never calls it, not even to check.
 
 Then paste this line, with the project's repository in place of `<owner/project>`:
 

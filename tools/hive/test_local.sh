@@ -1260,9 +1260,12 @@ docs_read() {  # every line read, and each of the launcher's commands given at l
   tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'apart from theirs and holding none of their sign-ins, does not stop you' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'A browser built into the assistant'"'"'s app, apart from yours, is allowed' || return 1
   tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'A browser built into your app, apart from theirs and holding none of their sign-ins, is allowed' || return 1
-  # An extension or connector in their own browser, and computer use, still stop the session; a doubt stops it too.
-  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser, and computer use, are their own browser and computer: they stop you. When you cannot tell which a tool is, stop and tell them.' || return 1
-  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser, and computer use, are their own browser and computer. When you cannot tell which a tool is, stop and tell them.' || return 1
+  # The founder (2026-11-28, « Non, jamais l'appeler »): an extension of their own browser not shown connected is kept
+  # and never called; shown connected, it stops the session; computer use and a doubt still stop it.
+  tr '\n' ' ' < "$ROOT/.claude/skills/bee-worker/SKILL.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser stops you when your session shows it connected or they tell you it is; otherwise it does not stop you: you keep it and never call it, not even to see whether it is connected. Computer use is their own computer: it stops you. When you cannot tell which a tool is, stop and tell them.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'An extension or connector that acts in their own Chrome, Edge or other browser stops you when your session shows it connected or they tell you it is; otherwise it does not: you keep it and never call it, not even to see whether it is connected. Computer use is their own computer. When you cannot tell which a tool is, stop and tell them.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'An extension for your own Chrome or Edge that the assistant does not see connected does not stop it either: it never calls it, not even to check.' || return 1
+  tr '\n' ' ' < "$ROOT/docs/enter.md" | tr -s ' ' | grep -qF 'nor does an extension of their own Chrome or Edge that is not shown connected, which you never call' || return 1
   tr '\n' ' ' < "$ROOT/docs/join.md" | tr -s ' ' | grep -qF 'is allowed, and used for nothing of the hive'"'"'s work.' || return 1
   # The models: the guide reads the project's list from the feed, gives a way to write any maker's identifier, and the
   # architect lists the invited bees' (blackboxBee, 27 November 2026).
