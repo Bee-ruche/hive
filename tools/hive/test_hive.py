@@ -21821,7 +21821,7 @@ class TestSignalsHeldByTheSteps(Base):
             deal = self.w.deal(fork, task)
             fork.fresh(f"hive/submit/{task}").write(path, "int n;\n").commit()
             marker = ["Hive submit", "", f"Hive-Task: {task}", "Hive-Action: submit", f"Hive-Deal: {deal}", f"Hive-Member: {fork.login}",
-                      "Hive-Signal: duplicate=toy-0001", "Hive-Signal: unclear"]
+                      "Hive-Signal: duplicate toy-0001", "Hive-Signal: unclear"]
             sh("git", "commit", "--quiet", "--allow-empty", "-m", "\n".join(marker), cwd=fork.work)
             fork.push()
 
@@ -21831,7 +21831,7 @@ class TestSignalsHeldByTheSteps(Base):
             return [(e["type"], e.get("signals")) for e in self.w.load()[2].events[before:] if e["type"] in ("verdict", "expired")]
         bob, carol, dave = self.w.fork("bob", 102), self.w.fork("carol", 103), self.w.fork("dave", 104)
         candidate(bob, "toy-0002", "src/n.c")
-        release(carol, "toy-0004", self.w.deal(carol, "toy-0004"), more=["Hive-Signal: duplicate=toy-0001", "Hive-Signal: too_large"])
+        release(carol, "toy-0004", self.w.deal(carol, "toy-0004"), more=["Hive-Signal: duplicate toy-0001", "Hive-Signal: too_large"])
         with mock.patch.object(hive, "held_signals", side_effect=forgetful), mock.patch.object(hive, "plan", side_effect=planned):
             said = ended(self.w.run)
         self.assertEqual(sorted(said), [("expired", [{"code": "too_large"}]), ("verdict", [{"code": "unclear"}])], "record and apply, alone")
@@ -21840,7 +21840,7 @@ class TestSignalsHeldByTheSteps(Base):
             said = ended(self.w.run)
         self.assertEqual(said, [("verdict", [{"code": "unclear"}])], "the plan alone, on a candidate")
         erin = self.w.fork("erin", 105)
-        release(erin, "toy-0004", self.w.deal(erin, "toy-0004"), more=["Hive-Signal: duplicate=toy-0001", "Hive-Signal: too_large"])
+        release(erin, "toy-0004", self.w.deal(erin, "toy-0004"), more=["Hive-Signal: duplicate toy-0001", "Hive-Signal: too_large"])
         with mock.patch.object(hive, "signals_held_again", side_effect=lambda plan_, config, tasks, done: plan_):
             said = ended(self.w.run)
         self.assertEqual(said, [("expired", [{"code": "too_large"}])], "the plan alone, on a release")
