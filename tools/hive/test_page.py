@@ -2835,6 +2835,222 @@ class TestAttention(Case):
         self.assertIsNotNone(self.summary(files)["map"], "up to the bound, counted")
 
 
+def forecast_section(files):
+    """The text of index.html's section on the forecast, as a browser shows it, or None when there is none."""
+    found = re.search(r"<section><h2>Forecast</h2>(.*?)</section>", files["index.html"], re.S)
+    return None if found is None else html.unescape(re.sub(r"<[^>]+>", " ", found.group(1)))
+
+
+class TestTheForecast(Case):
+    """The project's forecast on its page (read_forecast): the hive's own (hive.forecast, hive.forecast_lines), as
+    `hive.py forecast` gives it, read from the state, the task file, the project's file, its backlog and the list of its
+    branches; left out, the page still made, when they cannot give one. Numbers, codes, dates and the project's
+    repository, in the hive's sentences: no member, no text of the backlog's."""
+    TASKS = TestAttention.TASKS
+    TIP = "c" * 40
+    BACKLOG = [{"id": "toy-0010", "title": "Ten", "files": ["ten.c"]},
+               {"id": "toy-0011", "title": "Eleven", "files": ["eleven.c"]},
+               {"id": "toy-0012", "title": "Twelve", "files": ["twelve.c"], "needs": ["toy-0011"]},  # waits on a task not done
+               {"id": "toy-0013", "title": "Thirteen", "files": ["thirteen.c"], "goal": test_hive.PROVED_GAIN},  # a figure: no proof needed
+               {"id": "toy-0014", "title": "Fourteen", "files": ["f14.c"], "needs": ["toy-0003"]},  # needs a published task done
+               {"id": "toy-0002", "title": "Published already", "files": ["src/"]}]  # published: not counted
+    HEADS = f"{'d' * 40}\trefs/heads/main-old\n{TIP}\trefs/heads/main\n{'e' * 40}\trefs/heads/stable\n"
+
+    def lines(self):
+        return TestAttention.lines(self)  # three members accepted once each in the last hours, then each failed on toy-0001
+
+    def config(self, **more):
+        return {**test_hive.CONFIG, "judge": {**test_hive.JUDGE, "kind": "reference"}, "cutter": {"open": 4, "open_more": 0}, **more}
+
+    def answer(self, task_id, **more):
+        """The judge's answer about the tip for a line of the backlog, as the state's tip.json holds it."""
+        task = next(task for task in self.BACKLOG if task["id"] == task_id)
+        settings = hive.settings_digest(hive.config_of(self.config(), "hive/project.json"))
+        return {"tip": self.TIP, "line": hive.line_digest(task), "answer": "failing", "at": "2026-11-12T10:00:00Z", "runs": 2, "run": "f" * 32,
+                "tools": "e" * 64, "settings": settings, **more}
+
+    def tips(self):
+        return {"toy-0010": self.answer("toy-0010"), "toy-0014": self.answer("toy-0014"), "toy-0011": self.answer("toy-0011", tip="d" * 40)}
+
+    def file(self, name, data):
+        """Writes a file beside the state, as the workflow writes the published ones: dicts and lists as JSON, a list of
+        lines as JSON lines, strings and bytes as they are. Returns its path."""
+        path = self.root / name
+        if isinstance(data, list):
+            data = "".join((line if isinstance(line, str) else json.dumps(line)) + "\n" for line in data)
+        path.write_bytes(data if isinstance(data, bytes) else data.encode() if isinstance(data, str) else json.dumps(data).encode())
+        return str(path)
+
+    def made(self, project=None, backlog=BACKLOG, heads=HEADS, tip=None, ledger=None, code=None):
+        """The page of a state with the forecast's every input given (each left out when None)."""
+        self.ledger(self.lines() if ledger is None else ledger)
+        self.put("feed.json", {"project": "toy", "tasks": [{"id": t["id"], "title": t["title"], "status": "open"} for t in self.TASKS]})
+        if tip is not None:
+            self.put("tip.json", tip)
+        options = ["--repo-url", REPO, "--tasks", self.tasks(self.TASKS), "--project", self.file("project.json", project or self.config())]
+        options += ["--backlog", self.file("backlog.jsonl", backlog)] if backlog is not None else []
+        options += ["--heads", self.file("heads.txt", heads)] if heads is not None else []
+        return self.make(*options, code=code)
+
+    def test_the_section_says_the_level_first_then_the_hives_lines_and_the_suggestions_apart(self):
+        files = self.made(tip=self.tips())
+        said = self.summary(files)["forecast"]
+        self.assertEqual(said["level"], "urgent", "two tasks left, three acceptances in the window, nobody dealt cuts")
+        self.assertEqual(said["pace"], {"accepted": 3, "hours": 72, "per_day": 1.0})
+        self.assertEqual({key: said["stock"][key] for key in ("cleared", "proven", "waiting")}, {"cleared": 4, "proven": 3, "waiting": 1},
+                         "toy-0010 and toy-0014 shown failing at this tip, toy-0013 on a figure; toy-0011 answered at another tip; "
+                         "toy-0012 waits on it; toy-0002 is published")
+        self.assertEqual(said["room"]["active"], 3, "the three members with an acceptance in members.active_days")
+        self.assertIn({"code": "cut_now", "count": 3}, said["suggestions"])
+        self.assertIn({"code": "prove_backlog", "count": 1}, said["suggestions"])
+        self.assertIn({"code": "stuck_tasks", "count": 1}, said["suggestions"])
+        lines = hive.forecast_lines("Bee-ruche/toy", said, NOW)
+        section = forecast_section(files)
+        self.assertEqual(" ".join(section.split())[:len("Level urgent")], "Level urgent", "the level first")
+        self.assertIn(page.LEVEL_WORDS["urgent"], section)
+        for line in lines:
+            self.assertIn(line.partition(": ")[2] if line.startswith("SUGGEST ") else line, section)
+        told = section.index(lines[0])
+        suggested = section.index("Suggested")
+        self.assertTrue(all(section.index(line) < suggested for line in lines if not line.startswith("SUGGEST ")), "the suggestions after the lines")
+        self.assertLess(told, suggested)
+        box = re.search(r'<div class="none"><p><strong>Suggested</strong></p>(.*?)</div>', files["index.html"], re.S).group(1)
+        self.assertEqual(re.findall(r"<p><code>([^<]*)</code>: ", box), [line.partition(": ")[0][len("SUGGEST "):] for line in lines if line.startswith("SUGGEST ")])
+        self.assertIn("<code>cut_now (3)</code>: ", box)
+        seen = self.harmless(files)
+        self.assertLess(seen.said.index("Forecast"), seen.said.index("Tasks that need attention"), "beside the tasks that need attention")
+        self.assertNotIn("login", section + json.dumps(said), "no member is named")
+        for title in ("Ten", "Eleven", "Thirteen", "Published already"):
+            self.assertNotIn(title, section, "nothing of the backlog's text")
+        self.assertNotIn(self.TIP, files["index.html"] + files["summary.json"], "the tip read is shown nowhere")
+        self.assertEqual(self.summary(files)["attention"]["stuck"][0]["failures"], 3, "the attention section is as it was")
+
+    def test_what_is_not_given_or_not_told_makes_the_forecast_say_less(self):
+        """Without the backlog, the stock is unknown; without the commit of the branch the hive writes (no listing, a
+        listing that says it twice, only in a line it does not end, only under another branch's name, or larger than
+        HEADS_BYTES), or without the judge's answers, no line is told proven; with no answer at all, those on a figure."""
+        said = self.summary(self.made(backlog=None, tip=self.tips()))["forecast"]
+        self.assertIsNone(said["stock"])
+        self.assertIn("stock: the backlog could not be read", forecast_section(self.make(*self.last())))
+        for broken in (["not json"], [{**self.BACKLOG[0], "goal": {"kind": "metric", "name": "nowhere", "min": 1}}],  # a goal the judge cannot give
+                       [{**self.BACKLOG[0], "needs": ["toy-0099"]}], [{**self.BACKLOG[0], "needs": ["toy-0010"]}],  # a need nowhere, a cycle
+                       [self.BACKLOG[0], self.BACKLOG[0]], [{"id": "toy-0010", "title": "No files"}]):
+            with self.subTest(backlog=broken):
+                said = self.summary(self.made(backlog=broken))["forecast"]
+                self.assertEqual((said["level"], said["stock"]), ("urgent", None), "read as the hive reads it: unreadable, and the rest stands")
+                self.assertIn("page: the backlog is not one the hive would read (", self.errors)
+        size = (self.root / "registry-tasks.jsonl").stat().st_size
+        self.assertLess(size, len("".join(json.dumps(line) + "\n" for line in self.BACKLOG)))
+        with mock.patch.object(hive, "SETTINGS_BYTES", size):  # (the task file is read to that size; the backlog, larger, is not)
+            said = self.summary(self.made())["forecast"]
+        self.assertIsNone(said["stock"], "a backlog larger than the hive reads one")
+        self.assertIn(f"page: the backlog is not one the hive would read (larger than {size} bytes)", self.errors)
+        for heads in (None, "", self.HEADS + f"{'a' * 40}\trefs/heads/main\n", f"{self.TIP}\trefs/heads/main", f"{self.TIP}\trefs/heads/main-old\n",
+                      f"{self.TIP}\trefs/heads/hive/main\n", f"{self.TIP.upper()}\trefs/heads/main\n", f"{self.TIP} refs/heads/main\n",
+                      self.HEADS + "x" * page.HEADS_BYTES):
+            with self.subTest(heads=None if heads is None else heads[:120]):
+                said = self.summary(self.made(heads=heads, tip=self.tips()))["forecast"]
+                self.assertEqual((said["stock"]["cleared"], said["stock"]["proven"]), (4, None))
+        self.assertEqual(self.summary(self.made(heads=f"{'a' * 40}\trefs/heads/other\n{self.TIP}\trefs/heads/main\n", tip=self.tips()))["forecast"]["stock"]["proven"],
+                         3, "one line names the branch, wherever it stands")
+        self.assertEqual(self.summary(self.made(heads=self.HEADS + "x" * (page.HEADS_BYTES - len(self.HEADS)), tip=self.tips()))["forecast"]["stock"]["proven"],
+                         3, "up to HEADS_BYTES, the listing is read (its last line, not ended, is not)")
+        (self.state / "tip.json").unlink()
+        self.assertEqual(self.summary(self.made())["forecast"]["stock"]["proven"], 1, "no answer: the line on a figure alone")
+        self.put("tip.json", "x" * (hive.TIP_FILE_BYTES + 1))
+        self.assertEqual(self.summary(self.make(*self.last()))["forecast"]["stock"]["proven"], None, "answers too large to read: unknown")
+
+    def last(self):
+        """The options of the latest made() again, its files as they now stand."""
+        options = ["--repo-url", REPO, "--tasks", str(self.root / "registry-tasks.jsonl"), "--project", str(self.root / "project.json")]
+        options += ["--backlog", str(self.root / "backlog.jsonl")] if (self.root / "backlog.jsonl").exists() else []
+        return options + (["--heads", str(self.root / "heads.txt")] if (self.root / "heads.txt").exists() else [])
+
+    def test_without_a_forecast_the_page_is_still_made(self):
+        """A project file about another repository, or that the hive would not load; a ledger the hive would refuse (a
+        broken line before its last), or larger than the hive reads; a task file the hive would not read; no project file:
+        the forecast is left out, in one line on the standard error, and the page is made as it was."""
+        for project in (self.config(repo="Bee-ruche/other"), self.config(branch="stable"), self.config(cutter={"opens": 4}),
+                        self.config(members={"only": list(range(1, hive.HEALTH_ACCOUNTS_MOST + 2))})):
+            with self.subTest(project=json.dumps(project)[-80:]):
+                files = self.made(project=project, tip=self.tips())
+                self.assertIsNone(self.summary(files)["forecast"])
+                self.assertIsNone(forecast_section(files))
+                self.assertIn("page: the forecast is left out (", self.errors)
+                self.assertIsNotNone(self.summary(files)["attention"], "the rest of the page as it was")
+                self.harmless(files)
+        files = self.made(ledger=self.lines()[:2] + ["not json"] + self.lines()[2:])
+        self.assertEqual((self.summary(files)["forecast"], forecast_section(files)), (None, None))
+        self.assertIn("page: the forecast is left out (", self.errors)
+        self.assertEqual(self.summary(files)["ledger"]["unreadable_lines"], 1, "the page reads what it can")
+        with mock.patch.object(hive, "STATE_BYTES", 100):
+            files = self.made()
+        self.assertIsNone(self.summary(files)["forecast"])
+        self.assertIn("page: the forecast is left out (the ledger is larger than 100 bytes)", self.errors)
+        self.ledger(self.lines())
+        files = self.make("--repo-url", REPO, "--tasks", self.tasks(["not a task"]), "--project", self.file("project.json", self.config()))
+        self.assertEqual((self.summary(files)["forecast"], self.summary(files)["attention"]), (None, None))
+        files = self.make("--repo-url", REPO, "--tasks", self.tasks(self.TASKS), "--backlog", self.file("backlog.jsonl", self.BACKLOG))
+        self.assertIsNone(self.summary(files)["forecast"], "no project file: no forecast")
+        files = self.make("--tasks", self.tasks(self.TASKS), "--project", self.file("project.json", self.config()))
+        self.assertEqual(self.summary(files)["forecast"]["level"], "urgent", "without --repo-url, the file's own repository")
+        self.assertIn("FORECAST Bee-ruche/toy as of ", forecast_section(files))
+
+    def test_hostile_files_cannot_crash_the_page_or_put_a_member_or_free_text_on_it(self):
+        """A backlog, a listing of the branches, a tip.json and ledger lines made to break the reading or to slip text
+        onto the page: the page is made each time, and its forecast holds numbers, codes, dates and the hive's sentences
+        alone."""
+        evil = '"><script>alert(1)</script> secretlogin 987654321'
+        backlogs = [[evil], ["{}", *self.BACKLOG], [{**self.BACKLOG[0], "needs": ["toy-0010"]}],
+                    [{**self.BACKLOG[0], "goal": {"kind": "metric", "name": "nowhere", "min": 1}}], [{**self.BACKLOG[0], "title": evil, "context": evil}],
+                    [{**self.BACKLOG[0], "parent": "toy-0099"}], ["[" * 100000], b"\xff\xfe" * 10, [{**self.BACKLOG[0], "id": "toy-0010\n"}],
+                    [{**self.BACKLOG[0], "needs": ["toy-0011"]}, {**self.BACKLOG[1], "needs": ["toy-0010"]}], ""]
+        heads = [evil, f"{self.TIP}\trefs/heads/main\x00{evil}\n", "\n" * 1000, b"\xff" * 100, f"{evil}\trefs/heads/main\n"]
+        tips = [{"toy-0010": {**self.answer("toy-0010"), "extra": evil}}, {"toy-0010": evil}, {evil: self.answer("toy-0010")}, [evil],
+                "[" * 100000, {"toy-0010": {**self.answer("toy-0010"), "tools": evil}}, {"toy-0010": {**self.answer("toy-0010"), "runs": True}}]
+        ledgers = [self.lines() + [{"type": "deal", "at": NOW, "until": evil, "task": "toy-0002", "member": evil, "member_id": 987654321, "run": evil}],
+                   self.lines() + [{"type": "deal", "at": 5, "task": ["x"], "member_id": "secretlogin"}],
+                   self.lines() + [{"type": "verdict", "at": "2026-11-12T11:00:00Z", "task": "toy-0002", "member": "secretlogin", "member_id": 987654321,
+                                    "result": "accepted", "sha": "9" * 40, "commit": "8" * 40, "judged": True, "model": evil}],
+                   self.lines() + [[1, 2], "null", {"type": "duty", "role": evil, "member_id": 987654321, "at": NOW}]]
+        cases = [{"backlog": backlog} for backlog in backlogs] + [{"heads": h} for h in heads] + [{"tip": tip} for tip in tips] \
+            + [{"ledger": ledger} for ledger in ledgers]
+        for case in cases:
+            with self.subTest(case=json.dumps(case, default=repr)[:160]):
+                (self.state / "tip.json").unlink(missing_ok=True)
+                if isinstance(case.get("tip"), str):
+                    self.ledger(self.lines())
+                    self.put("tip.json", case.pop("tip"))
+                files = self.made(**case)
+                seen = self.harmless(files)
+                self.assertIn("Progress", seen.said)
+                said = self.summary(files)["forecast"]
+                shown = (forecast_section(files) or "") + json.dumps(said)
+                for word in ("secretlogin", "987654321", "script", "alert", "Ten", "nowhere"):
+                    self.assertNotIn(word, shown, word)
+                self.assertNotIn("<script", files["index.html"])
+        for name in ("backlog.jsonl", "heads.txt", "tip.json"):  # a link where a file is read: not followed
+            with self.subTest(link=name):
+                files = self.made(tip=self.tips())
+                target = self.root / f"real-{name}"
+                (self.state / name if name == "tip.json" else self.root / name).rename(target)
+                (self.state / name if name == "tip.json" else self.root / name).symlink_to(target)
+                said = self.summary(self.make(*self.last()))["forecast"]
+                self.assertEqual({"backlog.jsonl": said["stock"], "heads.txt": said["stock"] and said["stock"]["proven"],
+                                  "tip.json": said["stock"] and said["stock"]["proven"]}[name], None, "the link is read as nothing")
+                for path in (self.root / name, self.state / name, target):
+                    path.unlink(missing_ok=True)
+
+    def test_summary_json_carries_the_forecast_or_null(self):
+        files = self.made(tip=self.tips())
+        summary = self.summary(files)
+        self.assertEqual(set(summary["forecast"]), {"pace", "queue", "stock", "cuts", "room", "aim", "level", "suggestions"})
+        self.assertNotIn("_forecast_lines", summary)
+        self.assertNotIn("FORECAST", files["summary.json"], "the lines are the page's; the numbers and codes are summary.json's")
+        self.assertIn("forecast", self.summary(self.make()))
+        self.assertIsNone(self.summary(self.make())["forecast"])
+
+
 class TestMap(Case):
     """The map of the tasks: the tree of cuts (`parent`), what each task needs (`needs`) and how each stands, from the
     task file and the hive's tally; flat for a project whose tasks have no links. Task ids, statuses and numbers."""
@@ -2965,8 +3181,9 @@ class TestThePageWorkflow(unittest.TestCase):
                            'nothing is made" >&2; exit 1; }\n'}
     # The most page.py and the hive read of each of the project's two files (test_the_two_files_are_held_to_what_page_py_and_the_hive_read).
     BOUNDS = {"tasks.jsonl": hive.SETTINGS_BYTES, "project.json": page.PROJECT_BYTES}
-    PUBLISHED = {"name": "The project's tasks and settings, as its published branch holds them (two files, each held to its size and written as data; "
-                         "no tree is checked out)",
+    BACKLOG_MOST = hive.SETTINGS_BYTES  # the backlog, read by the hive as a task file, and by page.py no further (read_backlog)
+    PUBLISHED = {"name": "The project's tasks, settings and backlog, as its published branch holds them (each file held to its size and written as "
+                         "data; no tree is checked out), and the list of its branches",
                  "env": {"REPOSITORY": "${{ github.repository }}"},
                  "run": 'git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project\n'
                         "mkdir published\n"
@@ -2978,13 +3195,28 @@ class TestThePageWorkflow(unittest.TestCase):
                         '  size="$(git -C project cat-file -s "$object")"\n'
                         '  [[ "$size" =~ ^[0-9]+$ ]] && (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }\n'
                         '  git -C project cat-file blob "$object" > "published/$name"\n'
-                        "done\n"}
+                        "done\n"
+                        'listed="$(git -C project ls-tree HEAD -- hive/backlog.jsonl)" || listed="unlisted"\n'
+                        'if [[ -n "$listed" ]]; then\n'
+                        '  read -r mode type object path <<< "$listed"\n'
+                        '  [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == hive/backlog.jsonl ]] && size="$(git -C project cat-file -s "$object")" '
+                        '|| size=""\n'
+                        '  if [[ "$size" =~ ^[0-9]+$ ]] && (( size <= 16777216 )) && git -C project cat-file blob "$object" > published/backlog.part; then\n'
+                        "    mv published/backlog.part published/backlog.jsonl\n"
+                        "  else\n"
+                        "    rm -f published/backlog.part\n"
+                        '    echo "page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it" >&2\n'
+                        "  fi\n"
+                        "fi\n"
+                        "{ timeout 60 git -C project ls-remote --heads origin || echo \"page: the project's branches could not be listed whole: the forecast may "
+                        'go without the branch the hive writes" >&2; } | head -c 1048576 > published/heads.txt || true\n'}
     PAGE = {"name": "The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages",
             "env": {"REPOSITORY": "${{ github.repository }}", "TITLE": "${{ inputs.title }}", "SITE_URL": "${{ inputs.site_url }}"},
-            "run": "site=()\n"
+            "run": "site=() backlog=()\n"
                    '[[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")\n'
+                   "[[ ! -f published/backlog.jsonl ]] || backlog=(--backlog published/backlog.jsonl)\n"
                    'python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\\n'
-                   '  --tasks published/tasks.jsonl --project published/project.json "${site[@]}"\n'
+                   '  --tasks published/tasks.jsonl --project published/project.json --heads published/heads.txt "${backlog[@]}" "${site[@]}"\n'
                    r'odd="$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)"' "\n"
                    '[[ -z "$odd" ]] || { echo "page: the page\'s folder holds a link or a file of several names ($odd): nothing is packed" >&2; exit 1; }\n'
                    "tar --create --file artifact.tar --directory page .\n"}
@@ -3071,7 +3303,8 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual([line.strip() for line in runs.splitlines() if "python3" in line],
                          ['python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \\'])
         self.assertEqual(re.findall(r"git clone[^\n]*", runs), ['git clone --quiet --depth 1 --no-checkout "https://github.com/$REPOSITORY" project'])
-        self.assertEqual(re.findall(r"git -C project (\S+) (\S+)", runs), [("ls-tree", "HEAD"), ("cat-file", "-s"), ("cat-file", "blob")])
+        self.assertEqual(re.findall(r"git -C project (\S+) (\S+)", runs), [("ls-tree", "HEAD"), ("cat-file", "-s"), ("cat-file", "blob")] * 2
+                         + [("ls-remote", "--heads")], "the two files, the backlog, and the list of the branches (a listing: nothing is taken)")
         for word in ("hive.py", "artifact.py", "fetch", "forks", "bundle", "candidate", "push", "git checkout", "curl", "wget", "pip ", "npm ", "docker",
                      "sudo", "eval"):
             self.assertNotIn(word, runs, word)
@@ -3289,7 +3522,9 @@ class TestThePageWorkflow(unittest.TestCase):
         self.assertEqual(code, 0, said)
         for name in ("project.json", "tasks.jsonl"):
             self.assertEqual((folder / "published" / name).read_bytes(), (self.ROOT / "examples/project/hive" / name).read_bytes())
-        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["project.json", "tasks.jsonl"])
+        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["heads.txt", "project.json", "tasks.jsonl"],
+                         "no backlog on this published branch: none is written, and the step goes on")
+        self.assertEqual((folder / "published/heads.txt").read_text(), f"{self.head('master')}\trefs/heads/master\n")
         self.assertEqual(sorted(path.name for path in (folder / "project").iterdir()), [".git"], "no tree is checked out")
         self.assertFalse((folder / "ran").exists() or (folder / "page/ran").exists(), "the title ran nothing")
         packed = self.packed(folder)
@@ -3348,6 +3583,102 @@ class TestThePageWorkflow(unittest.TestCase):
                 code, said = self.run_steps(folder, environment, self.making()[0])
                 self.assertNotEqual(code, 0, said)
                 self.assertIn(f"hive/{name}", said)
+
+    def head(self, branch):
+        """The commit a branch of the project's stand-in is at."""
+        return subprocess.run(["git", "-C", str(self.origin), "rev-parse", f"refs/heads/{branch}"], check=True, capture_output=True, text=True,
+                              timeout=60, env={"PATH": os.environ["PATH"], **self.environment}).stdout.strip()
+
+    def forecasting(self, backlog=True):
+        """world(), with a project file about the project's own repository (the example's names another), a backlog on
+        the published branch (unless `backlog` is false), and the branch the hive writes (the file's « branch »)."""
+        folder, environment = self.world()
+        settings = json.loads((self.origin / "hive/project.json").read_text(encoding="utf-8"))
+        # (a judge that answers about the tip: the forecast then tells the lines proven, once it knows the tip)
+        (self.origin / "hive/project.json").write_text(json.dumps({**settings, "repo": "Bee-ruche/toy", "judge": {**settings["judge"], "kind": "reference"}}))
+        if backlog:
+            (self.origin / "hive/backlog.jsonl").write_text(json.dumps({"id": "miniz-0900", "title": "Planned", "files": ["planned.c"]}) + "\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "a backlog, and settings about this repository")
+        self.git("branch", settings["branch"])
+        return folder, environment
+
+    def test_the_backlog_and_the_list_of_the_branches_reach_the_forecast(self):
+        """The backlog of the published branch is written out byte for byte, and the list of the project's branches beside
+        it; page.py is given both, and the page shows the forecast, its stock counting the backlog's line, read with the
+        commit of the branch the hive writes. A published branch without a backlog is no error: the page is given none."""
+        folder, environment = self.forecasting()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertEqual((folder / "published/backlog.jsonl").read_bytes(), (self.origin / "hive/backlog.jsonl").read_bytes())
+        self.assertIn(f"{self.head('hive')}\trefs/heads/hive\n", (folder / "published/heads.txt").read_text())
+        self.assertEqual(sorted(path.name for path in (folder / "published").iterdir()), ["backlog.jsonl", "heads.txt", "project.json", "tasks.jsonl"])
+        packed = self.packed(folder)
+        forecast = json.loads(packed["./summary.json"])["forecast"]
+        self.assertEqual((forecast["stock"]["cleared"], forecast["stock"]["proven"], forecast["stock"]["waiting"]), (1, 0, 0),
+                         f"the tip known (no answer about it: none proven): {said}")
+        self.assertIn("<h2>Forecast</h2>", packed["./index.html"].decode())
+        self.assertNotIn("page: the forecast is left out", said)
+        self.assertEqual(page.read_heads(str(folder / "published/heads.txt"), "hive"), self.head("hive"))
+        folder, environment = self.forecasting(backlog=False)
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertFalse((folder / "published/backlog.jsonl").exists())
+        self.assertNotIn("backlog", said, "absent is no error, and nothing is said of it")
+        self.assertIsNone(json.loads(self.packed(folder)["./summary.json"])["forecast"]["stock"], "no backlog given: the stock is unknown")
+
+    def test_a_backlog_that_is_no_file_or_too_large_is_left_out_and_the_job_goes_on(self):
+        """In place of the backlog: a link, a folder or a submodule, or a file larger than the hive reads one
+        (BACKLOG_MOST): nothing of it is written, a line says so, and the step goes on; the page is made without it. An
+        executable file is a file, and one of exactly that size is written whole. The size is asked of git first."""
+        run = self.making()[0]["run"]
+        self.assertEqual(re.findall(r"\(\( size <= (\d+) \)\)", run), [str(self.BACKLOG_MOST)])
+        self.assertLess(run.index("cat-file -s \"$object\")\" || size"), run.index("published/backlog.part;"))
+        for kind in ("link", "folder", "submodule", "executable", "largest", "too large"):
+            with self.subTest(kind=kind):
+                folder, environment = self.forecasting()
+                path = self.origin / "hive/backlog.jsonl"
+                if kind == "executable":
+                    self.git("update-index", "--chmod=+x", "hive/backlog.jsonl")
+                elif kind == "submodule":
+                    self.git("rm", "-q", "--cached", "hive/backlog.jsonl")
+                    self.git("update-index", "--add", "--cacheinfo", f"160000,{sha(7)},hive/backlog.jsonl")
+                elif kind in ("largest", "too large"):
+                    with open(path, "ab") as f:
+                        f.write(b" " * (self.BACKLOG_MOST + (kind == "too large") - path.stat().st_size))
+                    self.git("add", "-A")
+                else:
+                    path.unlink()
+                    if kind == "link":
+                        path.symlink_to("../elsewhere")
+                    else:
+                        path.mkdir()
+                        (path / "inside").write_text("x\n")
+                    self.git("add", "-A")
+                self.git("commit", "-q", "-m", f"the backlog as {kind}")
+                code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": ""}, *self.making())
+                self.assertEqual(code, 0, said)
+                self.assertFalse((folder / "published/backlog.part").exists())
+                stock = json.loads(self.packed(folder)["./summary.json"])["forecast"]["stock"]
+                if kind in ("executable", "largest"):
+                    self.assertEqual((folder / "published/backlog.jsonl").stat().st_size, path.stat().st_size if kind == "executable" else self.BACKLOG_MOST)
+                    self.assertEqual(stock["cleared"], 1, said)
+                else:
+                    self.assertFalse((folder / "published/backlog.jsonl").exists())
+                    self.assertIn("page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it", said)
+                    self.assertIsNone(stock)
+
+    def test_a_listing_of_the_branches_that_fails_fails_nothing(self):
+        """git ls-remote that fails (or a listing cut at its size): a line says so, the step goes on, and the forecast
+        goes without the commit of the branch the hive writes. The listing is held to HEADS_BYTES, what page.py reads of it."""
+        self.assertIn(f"| head -c {page.HEADS_BYTES} > published/heads.txt || true\n", self.making()[0]["run"])
+        folder, environment = self.forecasting()
+        code, said = self.run_steps(folder, {**environment, "TITLE": "", "SITE_URL": "", "BASH_FUNC_timeout%%": "() { return 124; }"}, *self.making())
+        self.assertEqual(code, 0, said)
+        self.assertIn("page: the project's branches could not be listed whole", said)
+        self.assertEqual((folder / "published/heads.txt").read_bytes(), b"")
+        forecast = json.loads(self.packed(folder)["./summary.json"])["forecast"]
+        self.assertEqual((forecast["stock"]["cleared"], forecast["stock"]["proven"]), (1, None), "the tip unknown: no line is told proven")
 
     def test_settings_that_are_no_projects_file_stop_the_page(self):
         """page.py is given the project's file of settings (it says which proofs the project takes): a published branch

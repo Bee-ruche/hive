@@ -3,7 +3,8 @@
 
     python3 tools/hive/page.py --state <the project's state: a clone of its branch hive-state> --out <folder>
                                [--title "..."] [--repo-url https://github.com/owner/name]
-                               [--tasks <the project's hive/tasks.jsonl>]
+                               [--tasks <the project's hive/tasks.jsonl>] [--project <its hive/project.json>]
+                               [--backlog <its hive/backlog.jsonl>] [--heads <what git ls-remote --heads printed of it>]
                                [--join | --join-url https://github.com/...]
                                [--site-url https://owner.github.io/site/project] [--now 2026-11-13T00:00:00Z]
 
@@ -12,8 +13,9 @@ show. The hive deals each open task to one member at a time; the page shows how 
 accepted, and how many dealt candidates wait for the judge (from the feed's deals):
 
   index.html              one page: what this is, the latest accepted contribution and how to take part; then
-                          progress, the tasks that need attention and the map of the tasks (with --tasks: the hive's
-                          tally, the tree of cuts and what each task needs), this week, the
+                          progress, the project's forecast (with --tasks and --project: hive.forecast, as
+                          `hive.py forecast` prints it), the tasks that need attention and the map of the tasks (with
+                          --tasks: the hive's tally, the tree of cuts and what each task needs), this week, the
                           recent integrations, the members, the models, what was refused
                           (and, for the candidates refused for a figure, what the judge measured), the parts of the
                           project that asks preferred and what the hive did, three measures
@@ -77,6 +79,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import unicodedata
 import urllib.parse
 from pathlib import Path
@@ -843,6 +846,118 @@ def read_base(folder):
     return {**figures, "takes_new": base["takes_new"]}
 
 
+HEADS_BYTES = 1 << 20  # what the page reads of the listing of the project's branches (--heads), at most: the workflow writes no more
+FORECAST_FAILURES = (hive.HiveError, OSError, ValueError, TypeError, LookupError, AttributeError, ArithmeticError, RecursionError)
+
+
+def bounded(path, most):
+    """A file's bytes, read once, if a plain file stands under that very name (plain_file); None when it holds more than
+    `most` bytes, of which no more than one byte beyond is read. Raises OSError as plain_file does."""
+    with plain_file(path) as f:
+        raw = f.read(most + 1)
+    return raw if len(raw) <= most else None
+
+
+def read_heads(path, branch):
+    """The commit of the branch the hive writes (`branch`, the project file's « branch »), from the listing of the
+    project's branches (--heads: what `git ls-remote --heads` printed), or None: the one line « <commit> TAB
+    refs/heads/<branch> » whose commit is 40 hex, the reference's name said whole (refs/heads/hive is not
+    refs/heads/hive-state), as « health » reads it (hive.read_public_state). A line the listing does not end is not
+    read: a listing cut at its size may end in the first part of another branch's name. None too for a listing larger
+    than HEADS_BYTES, and for one that cannot be read (said on the standard error). The commit is given to the
+    forecast, and shown nowhere."""
+    try:
+        raw = bounded(path, HEADS_BYTES)
+    except OSError as error:
+        print(f"page: the listing of the project's branches cannot be read ({type(error).__name__}): the forecast goes without "
+              "the branch the hive writes", file=sys.stderr)
+        return None
+    if raw is None:
+        return None
+    found = [commit for commit, _, reference in (line.partition("\t") for line in raw.decode("utf-8", errors="replace").split("\n")[:-1])
+             if reference == f"refs/heads/{branch}" and hive.is_sha(commit)]
+    return found[0] if len(found) == 1 else None
+
+
+def read_backlog(path, config, listed):
+    """The backlog's lines not published yet ({id: task}), from the project's hive/backlog.jsonl (--backlog), read as the
+    hive reads it (hive.backlog_at): a task file (hive.tasks_of) no larger than the hive reads one, its goals checked
+    against the project's judge and its links checked with the published tasks (`listed`); a line whose id is
+    published is dropped. None when it cannot be read: the forecast then says the backlog could not be read."""
+    try:
+        raw = bounded(path, hive.SETTINGS_BYTES)
+        if raw is None:
+            raise hive.HiveError(f"larger than {hive.SETTINGS_BYTES} bytes")
+        backlog = hive.tasks_of(raw.decode("utf-8").split("\n"), hive.BACKLOG_FILE)
+        hive.check_goals(config, backlog)
+        hive.check_links({**backlog, **listed})
+    except FORECAST_FAILURES as error:
+        why = str(error) if isinstance(error, hive.HiveError) else type(error).__name__
+        print(hive.safe_text(f"page: the backlog is not one the hive would read ({why}): the forecast goes without it", 400), file=sys.stderr)
+        return None
+    return {task_id: task for task_id, task in backlog.items() if task_id not in listed}
+
+
+def read_forecast(state, now, listed, project, repository=None, backlog=None, heads=None):
+    """(the project's forecast, its lines), as `hive.py forecast` gives them (hive.forecast, hive.forecast_lines;
+    docs/cutter.md, "The forecast"), or None. Read as « health » reads a project (hive.health, hive.read_public_state),
+    so that the page and the command say the same:
+
+      the project's file (`project`), as the hive loads one (hive.config_of), about `repository` (owner/name, from
+      --repo-url: the file must name it) when it is given; no larger than PROJECT_BYTES, and none that names more
+      accounts than « health » counts (hive.HEALTH_ACCOUNTS_MOST) or a name longer than hive.ID_CHARS;
+      the state's ledger.jsonl and tip.json, each read once (bounded, no larger than the hive reads them) and copied
+      into a folder of this run's own, where the hive's own readers read them (hive.Ledger, hive.read_tip_answers):
+      the tally of the published tasks (`listed`), with the active members and the accounts the file still takes, the
+      tally's lines and the deals;
+      the backlog's lines not published (read_backlog; None when --backlog is not given or cannot be read), and the
+      commit of the branch the hive writes (read_heads; None when --heads is not given or does not say it).
+
+    A value the hive cannot read, a ledger it would refuse, or anything that fails leaves the forecast out, in one line
+    on the standard error: the page is still made. Numbers, codes, dates and the project's repository, in the hive's
+    own sentences: nothing a member wrote."""
+    try:
+        raw = bounded(project, PROJECT_BYTES)
+        if raw is None:
+            raise hive.HiveError(f"the project's file is larger than {PROJECT_BYTES} bytes")
+        config = hive.config_of(json.loads(raw.decode("utf-8")), hive.PROJECT_FILE, repository)
+        members = config.get("members") or {}
+        if len(config["project"]) > hive.ID_CHARS or len(members.get("only") or ()) + len(members.get("banned") or ()) > hive.HEALTH_ACCOUNTS_MOST:
+            raise hive.HiveError("the project's file names more than « health » reads")
+        with tempfile.TemporaryDirectory(prefix="page-forecast-") as folder:
+            try:
+                data = bounded(Path(state) / hive.LEDGER_FILE, hive.STATE_BYTES)
+            except FileNotFoundError:  # (no ledger yet: a project before its first run)
+                data = b""
+            if data is None:
+                raise hive.HiveError(f"the ledger is larger than {hive.STATE_BYTES} bytes")
+            (Path(folder) / hive.LEDGER_FILE).write_bytes(data)
+            ledger = hive.Ledger(folder)
+            try:
+                answers = bounded(Path(state) / hive.TIP_FILE, hive.TIP_FILE_BYTES)
+            except FileNotFoundError:  # (no answer about the tip: none is proven)
+                answers = b"{}"
+            except OSError:  # (a link, a pipe: the judge's answers are unknown, and the forecast tells no line proven)
+                answers = None
+            if answers is not None:
+                (Path(folder) / hive.TIP_FILE).write_bytes(answers)
+            proofs = hive.read_tip_answers(folder) if answers is not None else None
+        lines = [line for line in map(hive.tally_line, ledger.events) if line is not None]
+        tallied = hive.tally(listed, lines, now, active=len(hive.active_members(ledger, now, config)), taken=hive.taken_accounts(ledger, config))
+        planned = read_backlog(backlog, config, listed) if backlog is not None else None
+        tip = read_heads(heads, config["branch"]) if heads is not None else None
+        said = hive.forecast(config, tallied, lines, ledger.deals(), now, planned, proofs, tip)
+        if said["level"] not in hive.FORECAST_LEVELS or any(item["code"] not in hive.SUGGESTIONS for item in said["suggestions"]):
+            raise hive.HiveError("a level or a suggestion the hive does not list")
+        json.dumps(said, allow_nan=False)  # (summary.json holds it: a value JSON cannot hold leaves it out here)
+        shown = [hive.safe_text(line, hive.LINE_MOST) for line in hive.forecast_lines(repository or config["repo"], said, iso(now))]
+    except FORECAST_FAILURES as error:
+        why = str(error) if isinstance(error, hive.HiveError) else type(error).__name__
+        print(hive.safe_text(f"page: the forecast is left out ({why})", 400), file=sys.stderr)
+        return None
+    return said, shown
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # The figures
 
@@ -851,13 +966,15 @@ def rate(part, whole):
     return round(part / whole, 4) if whole else None
 
 
-def collect(state, now, tasks=None, project=None):
+def collect(state, now, tasks=None, project=None, repository=None, backlog=None, heads=None):
     """Everything the page shows, as plain data (it is also summary.json). Members are counted by account id and
     named by the login of their latest event; only members with an integration are named at all. `tasks` is the path
     of the project's task file, or None: it says which figure each task asked for (read_goals), and the hive's tally
     of its tasks gives the tasks that need attention (attention) and their map (task_map).
     `project` is the path of the project's file of settings, or None: it says which proofs the project takes, and
-    a card then leads with one of those measures only (read_proofs).
+    a card then leads with one of those measures only (read_proofs). With both, the project's forecast
+    (read_forecast: `repository` the owner/name of --repo-url, `backlog` and `heads` the paths --backlog and --heads
+    give, each None when not given).
 
     Nobody is ranked. The members are every account with an accepted contribution, in the alphabetical order of their
     logins (case ignored; then the accounts without a login, by number), each with the number of its accepted
@@ -865,6 +982,8 @@ def collect(state, now, tasks=None, project=None):
     added up for no person, here or in any file (the public ledger still names the member of every answer)."""
     goals, asked = read_tasks(tasks) if tasks is not None else ({}, {})
     listed = listed_tasks(tasks) if tasks is not None else None
+    # The forecast, read as « hive.py forecast » reads it, before the names `tasks` and `project` are given to the feed's.
+    foreseen = read_forecast(state, now, listed, project, repository, backlog, heads) if listed is not None and project is not None else None
     usable, lines, skipped = read_ledger(state, goals, read_proofs(project) if project is not None else None, tally=listed is not None)
     # A line dated after `now` says nothing yet: the page is made for that instant, and its latest contribution is never
     # one from the future. Then each answer is read once (once()). Both are said on the standard error and in the files.
@@ -1025,6 +1144,9 @@ def collect(state, now, tasks=None, project=None):
     counts = counted(listed, [event["tally"] for event in events if event.get("tally") is not None], now) if listed is not None else None
     data["attention"] = attention(counts, titles) if counts is not None else None
     data["map"] = task_map(listed, counts, titles) if counts is not None else None
+    # The forecast in numbers and codes (summary.json), and its lines in the hive's own sentences (index.html alone).
+    data["forecast"] = foreseen[0] if foreseen is not None else None
+    data["_forecast_lines"] = foreseen[1] if foreseen is not None else None
     data["stats_json"] = compare_stats(read_json(state, "stats.json"), models)
     data["_wins"] = wins  # for the cards; not part of summary.json
     return data
@@ -1414,6 +1536,36 @@ def attention_block(attention):
     return block
 
 
+LEVEL_WORDS = {  # what each level of the forecast means (hive.forecast; docs/cutter.md, "The forecast"), under the level
+    "paused": "the project's file pauses it",
+    "starving": "nothing is left to do",
+    "unknown": f"fewer than {hive.FORECAST_LEAST} acceptances in the last {hive.PACE_HOURS} hours: too few to tell",
+    "urgent": f"at the fastest, the tasks left run out before the next cut (within {hive.URGENT_DAYS} days where nobody is dealt cuts), "
+              f"or with the backlog within {hive.URGENT_DAYS} days",
+    "soon": f"at the fastest, the tasks left and the backlog run out within {hive.SOON_DAYS} days",
+    "ok": f"at the fastest, the tasks left and the backlog last {hive.SOON_DAYS} days or more",
+}
+
+
+def forecast_block(said, lines):
+    """The section on the project's forecast (read_forecast): its level first, with what it means, then the forecast's
+    own lines (hive.forecast_lines), as `hive.py forecast` prints them, and the suggestions apart, in a box of their own,
+    each with the setting or the file it names. Numbers, codes, dates, the project's repository and the hive's fixed
+    sentences: nothing else is in them."""
+    told = [line for line in lines if not line.startswith("SUGGEST ")]
+    asked = [line.partition(": ") for line in lines if line.startswith("SUGGEST ")]
+    block = [el("div", tile("Level", said["level"], LEVEL_WORDS[said["level"]]), class_="tiles"), [el("p", line) for line in told]]
+    if asked:
+        block.append(el("div", el("p", el("strong", "Suggested")), [el("p", el("code", head[len("SUGGEST "):]), ": ", rest) for head, _, rest in asked],
+                        class_="none"))
+    elif said["level"] != "paused":
+        block.append(el("p", "Nothing is suggested.", class_="soft"))
+    block.append(el("p", "Read after each run from the ledger, the tasks and the backlog of the published branch, as the hive's "
+                         "« hive.py forecast » prints it: it decides nothing. « At the fastest » is the quick end of the probable range "
+                         "of the pace. No member is named.", class_="note"))
+    return block
+
+
 def task_status(status):
     """A task's status in words, after the swatch of its part of the progress bar, on one line."""
     return el("span", el("span", class_=f"sw s{STATUSES.index(status) + 1}"), STATUS_WORDS[status], class_="nw")
@@ -1483,6 +1635,8 @@ def render_html(data, title, repo_url, join):
                                       + ("A new member is dealt a task now." if base["takes_new"] else "A new member is dealt a task once there is room."),
                                  class_="note")]
     sections.append(el("section", el("h2", "Progress"), progress))
+    if data.get("forecast") is not None and data.get("_forecast_lines"):
+        sections.append(el("section", el("h2", "Forecast"), forecast_block(data["forecast"], data["_forecast_lines"])))
     if data.get("attention") is not None:
         sections.append(el("section", el("h2", "Tasks that need attention"), attention_block(data["attention"])))
     if data.get("map") is not None:
@@ -2071,7 +2225,7 @@ def badge_name(member_id):
 def summary_json(data):
     """summary.json: plain ASCII, and no « < », « > » or « & » even inside a string, so that it stays harmless if a
     tool pastes it into a page."""
-    data = {key: value for key, value in data.items() if key != "_wins"}
+    data = {key: value for key, value in data.items() if not key.startswith("_")}  # (_wins, _forecast_lines: for the pages alone)
     text = json.dumps(data, indent=1, sort_keys=True, ensure_ascii=True, allow_nan=False)
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026") + "\n"
 
@@ -2200,6 +2354,10 @@ def main(argv=None):
                                         "the figure its task asked for, when the judge saw it beyond its noise")
     parser.add_argument("--project", help="the project's file of settings (hive/project.json, in its repository): a card then leads only "
                                           "with a measure whose proof the project takes (judge.confirm)")
+    parser.add_argument("--backlog", help="the project's hive/backlog.jsonl, from its published branch: with --tasks and --project, the "
+                                          "forecast counts its lines not published yet")
+    parser.add_argument("--heads", help="what `git ls-remote --heads` printed of the project: with --tasks and --project, the forecast "
+                                        "reads there the commit of the branch the hive writes")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--join", action="store_true", help="the join page is join.html, beside index.html")
     where.add_argument("--join-url", help=f"the join page's address on github.com (default: {DEFAULT_JOIN_URL})")
@@ -2223,7 +2381,7 @@ def main(argv=None):
         if not Path(args.state).is_dir():
             raise PageError("--state: the folder of one project's state")
         join = LOCAL_JOIN if args.join else Link(args.join_url or DEFAULT_JOIN_URL)
-        files = render(collect(args.state, now, args.tasks, args.project), plain(args.title, 160), args.repo_url, join, args.site_url)
+        files = render(collect(args.state, now, args.tasks, args.project, repo_name(args.repo_url), args.backlog, args.heads), plain(args.title, 160), args.repo_url, join, args.site_url)
         write(args.out, files)
     except PageError as error:
         print(f"page: {hive.safe_text(error, 400)}", file=sys.stderr)

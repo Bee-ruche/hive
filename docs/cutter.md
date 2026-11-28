@@ -293,7 +293,9 @@ The architect should see a shortage coming, not find it once volunteers are deal
 prints, for each project the hive lists (or the one `--project` names), what its public state says is coming, in
 plain lines; `hive.py health` carries the same in numbers and codes (its `forecast`; `forecast` and `forecast_lines` in `tools/hive/hive.py`).
 It is read from the ledger, the tasks and the backlog on the published branch, in numbers; it decides nothing, and no
-run reads it. For example:
+run reads it. The project's page shows it too, made again after each run (`tools/hive/page.py`; docs/hosting.md, "The
+project's page, after each run"): the level first, then these lines, the suggestions set apart, and `summary.json`
+carries it in numbers and codes. For example:
 
 ```
 FORECAST Bee-ruche/blackboxBee as of 2026-11-28T14:07:11Z: urgent

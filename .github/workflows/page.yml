@@ -2,8 +2,10 @@
 # run"). A reusable workflow, and nothing else: a project that wants its page calls it from its own workflow, as a job
 # after the hive's run, at the same commit (examples/page/.github/workflows/hive.yml), and sets its repository's Pages
 # source to GitHub Actions once. Two jobs. build checks that the repository's Pages take the site from a workflow,
-# reads the project's branch hive-state and two files of its published branch (each held to its size), makes the page
-# with tools/hive/page.py at this workflow's own commit of Bee-ruche/hive, holds it to plain files and folders, and
+# reads the project's branch hive-state, two files of its published branch and its backlog when it holds one (each
+# held to its size), and the list of the project's branches (for the forecast: the commit of the branch the hive
+# writes), makes the page with tools/hive/page.py at this workflow's own commit of Bee-ruche/hive, holds it to plain
+# files and folders, and
 # uploads it; its token reads, and is written nowhere. deploy hands that upload to GitHub Pages, one deploy at a time:
 # it alone may deploy, and it runs none of the hive's code and reads no file. Neither job writes a branch, and nothing
 # of a fork or a candidate is fetched: the page is made from the hive's own state, which page.py reads as data.
@@ -58,7 +60,7 @@ jobs:
           ref: hive-state
           path: state
           persist-credentials: false
-      - name: The project's tasks and settings, as its published branch holds them (two files, each held to its size and written as data; no tree is checked out)
+      - name: The project's tasks, settings and backlog, as its published branch holds them (each file held to its size and written as data; no tree is checked out), and the list of its branches
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -72,16 +74,29 @@ jobs:
             [[ "$size" =~ ^[0-9]+$ ]] && (( size <= most )) || { echo "page: hive/$name of the published branch is larger than $most bytes: nothing is made" >&2; exit 1; }
             git -C project cat-file blob "$object" > "published/$name"
           done
+          listed="$(git -C project ls-tree HEAD -- hive/backlog.jsonl)" || listed="unlisted"
+          if [[ -n "$listed" ]]; then
+            read -r mode type object path <<< "$listed"
+            [[ "$mode" =~ ^100(644|755)$ && "$type" == blob && "$path" == hive/backlog.jsonl ]] && size="$(git -C project cat-file -s "$object")" || size=""
+            if [[ "$size" =~ ^[0-9]+$ ]] && (( size <= 16777216 )) && git -C project cat-file blob "$object" > published/backlog.part; then
+              mv published/backlog.part published/backlog.jsonl
+            else
+              rm -f published/backlog.part
+              echo "page: hive/backlog.jsonl is not a file of the published branch of at most 16777216 bytes: the forecast goes without it" >&2
+            fi
+          fi
+          { timeout 60 git -C project ls-remote --heads origin || echo "page: the project's branches could not be listed whole: the forecast may go without the branch the hive writes" >&2; } | head -c 1048576 > published/heads.txt || true
       - name: The page, from the state (page.py reads every file of it as data), into a folder of its own, packed for Pages
         env:
           REPOSITORY: ${{ github.repository }}
           TITLE: ${{ inputs.title }}
           SITE_URL: ${{ inputs.site_url }}
         run: |
-          site=()
+          site=() backlog=()
           [[ -z "$SITE_URL" ]] || site=("--site-url=$SITE_URL")
+          [[ ! -f published/backlog.jsonl ]] || backlog=(--backlog published/backlog.jsonl)
           python3 protocol/tools/hive/page.py --state state --out page "--title=$TITLE" --repo-url "https://github.com/$REPOSITORY" \
-            --tasks published/tasks.jsonl --project published/project.json "${site[@]}"
+            --tasks published/tasks.jsonl --project published/project.json --heads published/heads.txt "${backlog[@]}" "${site[@]}"
           odd="$(find page -mindepth 1 \( \( ! -type f ! -type d \) -o \( -type f -links +1 \) \) -print -quit)"
           [[ -z "$odd" ]] || { echo "page: the page's folder holds a link or a file of several names ($odd): nothing is packed" >&2; exit 1; }
           tar --create --file artifact.tar --directory page .

@@ -532,7 +532,9 @@ no candidate for it. A lead who wants a run sooner starts it by hand ("Run workf
 The project's public page (`tools/hive/page.py`: progress, the latest accepted contribution, the members, a card for
 each integration) is made from its state. A project may have it made again after each run, with a second reusable
 workflow, [`.github/workflows/page.yml`](../.github/workflows/page.yml), which hands it to GitHub Pages. A project that
-does not call it has no page job, and its run is the same.
+does not call it has no page job, and its run is the same. The page then shows the project's forecast as it stands after
+each run, the level first, in the lines `hive.py forecast` prints (docs/cutter.md, "The forecast"): the architect reads it
+there with no command to run and no AI spent.
 
 What the lead does, once:
 
@@ -563,7 +565,11 @@ What it does:
   out the project's two files of its published branch (`hive/tasks.jsonl`, `hive/project.json`) from git's objects,
   with no tree checked out: each only if it is a file there (not a link, a folder or a submodule) and no larger than
   what is read of it anyway (16 MiB for the tasks, as the hive reads them; 1 MiB for the settings, as `page.py` reads
-  them; the clone itself has fetched the published tip whole). It makes the page with `page.py` into a folder of its
+  them; the clone itself has fetched the published tip whole). For the forecast, it writes out the backlog
+  (`hive/backlog.jsonl`) as well when the branch holds one, under the same checks and the same 16 MiB (one that is not
+  a file, or larger, is left out with a line, and the job goes on), and the list of the project's branches
+  (`git ls-remote --heads`, 1 MiB at most; a list that fails fails nothing), where `page.py` finds the commit of the
+  branch the hive writes. It makes the page with `page.py` into a folder of its
   own, checks that the folder holds plain files and folders alone (no link, no file of several names), packs it, and
   uploads it under the name Pages takes (`github-pages`, kept a day). A step that fails stops it there: nothing is
   deployed, and the site stays as it was.
@@ -578,7 +584,7 @@ What it does:
   change, and no `gh-pages` branch is needed.
 - **Nothing of a contributor's is fetched, checked out or run.** No fork, no candidate and not the hive's own branch is
   fetched; the published branch's tip comes as git's objects alone (what its maintainers published), of which two
-  files are written out. The page is made from the hive's own state, which holds texts that strangers chose (logins,
+  files, and the backlog when there is one, are written out; the list of the branches is names and commits alone. The page is made from the hive's own state, which holds texts that strangers chose (logins,
   model identifiers) and which `page.py` reads as data, checked, bounded and escaped ("Trust" at the head of
   `page.py`). The title and the address are the caller's own: they reach `page.py` through the step's environment,
   joined to their option's name (`--title=...`, so that a title that starts with a dash is still a title), and it
