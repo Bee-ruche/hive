@@ -12795,7 +12795,7 @@ def cmd_submit(args):
     # Every candidate declares its model, whatever assistant made it: a Codex bee's three accepted candidates carried
     # none, the help having said to leave it out when unsure (blackboxBee, 28 November 2026). Asked here, before
     # anything is made, with the project's own list: the bee gives it again at once, and the candidate counts.
-    if not args.model or not MODEL.match(args.model):  # (the line says what --model is, what to give, then the list, cut whole)
+    if not args.model or not MODEL.match(args.model):
         listed = ""
         for model in config["models"]:  # (the error line is cut at 400 characters: the list comes last, cut whole)
             if len(listed) + len(model) > 120:

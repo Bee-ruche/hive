@@ -7540,7 +7540,7 @@ class TestVolunteerSide(Volunteer):
         """The line start ends on: what to do next, with the values it checked."""
         return (f"THEN: change only the task's files; build and test inside the sandbox only, never on the host; run no git command "
                 f"yourself; then run: hive.py submit --project Bee-ruche/toy --task {task} --deal {deal} --login alice --message \"<one line: what "
-                "you changed>\"")
+                "you changed>\" --model <identifier>")
 
     def test_start_puts_a_fresh_clone_on_the_tasks_branch_at_the_projects_tip(self):
         """What submit commits on is the branch HEAD names, and what the hive merges the candidate on is the project's
