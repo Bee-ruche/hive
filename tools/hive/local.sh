@@ -883,7 +883,8 @@ case "$COMMAND" in
     take_state
     # Right before the run, the state's folder resolved again (a link made meanwhile would have Docker show what it
     # leads to), and read as the account that wrote it: the owner's, as refresh and the tool run (on Linux, a folder
-    # made under a umask of 077 is the owner's alone).
+    # made under a umask of 077 is the owner's alone). Root on Docker Desktop, unlike the sandbox: it runs the hive's own
+    # tool, never a project's code, with no network, no capability and nothing it can write but its /tmp.
     STATE_SOURCE=$(below_hive "$STATE" "the state's folder") || exit 2
     "$DOCKER" run "${LIMITS[@]}" --network none --label hive.role=status --user "$OWNER_IDS" --tmpfs /tmp:rw,size=64m -e HOME=/tmp -e LANG=C.UTF-8 \
       -e TZ=UTC -w /tmp "${PROTOCOL_MOUNT[@]}" --mount "type=bind,source=$(host_path "$STATE_SOURCE"),target=/hive/state,readonly" "$IMAGE" \

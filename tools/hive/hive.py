@@ -12300,7 +12300,7 @@ def cmd_next(args):
         print(f"THEN: put the clone on the project's tip for this task: hive.py start --project "
               f"{config['repo']} --task {task['id']} --deal {deal['at']} {said_again(args)}{said_needs(args)}; then change only the task's files, and "
               f"run: hive.py submit --project {config['repo']} --task {task['id']} --deal {deal['at']} {said_again(args)} --message "
-              "\"<one line: what you changed>\"")
+              "\"<one line: what you changed>\" --model <identifier>")
 
 
 LEFT_MAX = 1000  # how many paths that git finds changed the tool reads again as bytes; beyond, they are taken as changed
@@ -12687,7 +12687,7 @@ def cmd_start(args):
     print(f"STARTED {branch} at {tip}")
     print(f"THEN: change only the task's files; build and test inside the sandbox only, never on the host; run no git command "
           f"yourself; then run: hive.py submit --project {config['repo']} --task {task['id']} --deal {args.deal} {said_again(args)} "
-          "--message \"<one line: what you changed>\"")
+          "--message \"<one line: what you changed>\" --model <identifier>")
 
 
 def cmd_ready(args):
@@ -12795,16 +12795,16 @@ def cmd_submit(args):
     # Every candidate declares its model, whatever assistant made it: a Codex bee's three accepted candidates carried
     # none, the help having said to leave it out when unsure (blackboxBee, 28 November 2026). Asked here, before
     # anything is made, with the project's own list: the bee gives it again at once, and the candidate counts.
-    if not args.model or not MODEL.match(args.model):
+    if not args.model or not MODEL.match(args.model):  # (the line says what --model is, what to give, then the list, cut whole)
         listed = ""
         for model in config["models"]:  # (the error line is cut at 400 characters: the list comes last, cut whole)
-            if len(listed) + len(model) > 130:
+            if len(listed) + len(model) > 120:
                 listed += ", ..."  # (ASCII: the error line is made printable ASCII)
                 break
             listed += (", " if listed else "") + model
-        raise HiveError("--model: give it on every submit, exactly as the project lists it, dots and all; if yours is not "
-                        "listed, the entry of your maker and family (the newest), else your maker's name for it, lower "
-                        f"case, no spaces; undeclared only if you know none. Listed: {listed or 'none'}")
+        raise HiveError("--model: missing, or no identifier (letters, digits, . _ -; 40 at most). Give it on every submit, as "
+                        "the project lists it, dots and all; if yours is not listed, the newest of your maker and family, "
+                        f"else your maker's name for it; undeclared only if you know none. Listed: {listed or 'none'}")
     title = args.message or f"Work on {task['id']}"
     if not ONE_LINE.match(title) or MARKER_LINE.match(title) or SIGNAL_LINE.match(title):
         raise HiveError("--message: one plain line (200 characters at most) that says what you changed")
