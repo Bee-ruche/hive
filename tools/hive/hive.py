@@ -12799,7 +12799,7 @@ def cmd_submit(args):
         listed = ""
         for model in config["models"]:  # (the error line is cut at 400 characters: the list comes last, cut whole)
             if len(listed) + len(model) > 130:
-                listed += ", …"
+                listed += ", ..."  # (ASCII: the error line is made printable ASCII)
                 break
             listed += (", " if listed else "") + model
         raise HiveError("--model: give it on every submit, exactly as the project lists it, dots and all; if yours is not "

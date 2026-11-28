@@ -6304,7 +6304,7 @@ class TestVolunteerSide(Volunteer):
             self.assertTrue(self.err.rstrip().endswith("Listed: claude-fable-5-2"), self.err)
         self.w.set_config({"models": [f"model-{n:02d}-of-a-long-name" for n in range(12)]})
         self.submit("toy-0001", dealt, "--message", "The work", "--model", "")
-        self.assertTrue(self.err.rstrip().endswith(", …") and "model-04-of-a-long-name" in self.err and len(self.err.strip()) <= 400, self.err)
+        self.assertTrue(self.err.rstrip().endswith("model-04-of-a-long-name, ...") and len(self.err.strip()) <= 400, self.err)
         self.w.set_config({"models": ["claude-fable-5-2"]})
         code, text = self.submit("toy-0001", dealt, "--message", "The work", "--model", "undeclared")
         self.assertEqual(code, 0, self.err)
@@ -11362,7 +11362,7 @@ class TestWhatTheCloneCannotMakeTheToolSayOrMove(Volunteer):
         self.assertEqual((code, text.split()[:2]), (0, ["NOT-PUSHED", f"{own}:"]), self.err)
         made = {name: sh("git", "cat-file", "commit", commit, cwd=work).stdout for name, commit in (("marker", own), ("work", f"{own}^"))}
         tree, other = (sh("git", "rev-parse", f"{commit}^{{tree}}", cwd=work).stdout.strip() for commit in (own, self.start))
-        self.assertEqual(made["marker"].split("\n\n", 1)[1], f"Hive submit: toy-0001\n\nHive-Task: toy-0001\nHive-Action: submit\nHive-Deal: {dealt}\nHive-Member: alice\n")
+        self.assertEqual(made["marker"].split("\n\n", 1)[1], f"Hive submit: toy-0001\n\nHive-Task: toy-0001\nHive-Action: submit\nHive-Deal: {dealt}\nHive-Member: alice\nHive-Model: claude-fable-5-2\n")
 
         def written(raw):
             """A commit of these very bytes, put in the clone's store as whatever writes into .git could."""
@@ -21903,7 +21903,7 @@ class TestSignallingCommands(Volunteer):
         code, _ = self.submit("toy-0001", dealt, "--signal", "confidence=high", "--signal", "more_gain", "--state", self.state_root)
         self.assertEqual(code, 0, self.err)
         message = sh("git", "cat-file", "commit", self.fork_branch("hive/submit/toy-0001"), cwd=self.alice.bare).stdout.partition("\n\n")[2]
-        self.assertTrue(message.endswith("Hive-Member: alice\nHive-Signal: confidence high\nHive-Signal: more_gain\n"), message)
+        self.assertTrue(message.endswith("Hive-Member: alice\nHive-Model: claude-fable-5-2\nHive-Signal: confidence high\nHive-Signal: more_gain\n"), message)
         self.w.run()
         verdict, = [e for e in self.w.load()[2].events if e["type"] == "verdict"]
         self.assertEqual(verdict["signals"], [{"code": "confidence", "value": "high"}, {"code": "more_gain"}])
